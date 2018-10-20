@@ -28,8 +28,54 @@ impl<T> CowCellInner<T> {
     }
 }
 
+// FIXME: Make this a proper struct, and on create does a ref-create
+// so we don't need ** all the damn time.
 type CowCellReadTxn<T> = Arc<CowCellInner<T>>;
 
+/// A conncurrently readable cell.
+///
+/// This structure behaves in a similar manner to a `RwLock<T>`. However unlike
+/// a `RwLock`, writes and parallel reads can be performed at the same time. This
+/// means readers and writers do no block either other. Writers are serialised.
+///
+/// To achieve this a form of "copy-on-write" (or for Rust, clone on write) is
+/// used. As a write transaction begins, we clone the existing data to a new
+/// location that is capable of being mutated.
+///
+/// Readers are guaranteed that the content of the CowCell will live as long
+/// as the read transaction is open, and will be consistent for the duration
+/// of the transaction. There can be an "unlimited" number of readers in parallel
+/// accessing different generations of data of the CowCell.
+///
+/// Writers are serialised and are guaranteed they have exclusive write access
+/// to the structure.
+///
+/// # Examples
+/// ```
+/// use concread::cowcell::CowCell;
+///
+/// let data: i64 = 0;
+/// let cowcell = CowCell::new(data);
+///
+/// // Begin a read transaction
+/// let read_txn = cowcell.read();
+/// assert_eq!(**read_txn, 0);
+/// {
+///     // Now create a write, and commit it.
+///     let mut write_txn = cowcell.write();
+///     {
+///         let mut data = write_txn.get_mut();
+///         *data = 1;
+///     }
+///     // Commit the change
+///     write_txn.commit();
+/// }
+/// // Show the previous generation still reads '0'
+/// assert_eq!(**read_txn, 0);
+/// let new_read_txn = cowcell.read();
+/// // And a new read transaction has '1'
+/// assert_eq!(**new_read_txn, 1);
+/// ```
 #[derive(Debug)]
 pub struct CowCell<T> {
     write: Mutex<()>,
@@ -40,6 +86,15 @@ pub struct CowCell<T> {
     active: Mutex<CowCellReadTxn<T>>,
 }
 
+/// A `CowCell` Write Transaction handle.
+///
+/// This allows mutation of the content of the `CowCell` without blocking or
+/// affecting current readers.
+///
+/// Changes are only stored in this structure until you call commit. To abort/
+/// rollback a change, don't call commit and allow the write transaction to
+/// be dropped. This causes the `CowCell` to unlock allowing the next writer
+/// to proceed.
 pub struct CowCellWriteTxn<'a, T: 'a> {
     // Hold open the guard, and initiate the copy to here.
     work: T,
@@ -52,6 +107,8 @@ pub struct CowCellWriteTxn<'a, T: 'a> {
 impl<T> CowCell<T>
     where T: Clone
 {
+    /// Create a new CowCell for storing type `T`. `T` must implement clone
+    /// to enable clone-on-write.
     pub fn new(data: T) -> Self {
         CowCell {
             write: Mutex::new(()),
@@ -63,12 +120,18 @@ impl<T> CowCell<T>
         }
     }
 
+    /// Begin a read transaction, returning a read guard. The content of
+    /// the read guard is guaranteed to be consistent for the life time of the
+    /// read - even if writers commit during.
     pub fn read(&self) -> CowCellReadTxn<T> {
         let rwguard = self.active.lock();
         rwguard.clone()
         // rwguard ends here
     }
 
+    /// Begin a write transaction, returning a write guard. The content of the
+    /// write is only visible to this thread, and is not visible to any reader
+    /// until `commit()` is called.
     pub fn write(&self) -> CowCellWriteTxn<T> {
         /* Take the exclusive write lock first */
         let mguard = self.write.lock();
@@ -111,13 +174,18 @@ impl<T> AsRef<T> for CowCellInner<T> {
 impl<'a, T> CowCellWriteTxn<'a, T>
     where T: Clone
 {
-    /* commit */
-    /* get_mut data */
+    /// Access a mutable pointer of the data in the `CowCell`. This data is only
+    /// visible to the write transaction object in this thread, until you call
+    /// `commit()`.
     #[inline]
     pub fn get_mut(&mut self) -> &mut T {
         &mut self.work
     }
 
+    /// Commit the changes made in this write transactions to the `CowCell`.
+    /// This will consume the transaction so no further changes can be made
+    /// after this is called. Not calling this in a block, is equivalent to
+    /// an abort/rollback of the transaction.
     pub fn commit(self) {
         /* Write our data back to the CowCell */
         self.caller.commit(self.work);
