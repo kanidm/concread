@@ -53,7 +53,7 @@ impl<T> LinCowCell<T>
         }
     }
 
-    pub fn begin_read_txn(&self) -> LinCowCellReadTxn<T> {
+    pub fn read(&self) -> LinCowCellReadTxn<T> {
         let rwguard = self.active.lock().unwrap();
         rwguard.clone()
         /*
@@ -64,7 +64,7 @@ impl<T> LinCowCell<T>
         // rwguard ends here
     }
 
-    pub fn begin_write_txn(&self) -> LinCowCellWriteTxn<T> {
+    pub fn write(&self) -> LinCowCellWriteTxn<T> {
         /* Take the exclusive write lock first */
         let mguard = self.write.lock().unwrap();
         /* Now take a ro-txn to get the data copied */
@@ -141,12 +141,12 @@ mod tests {
         let data: i64 = 0;
         let cc = LinCowCell::new(data);
 
-        let cc_rotxn_a = cc.begin_read_txn();
+        let cc_rotxn_a = cc.read();
         assert_eq!(**cc_rotxn_a, 0);
 
         {
             /* Take a write txn */
-            let mut cc_wrtxn = cc.begin_write_txn();
+            let mut cc_wrtxn = cc.write();
             /* Get the data ... */
             {
                 let mut_ptr = cc_wrtxn.get_mut();
@@ -157,14 +157,14 @@ mod tests {
             }
             assert_eq!(**cc_rotxn_a, 0);
 
-            let cc_rotxn_b = cc.begin_read_txn();
+            let cc_rotxn_b = cc.read();
             assert_eq!(**cc_rotxn_b, 0);
             /* The write txn and it's lock is dropped here */
             cc_wrtxn.commit();
         }
 
         /* Start a new txn and see it's still good */
-        let cc_rotxn_c = cc.begin_read_txn();
+        let cc_rotxn_c = cc.read();
         assert_eq!(**cc_rotxn_c, 1);
         assert_eq!(**cc_rotxn_a, 0);
     }
@@ -172,7 +172,7 @@ mod tests {
     fn mt_writer(cc: &LinCowCell<i64>) {
         let mut last_value: i64 = 0;
         while last_value < 500 {
-            let mut cc_wrtxn = cc.begin_write_txn();
+            let mut cc_wrtxn = cc.write();
             {
                 let mut_ptr = cc_wrtxn.get_mut();
                 assert!(*mut_ptr >= last_value);
@@ -186,7 +186,7 @@ mod tests {
     fn rt_writer(cc: &LinCowCell<i64>) {
         let mut last_value: i64 = 0;
         while last_value < 500 {
-            let cc_rotxn = cc.begin_read_txn();
+            let cc_rotxn = cc.read();
             {
                 assert!(**cc_rotxn >= last_value);
                 last_value = **cc_rotxn;
@@ -239,7 +239,7 @@ mod tests {
         while GC_COUNT.load(Ordering::Acquire) < 50 {
             // thread::sleep(std::time::Duration::from_millis(200));
             {
-                let mut cc_wrtxn = cc.begin_write_txn();
+                let mut cc_wrtxn = cc.write();
                 {
                     let mut_ptr = cc_wrtxn.get_mut();
                     mut_ptr.data = mut_ptr.data + 1;
@@ -278,10 +278,10 @@ mod tests {
         let cc = LinCowCell::new(data);
 
         // Open a read A.
-        let cc_rotxn_a = cc.begin_read_txn();
+        let cc_rotxn_a = cc.read();
         // open a write, change and commit
         {
-            let mut cc_wrtxn = cc.begin_write_txn();
+            let mut cc_wrtxn = cc.write();
             {
                 let mut_ptr = cc_wrtxn.get_mut();
                 mut_ptr.data = mut_ptr.data + 1;
@@ -289,10 +289,10 @@ mod tests {
             cc_wrtxn.commit();
         }
         // open a read B.
-        let cc_rotxn_b = cc.begin_read_txn();
+        let cc_rotxn_b = cc.read();
         // open a write, change and commit
         {
-            let mut cc_wrtxn = cc.begin_write_txn();
+            let mut cc_wrtxn = cc.write();
             {
                 let mut_ptr = cc_wrtxn.get_mut();
                 mut_ptr.data = mut_ptr.data + 1;
@@ -300,7 +300,7 @@ mod tests {
             cc_wrtxn.commit();
         }
         // open a read C
-        let cc_rotxn_c = cc.begin_read_txn();
+        let cc_rotxn_c = cc.read();
 
         assert!(GC_COUNT.load(Ordering::Acquire) == 0);
 

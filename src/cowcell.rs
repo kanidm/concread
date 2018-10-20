@@ -1,3 +1,14 @@
+//! CowCell - A concurrently readable cell with Arc
+//!
+//! A CowCell can be used in place of a RwLock. Readers are guaranteed that
+//! the data will not change during the lifetime of the read. Readers do
+//! not block writers, and writers do not block readers. Writers are serialised
+//! same as the write in a RwLock.
+//!
+//! This is the Arc collected implementation. Arc is slightly slower than EBR,
+//! but has better behaviour with very long running read operations, and more
+//! accurate memory reclaim behaviour.
+
 extern crate parking_lot;
 
 use std::sync::Arc;
@@ -52,13 +63,13 @@ impl<T> CowCell<T>
         }
     }
 
-    pub fn begin_read_txn(&self) -> CowCellReadTxn<T> {
+    pub fn read(&self) -> CowCellReadTxn<T> {
         let rwguard = self.active.lock();
         rwguard.clone()
         // rwguard ends here
     }
 
-    pub fn begin_write_txn(&self) -> CowCellWriteTxn<T> {
+    pub fn write(&self) -> CowCellWriteTxn<T> {
         /* Take the exclusive write lock first */
         let mguard = self.write.lock();
         /* Now take a ro-txn to get the data copied */
@@ -130,12 +141,12 @@ mod tests {
         let data: i64 = 0;
         let cc = CowCell::new(data);
 
-        let cc_rotxn_a = cc.begin_read_txn();
+        let cc_rotxn_a = cc.read();
         assert_eq!(**cc_rotxn_a, 0);
 
         {
             /* Take a write txn */
-            let mut cc_wrtxn = cc.begin_write_txn();
+            let mut cc_wrtxn = cc.write();
             /* Get the data ... */
             {
                 let mut_ptr = cc_wrtxn.get_mut();
@@ -146,14 +157,14 @@ mod tests {
             }
             assert_eq!(**cc_rotxn_a, 0);
 
-            let cc_rotxn_b = cc.begin_read_txn();
+            let cc_rotxn_b = cc.read();
             assert_eq!(**cc_rotxn_b, 0);
             /* The write txn and it's lock is dropped here */
             cc_wrtxn.commit();
         }
 
         /* Start a new txn and see it's still good */
-        let cc_rotxn_c = cc.begin_read_txn();
+        let cc_rotxn_c = cc.read();
         assert_eq!(**cc_rotxn_c, 1);
         assert_eq!(**cc_rotxn_a, 0);
     }
@@ -174,7 +185,7 @@ mod tests {
                 scope.spawn(move || {
                     let mut last_value: i64 = 0;
                     while last_value < MAX_TARGET {
-                        let cc_rotxn = cc_ref.begin_read_txn();
+                        let cc_rotxn = cc_ref.read();
                         {
                             assert!(**cc_rotxn >= last_value);
                             last_value = **cc_rotxn;
@@ -187,7 +198,7 @@ mod tests {
                 scope.spawn(move || {
                     let mut last_value: i64 = 0;
                     while last_value < MAX_TARGET {
-                        let mut cc_wrtxn = cc_ref.begin_write_txn();
+                        let mut cc_wrtxn = cc_ref.write();
                         {
                             let mut_ptr = cc_wrtxn.get_mut();
                             assert!(*mut_ptr >= last_value);
@@ -222,7 +233,7 @@ mod tests {
         while GC_COUNT.load(Ordering::Acquire) < 50 {
             // thread::sleep(std::time::Duration::from_millis(200));
             {
-                let mut cc_wrtxn = cc.begin_write_txn();
+                let mut cc_wrtxn = cc.write();
                 {
                     let mut_ptr = cc_wrtxn.get_mut();
                     mut_ptr.data = mut_ptr.data + 1;

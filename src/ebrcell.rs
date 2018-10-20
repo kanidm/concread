@@ -1,3 +1,16 @@
+//! EbrCell - A concurrently readable cell with EBR
+//!
+//! An EbrCell can be used in place of a RwLock. Readers are guaranteed that
+//! the data will not change during the lifetime of the read. Readers do
+//! not block writers, and writers do not block readers. Writers are serialised
+//! same as the write in a RwLock.
+//!
+//! This is the Ebr collected implementation. Ebr is faster than Arc,
+//! but long transactions can cause the memory usage to grow very quickly
+//! before a garbage reclaim. This is a space time trade, where you gain
+//! performance at the expense of delaying garbage collection. Holding EBR
+//! reads for too long may impact garbage collection of other structures.
+//! If you need accurate memory reclaim, use the Arc (`CowCell`) implementation.
 
 use crossbeam_epoch as epoch;
 use crossbeam_epoch::{Atomic, Owned, Guard};
@@ -74,11 +87,11 @@ impl<'a, T> EbrCellWriteTxn<'a, T>
 /// let ebrcell = EbrCell::new(data);
 ///
 /// // Begin a read transaction
-/// let read_txn = ebrcell.begin_read_txn();
+/// let read_txn = ebrcell.read();
 /// assert_eq!(*read_txn, 0);
 /// {
 ///     // Now create a write, and commit it.
-///     let mut write_txn = ebrcell.begin_write_txn();
+///     let mut write_txn = ebrcell.write();
 ///     {
 ///         let mut data = write_txn.get_mut();
 ///         *data = 1;
@@ -88,7 +101,7 @@ impl<'a, T> EbrCellWriteTxn<'a, T>
 /// }
 /// // Show the previous generation still reads '0'
 /// assert_eq!(*read_txn, 0);
-/// let new_read_txn = ebrcell.begin_read_txn();
+/// let new_read_txn = ebrcell.read();
 /// // And a new read transaction has '1'
 /// assert_eq!(*new_read_txn, 1);
 /// ```
@@ -111,7 +124,7 @@ impl<T> EbrCell<T>
 
     /// Begine a write transaction, returning a write transaction struct.
     /// This returns an [`EbrCellWriteTxn`]
-    pub fn begin_write_txn(&self) -> EbrCellWriteTxn<T> {
+    pub fn write(&self) -> EbrCellWriteTxn<T> {
         /* Take the exclusive write lock first */
         let mguard = self.write.lock().unwrap();
         /* Do an atomic load of the current value */
@@ -156,7 +169,7 @@ impl<T> EbrCell<T>
     /// Begin a read transaction. The returned [`EbrCellReadTxn'] guarantees
     /// the data lives long enough via crossbeam's Epoch type. When this is
     /// dropped the data *may* be freed at some point in the future.
-    pub fn begin_read_txn(&self) -> EbrCellReadTxn<T> {
+    pub fn read(&self) -> EbrCellReadTxn<T> {
         let guard = epoch::pin();
 
         // This option returns None on null pointer, but we can never be null
@@ -224,12 +237,12 @@ mod tests {
         let data: i64 = 0;
         let cc = EbrCell::new(data);
 
-        let cc_rotxn_a = cc.begin_read_txn();
+        let cc_rotxn_a = cc.read();
         assert_eq!(*cc_rotxn_a, 0);
 
         {
             /* Take a write txn */
-            let mut cc_wrtxn = cc.begin_write_txn();
+            let mut cc_wrtxn = cc.write();
             /* Get the data ... */
             {
                 let mut_ptr = cc_wrtxn.get_mut();
@@ -240,14 +253,14 @@ mod tests {
             }
             assert_eq!(*cc_rotxn_a, 0);
 
-            let cc_rotxn_b = cc.begin_read_txn();
+            let cc_rotxn_b = cc.read();
             assert_eq!(*cc_rotxn_b, 0);
             /* The write txn and it's lock is dropped here */
             cc_wrtxn.commit();
         }
 
         /* Start a new txn and see it's still good */
-        let cc_rotxn_c = cc.begin_read_txn();
+        let cc_rotxn_c = cc.read();
         assert_eq!(*cc_rotxn_c, 1);
         assert_eq!(*cc_rotxn_a, 0);
     }
@@ -267,7 +280,7 @@ mod tests {
                 scope.spawn(move || {
                     let mut last_value: i64 = 0;
                     while last_value < 500 {
-                        let cc_rotxn = cc_ref.begin_read_txn();
+                        let cc_rotxn = cc_ref.read();
                         {
                             assert!(*cc_rotxn >= last_value);
                             last_value = *cc_rotxn;
@@ -280,7 +293,7 @@ mod tests {
                 scope.spawn(move || {
                     let mut last_value: i64 = 0;
                     while last_value < 500 {
-                        let mut cc_wrtxn = cc_ref.begin_write_txn();
+                        let mut cc_wrtxn = cc_ref.write();
                         {
                             let mut_ptr = cc_wrtxn.get_mut();
                             assert!(*mut_ptr >= last_value);
@@ -316,7 +329,7 @@ mod tests {
         while GC_COUNT.load(Ordering::Acquire) < 50 {
             // thread::sleep(std::time::Duration::from_millis(200));
             {
-                let mut cc_wrtxn = cc.begin_write_txn();
+                let mut cc_wrtxn = cc.write();
                 {
                     let mut_ptr = cc_wrtxn.get_mut();
                     mut_ptr.data = mut_ptr.data + 1;
