@@ -15,23 +15,8 @@ use std::sync::Arc;
 use parking_lot::{Mutex, MutexGuard};
 use std::ops::Deref;
 
-#[derive(Debug)]
-pub struct CowCellInner<T> {
-    data: T,
-}
-
-impl<T> CowCellInner<T> {
-    pub fn new(data: T) -> Self {
-        CowCellInner {
-            data: data,
-        }
-    }
-}
-
 // FIXME: Make this a proper struct, and on create does a ref-create
 // so we don't need ** all the damn time.
-type CowCellReadTxn<T> = Arc<CowCellInner<T>>;
-
 /// A conncurrently readable cell.
 ///
 /// This structure behaves in a similar manner to a `RwLock<T>`. However unlike
@@ -59,7 +44,7 @@ type CowCellReadTxn<T> = Arc<CowCellInner<T>>;
 ///
 /// // Begin a read transaction
 /// let read_txn = cowcell.read();
-/// assert_eq!(**read_txn, 0);
+/// assert_eq!(*read_txn, 0);
 /// {
 ///     // Now create a write, and commit it.
 ///     let mut write_txn = cowcell.write();
@@ -71,10 +56,10 @@ type CowCellReadTxn<T> = Arc<CowCellInner<T>>;
 ///     write_txn.commit();
 /// }
 /// // Show the previous generation still reads '0'
-/// assert_eq!(**read_txn, 0);
+/// assert_eq!(*read_txn, 0);
 /// let new_read_txn = cowcell.read();
 /// // And a new read transaction has '1'
-/// assert_eq!(**new_read_txn, 1);
+/// assert_eq!(*new_read_txn, 1);
 /// ```
 #[derive(Debug)]
 pub struct CowCell<T> {
@@ -83,7 +68,7 @@ pub struct CowCell<T> {
     // RWlock MT: PT2.354443857S
     // Mutex MT: PT0.006423466S
     // EBR MT: PT0.003360303S
-    active: Mutex<CowCellReadTxn<T>>,
+    active: Mutex<Arc<T>>,
 }
 
 /// A `CowCell` Write Transaction handle.
@@ -103,6 +88,20 @@ pub struct CowCellWriteTxn<'a, T: 'a> {
     _guard: MutexGuard<'a, ()>
 }
 
+/// A `CowCell` Read Transaction handle.
+///
+/// This allows safe reading of the value within the `CowCell`, that allows
+/// no mutation of the value, and without blocking writers.
+#[derive(Debug)]
+pub struct CowCellReadTxn<T>(
+    Arc<T>,
+);
+
+impl<T> Clone for CowCellReadTxn<T> {
+    fn clone(&self) -> Self {
+        CowCellReadTxn(self.0.clone())
+    }
+}
 
 impl<T> CowCell<T>
     where T: Clone
@@ -113,9 +112,7 @@ impl<T> CowCell<T>
         CowCell {
             write: Mutex::new(()),
             active: Mutex::new(
-                Arc::new(
-                    CowCellInner::new(data)
-                )
+                Arc::new(data)
             ),
         }
     }
@@ -125,7 +122,7 @@ impl<T> CowCell<T>
     /// read - even if writers commit during.
     pub fn read(&self) -> CowCellReadTxn<T> {
         let rwguard = self.active.lock();
-        rwguard.clone()
+        CowCellReadTxn(rwguard.clone())
         // rwguard ends here
     }
 
@@ -138,7 +135,7 @@ impl<T> CowCell<T>
         /* Now take a ro-txn to get the data copied */
         let rwguard = self.active.lock();
         /* This copies the data */
-        let data: T = (***rwguard).clone();
+        let data: T = (**rwguard).clone();
         /* Now build the write struct */
         CowCellWriteTxn {
             work: data,
@@ -149,25 +146,26 @@ impl<T> CowCell<T>
 
     fn commit(&self, newdata: T) {
         let mut rwguard = self.active.lock();
-        let new_inner = Arc::new(CowCellInner::new(newdata));
+        let new_inner = Arc::new(newdata);
         // now over-write the last value in the mutex.
+
         *rwguard = new_inner;
     }
 }
 
-impl<T> Deref for CowCellInner<T> {
+impl<T> Deref for CowCellReadTxn<T> {
     type Target = T;
 
     #[inline]
     fn deref(&self) -> &T {
-        &self.data
+        &self.0
     }
 }
 
-impl<T> AsRef<T> for CowCellInner<T> {
+impl<T> AsRef<T> for CowCellReadTxn<T> {
     #[inline]
     fn as_ref(&self) -> &T {
-        &self.data
+        &self.0
     }
 }
 
@@ -210,7 +208,7 @@ mod tests {
         let cc = CowCell::new(data);
 
         let cc_rotxn_a = cc.read();
-        assert_eq!(**cc_rotxn_a, 0);
+        assert_eq!(*cc_rotxn_a, 0);
 
         {
             /* Take a write txn */
@@ -223,18 +221,18 @@ mod tests {
                 *mut_ptr = 1;
                 assert_eq!(*mut_ptr, 1);
             }
-            assert_eq!(**cc_rotxn_a, 0);
+            assert_eq!(*cc_rotxn_a, 0);
 
             let cc_rotxn_b = cc.read();
-            assert_eq!(**cc_rotxn_b, 0);
+            assert_eq!(*cc_rotxn_b, 0);
             /* The write txn and it's lock is dropped here */
             cc_wrtxn.commit();
         }
 
         /* Start a new txn and see it's still good */
         let cc_rotxn_c = cc.read();
-        assert_eq!(**cc_rotxn_c, 1);
-        assert_eq!(**cc_rotxn_a, 0);
+        assert_eq!(*cc_rotxn_c, 1);
+        assert_eq!(*cc_rotxn_a, 0);
     }
 
     const MAX_TARGET: i64 = 2000;
@@ -255,8 +253,8 @@ mod tests {
                     while last_value < MAX_TARGET {
                         let cc_rotxn = cc_ref.read();
                         {
-                            assert!(**cc_rotxn >= last_value);
-                            last_value = **cc_rotxn;
+                            assert!(*cc_rotxn >= last_value);
+                            last_value = *cc_rotxn;
                         }
                     }
                 })

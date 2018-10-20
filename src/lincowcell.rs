@@ -1,3 +1,10 @@
+//! A CowCell with linear drop behaviour
+//!
+//! DO NOT USE THIS TYPE! It's private as it's required for the future
+//! BTree type. Normaly concread values do not require the linear dropping
+//! behaviour that this implements, and it will only make your application
+//! slower for it. Consider `CowCell` and `EbrCell` instead.
+
 
 use std::sync::{Mutex, MutexGuard, Arc};
 use std::ops::Deref;

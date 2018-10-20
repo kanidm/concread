@@ -16,7 +16,7 @@ use crossbeam_epoch as epoch;
 use crossbeam_epoch::{Atomic, Owned, Guard};
 use std::sync::atomic::Ordering::{Acquire, Release};
 
-use std::sync::{Mutex, MutexGuard};
+use parking_lot::{Mutex, MutexGuard};
 use std::mem;
 use std::ops::Deref;
 
@@ -29,7 +29,6 @@ use std::ops::Deref;
 /// abort a change, don't call commit and allow the write transaction to
 /// go out of scope. This causes the `EbrCell` to unlock allowing other
 /// writes to proceed.
-#[derive(Debug)]
 pub struct EbrCellWriteTxn<'a, T: 'a> {
     data: Option<T>,
     // This way we know who to contact for updating our data ....
@@ -114,7 +113,7 @@ pub struct EbrCell<T> {
 impl<T> EbrCell<T>
     where T: Clone + Send + 'static
 {
-    /// Create a new EbrCell storing type T. T must implement Clone.
+    /// Create a new EbrCell storing type `T`. `T` must implement Clone.
     pub fn new(data: T) -> Self {
         EbrCell {
             write: Mutex::new(()),
@@ -122,11 +121,10 @@ impl<T> EbrCell<T>
         }
     }
 
-    /// Begine a write transaction, returning a write transaction struct.
-    /// This returns an [`EbrCellWriteTxn`]
+    /// Begine a write transaction, returning a write guard.
     pub fn write(&self) -> EbrCellWriteTxn<T> {
         /* Take the exclusive write lock first */
-        let mguard = self.write.lock().unwrap();
+        let mguard = self.write.lock();
         /* Do an atomic load of the current value */
         let guard = epoch::pin();
         let cur_shared = self.active.load(Acquire, &guard);
@@ -265,6 +263,8 @@ mod tests {
         assert_eq!(*cc_rotxn_a, 0);
     }
 
+    const MAX_TARGET: i64 = 2000;
+
     #[test]
     fn test_multithread_create() {
 
@@ -279,7 +279,7 @@ mod tests {
             let _readers: Vec<_> = (0..7).map(|_| {
                 scope.spawn(move || {
                     let mut last_value: i64 = 0;
-                    while last_value < 500 {
+                    while last_value < MAX_TARGET {
                         let cc_rotxn = cc_ref.read();
                         {
                             assert!(*cc_rotxn >= last_value);
@@ -292,7 +292,7 @@ mod tests {
             let _writers: Vec<_> = (0..3).map(|_| {
                 scope.spawn(move || {
                     let mut last_value: i64 = 0;
-                    while last_value < 500 {
+                    while last_value < MAX_TARGET {
                         let mut cc_wrtxn = cc_ref.write();
                         {
                             let mut_ptr = cc_wrtxn.get_mut();
