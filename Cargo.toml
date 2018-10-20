@@ -3,6 +3,16 @@ name = "concread"
 version = "0.1.0"
 authors = ["William Brown <william@blackhats.net.au>"]
 
+description = "Concurrently Readable Data-Structures for Rust"
+documentation = "https://docs.rs/concread/0.1.0/concread/"
+homepage = "https://github.com/Firstyear/concread/"
+repostiory = "https://github.com/Firstyear/concread/"
+readme = "README.md"
+keywords = ["data-structures", "concread", "concurrency", "parallel",]
+categories = ["data-structures", "memory-management",]
+license = " LGPL-3.0-only"
+license-file = "LICENSE.md"
+
 [dependencies]
 crossbeam-epoch = "0.5"
 crossbeam-utils = "0.5"
