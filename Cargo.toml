@@ -4,7 +4,7 @@ version = "0.1.1"
 authors = ["William Brown <william@blackhats.net.au>"]
 
 description = "Concurrently Readable Data-Structures for Rust"
-documentation = "https://docs.rs/concread/0.1.0/concread/"
+documentation = "https://docs.rs/concread/latest/concread/"
 homepage = "https://github.com/Firstyear/concread/"
 repostiory = "https://github.com/Firstyear/concread/"
 readme = "README.md"
