@@ -13,10 +13,8 @@ extern crate parking_lot;
 
 use std::sync::Arc;
 use parking_lot::{Mutex, MutexGuard};
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
-// FIXME: Make this a proper struct, and on create does a ref-create
-// so we don't need ** all the damn time.
 /// A conncurrently readable cell.
 ///
 /// This structure behaves in a similar manner to a `RwLock<T>`. However unlike
@@ -64,10 +62,6 @@ use std::ops::Deref;
 #[derive(Debug)]
 pub struct CowCell<T> {
     write: Mutex<()>,
-    // I suspect that Mutex is faster here due to lack of needing draining.
-    // RWlock MT: PT2.354443857S
-    // Mutex MT: PT0.006423466S
-    // EBR MT: PT0.003360303S
     active: Mutex<Arc<T>>,
 }
 
@@ -144,6 +138,25 @@ impl<T> CowCell<T>
         }
     }
 
+    /// Attempt to create a write transaction. If it fails, and err
+    /// is returned. On success the `Ok(guard)` is returned. See also
+    /// `write(&self)`
+    pub fn try_write(&self) -> Option<CowCellWriteTxn<T>> {
+        /* Take the exclusive write lock first */
+        self.write.try_lock().map(|mguard| {
+            /* Now take a ro-txn to get the data copied */
+            let rwguard = self.active.lock();
+            /* This copies the data */
+            let data: T = (**rwguard).clone();
+            /* Now build the write struct */
+            CowCellWriteTxn {
+                work: data,
+                caller: self,
+                _guard: mguard,
+            }
+        })
+    }
+
     fn commit(&self, newdata: T) {
         let mut rwguard = self.active.lock();
         let new_inner = Arc::new(newdata);
@@ -158,13 +171,6 @@ impl<T> Deref for CowCellReadTxn<T> {
 
     #[inline]
     fn deref(&self) -> &T {
-        &self.0
-    }
-}
-
-impl<T> AsRef<T> for CowCellReadTxn<T> {
-    #[inline]
-    fn as_ref(&self) -> &T {
         &self.0
     }
 }
@@ -190,6 +196,21 @@ impl<'a, T> CowCellWriteTxn<'a, T>
     }
 }
 
+impl<'a, T> Deref for CowCellWriteTxn<'a, T> {
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &T {
+        &self.work
+    }
+}
+
+impl<'a, T> DerefMut for CowCellWriteTxn<'a, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.work
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -201,6 +222,32 @@ mod tests {
     use super::CowCell;
 
     use crossbeam_utils::thread::scope;
+
+    #[test]
+    fn test_deref_mut() {
+        let data: i64 = 0;
+        let cc = CowCell::new(data);
+        {
+            /* Take a write txn */
+            let mut cc_wrtxn = cc.write();
+            *cc_wrtxn = 1;
+            cc_wrtxn.commit();
+        }
+        let cc_rotxn = cc.read();
+        assert_eq!(*cc_rotxn, 1);
+    }
+
+    #[test]
+    fn test_try_write() {
+        let data: i64 = 0;
+        let cc = CowCell::new(data);
+        /* Take a write txn */
+        let cc_wrtxn_a = cc.try_write();
+        assert!(cc_wrtxn_a.is_some());
+        /* Because we already hold the writ, the second is guaranteed to fail */
+        let cc_wrtxn_a = cc.try_write();
+        assert!(cc_wrtxn_a.is_none());
+    }
 
     #[test]
     fn test_simple_create() {

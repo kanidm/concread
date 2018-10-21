@@ -274,6 +274,28 @@ mod tests {
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
     }
 
+}
+
+#[cfg(test)]
+mod tests_linear {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::LinCowCell;
+
+    static GC_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Debug, Clone)]
+    struct TestGcWrapper<T> {
+        data: T
+    }
+
+    impl<T> Drop for TestGcWrapper<T> {
+        fn drop(&mut self) {
+            // Add to the atomic counter ...
+            GC_COUNT.fetch_add(1, Ordering::Release);
+        }
+    }
+
     /*
      * This tests an important property of the lincowcell over the cow cell
      * that read txns are dropped *in order*.
@@ -281,6 +303,7 @@ mod tests {
     #[test]
     fn test_gc_operation_linear() {
         GC_COUNT.store(0, Ordering::Release);
+        assert!(GC_COUNT.load(Ordering::Acquire) == 0);
         let data = TestGcWrapper{data: 0};
         let cc = LinCowCell::new(data);
 

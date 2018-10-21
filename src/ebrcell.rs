@@ -18,7 +18,7 @@ use std::sync::atomic::Ordering::{Acquire, Release};
 
 use parking_lot::{Mutex, MutexGuard};
 use std::mem;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 /// An `EbrCell` Write Transaction handle.
 ///
@@ -33,7 +33,7 @@ pub struct EbrCellWriteTxn<'a, T: 'a> {
     data: Option<T>,
     // This way we know who to contact for updating our data ....
     caller: &'a EbrCell<T>,
-    guard: MutexGuard<'a, ()>
+    _guard: MutexGuard<'a, ()>
 }
 
 impl<'a, T> EbrCellWriteTxn<'a, T>
@@ -58,6 +58,22 @@ impl<'a, T> EbrCellWriteTxn<'a, T>
         self.caller.commit(element);
     }
 }
+
+impl<'a, T> Deref for EbrCellWriteTxn<'a, T> {
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &T {
+        self.data.as_ref().unwrap()
+    }
+}
+
+impl<'a, T> DerefMut for EbrCellWriteTxn<'a, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.data.as_mut().unwrap()
+    }
+}
+
 
 /// A concurrently readable cell.
 ///
@@ -121,7 +137,7 @@ impl<T> EbrCell<T>
         }
     }
 
-    /// Begine a write transaction, returning a write guard.
+    /// Begin a write transaction, returning a write guard.
     pub fn write(&self) -> EbrCellWriteTxn<T> {
         /* Take the exclusive write lock first */
         let mguard = self.write.lock();
@@ -135,8 +151,26 @@ impl<T> EbrCell<T>
                 cur_shared.deref().clone()
                 }),
             caller: self,
-            guard: mguard,
+            _guard: mguard,
         }
+    }
+
+    /// Attempt to begin a write transaction. If it's already held,
+    /// `None` is returned.
+    pub fn try_write(&self) -> Option<EbrCellWriteTxn<T>> {
+        self.write.try_lock().map(|mguard| {
+            let guard = epoch::pin();
+            let cur_shared = self.active.load(Acquire, &guard);
+            /* Now build the write struct, we'll discard the pin shortly! */
+            EbrCellWriteTxn {
+                /* This is the 'copy' of the copy on write! */
+                data: Some(unsafe {
+                    cur_shared.deref().clone()
+                    }),
+                caller: self,
+                _guard: mguard,
+            }
+        })
     }
 
     /// This is an internal compontent of the commit cycle. It takes ownership
@@ -229,6 +263,32 @@ mod tests {
 
     use super::EbrCell;
     use crossbeam_utils::thread::scope;
+
+    #[test]
+    fn test_deref_mut() {
+        let data: i64 = 0;
+        let cc = EbrCell::new(data);
+        {
+            /* Take a write txn */
+            let mut cc_wrtxn = cc.write();
+            *cc_wrtxn = 1;
+            cc_wrtxn.commit();
+        }
+        let cc_rotxn = cc.read();
+        assert_eq!(*cc_rotxn, 1);
+    }
+
+    #[test]
+    fn test_try_write() {
+        let data: i64 = 0;
+        let cc = EbrCell::new(data);
+        /* Take a write txn */
+        let cc_wrtxn_a = cc.try_write();
+        assert!(cc_wrtxn_a.is_some());
+        /* Because we already hold the writ, the second is guaranteed to fail */
+        let cc_wrtxn_a = cc.try_write();
+        assert!(cc_wrtxn_a.is_none());
+    }
 
     #[test]
     fn test_simple_create() {
@@ -355,6 +415,27 @@ mod tests {
         });
 
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
+    }
+}
+
+#[cfg(test)]
+mod tests_linear {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::EbrCell;
+
+    static GC_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Debug, Clone)]
+    struct TestGcWrapper<T> {
+        data: T
+    }
+
+    impl<T> Drop for TestGcWrapper<T> {
+        fn drop(&mut self) {
+            // Add to the atomic counter ...
+            GC_COUNT.fetch_add(1, Ordering::Release);
+        }
     }
 
     #[test]
