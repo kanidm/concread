@@ -27,6 +27,10 @@ However, if you have a RwLock where you hold the read lock for any amount of tim
 writers will begin to stall - or inversely, the writer will cause readers to block
 and wait as the writer proceeds.
 
+Concurrently readable avoids this because readers never stall readers/writers, writers
+never stall or block a readers. This means that you gain in parallel throughput
+as stalls are reduced.
+
 In the future, a concurrent BTree and HashTree will be added, that can be used inplace
 of a `RwLock<BTreeMap>` or `RwLock<HashMap>`. Stay tuned!
 
@@ -43,11 +47,16 @@ Lock Free however has the limitation of being built on Atomics. This means it ca
 really only update small amounts of data at a time consistently. It also means
 that you don't have transactional behaviours. While this is great for queues,
 it's not so good for a tree or hashmap where you want the state to be consistent
-from the state to the end of an operation.
+from the state to the end of an operation. In the few places that lock free trees
+exist, they have the properly that as each thread is updating the tree, the changes
+are visibile immediately to all other readers. Your data could change before you
+know it.
 
-Mutexs and RwLock on the other hand allow much more complex structures to be protected,
-but they cause stalls on other threads waiting to access them. RwLock for example
-can see large delays if a reader won't yield!
+Mutexs and RwLock on the other hand allow much more complex structures to be protected.
+The guarantee that all readers see the same data, always, and that writers are
+the only writer. But they cause stalls on other threads waiting to access them.
+RwLock for example can see large delays if a reader won't yield, and OS policy
+can cause reader/writer to starve if the priority favours the other.
 
 Concurrently readable structures sit in between these two points. They provide
 multiple concurrent readers, with transactional behaviour, while allowing single

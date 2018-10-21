@@ -341,6 +341,7 @@ mod tests {
 
     #[test]
     fn test_gc_operation() {
+        GC_COUNT.store(0, Ordering::Release);
         let data = TestGcWrapper{data: 0};
         let cc = EbrCell::new(data);
 
@@ -354,6 +355,84 @@ mod tests {
         });
 
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
+    }
+
+    #[test]
+    fn test_gc_operation_linear() {
+        /*
+         * Test if epoch drops in order (or ordered enough).
+         * A property required for b+tree with cow is that txn's
+         * are dropped in order so that tree states are not invalidated.
+         *
+         * A -> B -> C
+         *
+         * If B is dropped, it invalidates nodes copied from A
+         * causing the tree to corrupt txn A (and maybe C).
+         *
+         * EBR due to it's design while it won't drop in order,
+         * it drops generationally, in blocks. This is probably
+         * good enough. This means that:
+         *
+         * A -> B -> C .. -> X -> Y
+         *
+         * EBR will drop in blocks such as:
+         *
+         * |  g1   |  g2   |  live |
+         * A -> B -> C .. -> X -> Y
+         *
+         * This test is "small" but asserts a basic sanity of drop
+         * ordering, but it's not conclusive for b+tree. More testing
+         * (likely multi-thread strees test) is needed, or analysis from
+         * other EBR developers.
+         */
+        GC_COUNT.store(0, Ordering::Release);
+        let data = TestGcWrapper{data: 0};
+        let cc = EbrCell::new(data);
+
+        // Open a read A.
+        let cc_rotxn_a = cc.read();
+        // open a write, change and commit
+        {
+            let mut cc_wrtxn = cc.write();
+            {
+                let mut_ptr = cc_wrtxn.get_mut();
+                mut_ptr.data = mut_ptr.data + 1;
+            }
+            cc_wrtxn.commit();
+        }
+        // open a read B.
+        let cc_rotxn_b = cc.read();
+        // open a write, change and commit
+        {
+            let mut cc_wrtxn = cc.write();
+            {
+                let mut_ptr = cc_wrtxn.get_mut();
+                mut_ptr.data = mut_ptr.data + 1;
+            }
+            cc_wrtxn.commit();
+        }
+        // open a read C
+        let cc_rotxn_c = cc.read();
+
+        assert!(GC_COUNT.load(Ordering::Acquire) == 0);
+
+        // drop B
+        drop(cc_rotxn_b);
+
+        // gc count should be 0.
+        assert!(GC_COUNT.load(Ordering::Acquire) == 0);
+
+        // drop C
+        drop(cc_rotxn_c);
+
+        // gc count should be 0
+        assert!(GC_COUNT.load(Ordering::Acquire) == 0);
+
+        // drop A
+        drop(cc_rotxn_a);
+
+        // gc count should be 2 (A + B, C is still live)
+        assert!(GC_COUNT.load(Ordering::Acquire) <= 2);
     }
 
 }
