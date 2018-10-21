@@ -29,11 +29,10 @@ extern crate crossbeam_epoch;
 extern crate crossbeam_utils;
 extern crate parking_lot;
 
+mod collections;
 pub mod cowcell;
 pub mod ebrcell;
 mod lincowcell;
-mod collections;
 
 pub use cowcell::CowCell;
 pub use ebrcell::EbrCell;
-
