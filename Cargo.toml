@@ -10,7 +10,7 @@ repostiory = "https://github.com/Firstyear/concread/"
 readme = "README.md"
 keywords = ["data-structures", "concread", "concurrency", "parallel",]
 categories = ["data-structures", "memory-management",]
-license = " LGPL-3.0-only"
+license = "MPL-2.0"
 license-file = "LICENSE.md"
 
 [dependencies]
