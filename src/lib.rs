@@ -1,4 +1,3 @@
-
 //! Concread - Concurrently Readable Datastructures
 //!
 //! Concurrently readable is often referred to as Copy-On-Write, Multi-Version-Concurrency-Control.
@@ -26,11 +25,10 @@
 
 #![warn(missing_docs)]
 
-extern crate parking_lot;
 extern crate crossbeam_epoch;
 extern crate crossbeam_utils;
+extern crate parking_lot;
 
 pub mod cowcell;
 pub mod ebrcell;
 mod lincowcell;
-

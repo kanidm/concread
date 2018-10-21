@@ -1,19 +1,19 @@
 //! CowCell - A concurrently readable cell with Arc
 //!
-//! A CowCell can be used in place of a RwLock. Readers are guaranteed that
+//! A CowCell can be used in place of a `RwLock`. Readers are guaranteed that
 //! the data will not change during the lifetime of the read. Readers do
 //! not block writers, and writers do not block readers. Writers are serialised
 //! same as the write in a RwLock.
 //!
-//! This is the Arc collected implementation. Arc is slightly slower than EBR,
+//! This is the `Arc` collected implementation. `Arc` is slightly slower than `EbrCell`
 //! but has better behaviour with very long running read operations, and more
 //! accurate memory reclaim behaviour.
 
 extern crate parking_lot;
 
-use std::sync::Arc;
 use parking_lot::{Mutex, MutexGuard};
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 /// A conncurrently readable cell.
 ///
@@ -25,10 +25,10 @@ use std::ops::{Deref, DerefMut};
 /// used. As a write transaction begins, we clone the existing data to a new
 /// location that is capable of being mutated.
 ///
-/// Readers are guaranteed that the content of the CowCell will live as long
+/// Readers are guaranteed that the content of the `CowCell` will live as long
 /// as the read transaction is open, and will be consistent for the duration
 /// of the transaction. There can be an "unlimited" number of readers in parallel
-/// accessing different generations of data of the CowCell.
+/// accessing different generations of data of the `CowCell`.
 ///
 /// Writers are serialised and are guaranteed they have exclusive write access
 /// to the structure.
@@ -46,10 +46,7 @@ use std::ops::{Deref, DerefMut};
 /// {
 ///     // Now create a write, and commit it.
 ///     let mut write_txn = cowcell.write();
-///     {
-///         let mut data = write_txn.get_mut();
-///         *data = 1;
-///     }
+///     *write_txn = 1;
 ///     // Commit the change
 ///     write_txn.commit();
 /// }
@@ -79,7 +76,7 @@ pub struct CowCellWriteTxn<'a, T: 'a> {
     work: T,
     // This way we know who to contact for updating our data ....
     caller: &'a CowCell<T>,
-    _guard: MutexGuard<'a, ()>
+    _guard: MutexGuard<'a, ()>,
 }
 
 /// A `CowCell` Read Transaction handle.
@@ -87,9 +84,7 @@ pub struct CowCellWriteTxn<'a, T: 'a> {
 /// This allows safe reading of the value within the `CowCell`, that allows
 /// no mutation of the value, and without blocking writers.
 #[derive(Debug)]
-pub struct CowCellReadTxn<T>(
-    Arc<T>,
-);
+pub struct CowCellReadTxn<T>(Arc<T>);
 
 impl<T> Clone for CowCellReadTxn<T> {
     fn clone(&self) -> Self {
@@ -98,16 +93,15 @@ impl<T> Clone for CowCellReadTxn<T> {
 }
 
 impl<T> CowCell<T>
-    where T: Clone
+where
+    T: Clone,
 {
-    /// Create a new CowCell for storing type `T`. `T` must implement clone
+    /// Create a new `CowCell` for storing type `T`. `T` must implement `Clone`
     /// to enable clone-on-write.
     pub fn new(data: T) -> Self {
         CowCell {
             write: Mutex::new(()),
-            active: Mutex::new(
-                Arc::new(data)
-            ),
+            active: Mutex::new(Arc::new(data)),
         }
     }
 
@@ -176,7 +170,8 @@ impl<T> Deref for CowCellReadTxn<T> {
 }
 
 impl<'a, T> CowCellWriteTxn<'a, T>
-    where T: Clone
+where
+    T: Clone,
 {
     /// Access a mutable pointer of the data in the `CowCell`. This data is only
     /// visible to the write transaction object in this thread, until you call
@@ -211,15 +206,14 @@ impl<'a, T> DerefMut for CowCellWriteTxn<'a, T> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    extern crate time;
     extern crate crossbeam_utils;
     extern crate parking_lot;
+    extern crate time;
 
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use super::CowCell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crossbeam_utils::thread::scope;
 
@@ -294,34 +288,36 @@ mod tests {
         scope(|scope| {
             let cc_ref = &cc;
 
-            let _readers: Vec<_> = (0..7).map(|_| {
-                scope.spawn(move || {
-                    let mut last_value: i64 = 0;
-                    while last_value < MAX_TARGET {
-                        let cc_rotxn = cc_ref.read();
-                        {
-                            assert!(*cc_rotxn >= last_value);
-                            last_value = *cc_rotxn;
+            let _readers: Vec<_> = (0..7)
+                .map(|_| {
+                    scope.spawn(move || {
+                        let mut last_value: i64 = 0;
+                        while last_value < MAX_TARGET {
+                            let cc_rotxn = cc_ref.read();
+                            {
+                                assert!(*cc_rotxn >= last_value);
+                                last_value = *cc_rotxn;
+                            }
                         }
-                    }
-                })
-            }).collect();
+                    })
+                }).collect();
 
-            let _writers: Vec<_> = (0..3).map(|_| {
-                scope.spawn(move || {
-                    let mut last_value: i64 = 0;
-                    while last_value < MAX_TARGET {
-                        let mut cc_wrtxn = cc_ref.write();
-                        {
-                            let mut_ptr = cc_wrtxn.get_mut();
-                            assert!(*mut_ptr >= last_value);
-                            last_value = *mut_ptr;
-                            *mut_ptr = *mut_ptr + 1;
+            let _writers: Vec<_> = (0..3)
+                .map(|_| {
+                    scope.spawn(move || {
+                        let mut last_value: i64 = 0;
+                        while last_value < MAX_TARGET {
+                            let mut cc_wrtxn = cc_ref.write();
+                            {
+                                let mut_ptr = cc_wrtxn.get_mut();
+                                assert!(*mut_ptr >= last_value);
+                                last_value = *mut_ptr;
+                                *mut_ptr = *mut_ptr + 1;
+                            }
+                            cc_wrtxn.commit();
                         }
-                        cc_wrtxn.commit();
-                    }
-                })
-            }).collect();
+                    })
+                }).collect();
         });
 
         let end = time::now();
@@ -332,7 +328,7 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct TestGcWrapper<T> {
-        data: T
+        data: T,
     }
 
     impl<T> Drop for TestGcWrapper<T> {
@@ -359,21 +355,20 @@ mod tests {
     #[test]
     fn test_gc_operation() {
         GC_COUNT.store(0, Ordering::Release);
-        let data = TestGcWrapper{data: 0};
+        let data = TestGcWrapper { data: 0 };
         let cc = CowCell::new(data);
 
         scope(|scope| {
             let cc_ref = &cc;
-            let _writers: Vec<_> = (0..3).map(|_| {
-                scope.spawn(move || {
-                    test_gc_operation_thread(cc_ref);
-                })
-            }).collect();
+            let _writers: Vec<_> = (0..3)
+                .map(|_| {
+                    scope.spawn(move || {
+                        test_gc_operation_thread(cc_ref);
+                    })
+                }).collect();
         });
 
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
     }
 
 }
-
-

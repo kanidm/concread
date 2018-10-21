@@ -1,19 +1,19 @@
-//! EbrCell - A concurrently readable cell with EBR
+//! EbrCell - A concurrently readable cell with Ebr
 //!
-//! An EbrCell can be used in place of a RwLock. Readers are guaranteed that
+//! An `EbrCell` can be used in place of a `RwLock`. Readers are guaranteed that
 //! the data will not change during the lifetime of the read. Readers do
 //! not block writers, and writers do not block readers. Writers are serialised
-//! same as the write in a RwLock.
+//! same as the write in a `RwLock`.
 //!
-//! This is the Ebr collected implementation. Ebr is faster than Arc,
+//! This is the Ebr collected implementation. Ebr is faster than `Arc`,
 //! but long transactions can cause the memory usage to grow very quickly
 //! before a garbage reclaim. This is a space time trade, where you gain
-//! performance at the expense of delaying garbage collection. Holding EBR
+//! performance at the expense of delaying garbage collection. Holding Ebr
 //! reads for too long may impact garbage collection of other structures.
 //! If you need accurate memory reclaim, use the Arc (`CowCell`) implementation.
 
 use crossbeam_epoch as epoch;
-use crossbeam_epoch::{Atomic, Owned, Guard};
+use crossbeam_epoch::{Atomic, Guard, Owned};
 use std::sync::atomic::Ordering::{Acquire, Release};
 
 use parking_lot::{Mutex, MutexGuard};
@@ -33,11 +33,12 @@ pub struct EbrCellWriteTxn<'a, T: 'a> {
     data: Option<T>,
     // This way we know who to contact for updating our data ....
     caller: &'a EbrCell<T>,
-    _guard: MutexGuard<'a, ()>
+    _guard: MutexGuard<'a, ()>,
 }
 
 impl<'a, T> EbrCellWriteTxn<'a, T>
-    where T: Clone + Send + 'static
+where
+    T: Clone + Send + 'static,
 {
     /// Access a mutable pointer of the data in the `EbrCell`. This data is only
     /// visible to this write transaction object in this thread until you call
@@ -74,7 +75,6 @@ impl<'a, T> DerefMut for EbrCellWriteTxn<'a, T> {
     }
 }
 
-
 /// A concurrently readable cell.
 ///
 /// This structure behaves in a similar manner to a `RwLock<Box<T>>`. However
@@ -86,10 +86,10 @@ impl<'a, T> DerefMut for EbrCellWriteTxn<'a, T> {
 /// used. As a write transaction begins, we clone the existing data to a new
 /// location that is capable of being mutated.
 ///
-/// Readers are guaranteed that the content of the EbrCell will live as long
+/// Readers are guaranteed that the content of the `EbrCell` will live as long
 /// as the read transaction is open, and will be consistent for the duration
 /// of the transaction. There can be an "unlimited" number of readers in parallel
-/// accessing different generations of data of the EbrCell.
+/// accessing different generations of data of the `EbrCell`.
 ///
 /// Writers are serialised and are guaranteed they have exclusive write access
 /// to the structure.
@@ -107,10 +107,7 @@ impl<'a, T> DerefMut for EbrCellWriteTxn<'a, T> {
 /// {
 ///     // Now create a write, and commit it.
 ///     let mut write_txn = ebrcell.write();
-///     {
-///         let mut data = write_txn.get_mut();
-///         *data = 1;
-///     }
+///     *write_txn = 1;
 ///     // Commit the change
 ///     write_txn.commit();
 /// }
@@ -127,13 +124,14 @@ pub struct EbrCell<T> {
 }
 
 impl<T> EbrCell<T>
-    where T: Clone + Send + 'static
+where
+    T: Clone + Send + 'static,
 {
-    /// Create a new EbrCell storing type `T`. `T` must implement Clone.
+    /// Create a new `EbrCell` storing type `T`. `T` must implement `Clone`.
     pub fn new(data: T) -> Self {
         EbrCell {
             write: Mutex::new(()),
-            active: Atomic::new(data)
+            active: Atomic::new(data),
         }
     }
 
@@ -147,9 +145,7 @@ impl<T> EbrCell<T>
         /* Now build the write struct, we'll discard the pin shortly! */
         EbrCellWriteTxn {
             /* This is the 'copy' of the copy on write! */
-            data: Some(unsafe {
-                cur_shared.deref().clone()
-                }),
+            data: Some(unsafe { cur_shared.deref().clone() }),
             caller: self,
             _guard: mguard,
         }
@@ -164,9 +160,7 @@ impl<T> EbrCell<T>
             /* Now build the write struct, we'll discard the pin shortly! */
             EbrCellWriteTxn {
                 /* This is the 'copy' of the copy on write! */
-                data: Some(unsafe {
-                    cur_shared.deref().clone()
-                    }),
+                data: Some(unsafe { cur_shared.deref().clone() }),
                 caller: self,
                 _guard: mguard,
             }
@@ -188,7 +182,9 @@ impl<T> EbrCell<T>
         let prev_data = self.active.load(Acquire, &guard);
         // Make the data Owned, and set it in the active.
         let owned_data: Owned<T> = Owned::new(element.unwrap());
-        let _shared_data = self.active.compare_and_set(prev_data, owned_data, Release, &guard);
+        let _shared_data = self
+            .active
+            .compare_and_set(prev_data, owned_data, Release, &guard);
         // Finally, set our previous data for cleanup.
         unsafe {
             guard.defer(move || {
@@ -248,16 +244,14 @@ impl<T> Deref for EbrCellReadTxn<T> {
 
     /// Derference and access the value within the read transaction.
     fn deref(&self) -> &T {
-        unsafe {
-            &(*self.data)
-        }
+        unsafe { &(*self.data) }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    extern crate time;
     extern crate crossbeam_utils;
+    extern crate time;
 
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -327,7 +321,6 @@ mod tests {
 
     #[test]
     fn test_multithread_create() {
-
         let start = time::now();
         // Create the new ebrcell.
         let data: i64 = 0;
@@ -336,35 +329,36 @@ mod tests {
         scope(|scope| {
             let cc_ref = &cc;
 
-            let _readers: Vec<_> = (0..7).map(|_| {
-                scope.spawn(move || {
-                    let mut last_value: i64 = 0;
-                    while last_value < MAX_TARGET {
-                        let cc_rotxn = cc_ref.read();
-                        {
-                            assert!(*cc_rotxn >= last_value);
-                            last_value = *cc_rotxn;
+            let _readers: Vec<_> = (0..7)
+                .map(|_| {
+                    scope.spawn(move || {
+                        let mut last_value: i64 = 0;
+                        while last_value < MAX_TARGET {
+                            let cc_rotxn = cc_ref.read();
+                            {
+                                assert!(*cc_rotxn >= last_value);
+                                last_value = *cc_rotxn;
+                            }
                         }
-                    }
-                })
-            }).collect();
+                    })
+                }).collect();
 
-            let _writers: Vec<_> = (0..3).map(|_| {
-                scope.spawn(move || {
-                    let mut last_value: i64 = 0;
-                    while last_value < MAX_TARGET {
-                        let mut cc_wrtxn = cc_ref.write();
-                        {
-                            let mut_ptr = cc_wrtxn.get_mut();
-                            assert!(*mut_ptr >= last_value);
-                            last_value = *mut_ptr;
-                            *mut_ptr = *mut_ptr + 1;
+            let _writers: Vec<_> = (0..3)
+                .map(|_| {
+                    scope.spawn(move || {
+                        let mut last_value: i64 = 0;
+                        while last_value < MAX_TARGET {
+                            let mut cc_wrtxn = cc_ref.write();
+                            {
+                                let mut_ptr = cc_wrtxn.get_mut();
+                                assert!(*mut_ptr >= last_value);
+                                last_value = *mut_ptr;
+                                *mut_ptr = *mut_ptr + 1;
+                            }
+                            cc_wrtxn.commit();
                         }
-                        cc_wrtxn.commit();
-                    }
-                })
-            }).collect();
-
+                    })
+                }).collect();
         });
 
         let end = time::now();
@@ -375,7 +369,7 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct TestGcWrapper<T> {
-        data: T
+        data: T,
     }
 
     impl<T> Drop for TestGcWrapper<T> {
@@ -402,16 +396,17 @@ mod tests {
     #[test]
     fn test_gc_operation() {
         GC_COUNT.store(0, Ordering::Release);
-        let data = TestGcWrapper{data: 0};
+        let data = TestGcWrapper { data: 0 };
         let cc = EbrCell::new(data);
 
         scope(|scope| {
             let cc_ref = &cc;
-            let _writers: Vec<_> = (0..3).map(|_| {
-                scope.spawn(move || {
-                    test_gc_operation_thread(cc_ref);
-                })
-            }).collect();
+            let _writers: Vec<_> = (0..3)
+                .map(|_| {
+                    scope.spawn(move || {
+                        test_gc_operation_thread(cc_ref);
+                    })
+                }).collect();
         });
 
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
@@ -428,7 +423,7 @@ mod tests_linear {
 
     #[derive(Debug, Clone)]
     struct TestGcWrapper<T> {
-        data: T
+        data: T,
     }
 
     impl<T> Drop for TestGcWrapper<T> {
@@ -467,7 +462,7 @@ mod tests_linear {
          * other EBR developers.
          */
         GC_COUNT.store(0, Ordering::Release);
-        let data = TestGcWrapper{data: 0};
+        let data = TestGcWrapper { data: 0 };
         let cc = EbrCell::new(data);
 
         // Open a read A.
@@ -517,5 +512,3 @@ mod tests_linear {
     }
 
 }
-
-

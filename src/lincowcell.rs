@@ -5,9 +5,8 @@
 //! behaviour that this implements, and it will only make your application
 //! slower for it. Consider `CowCell` and `EbrCell` instead.
 
-
-use std::sync::{Mutex, MutexGuard, Arc};
 use std::ops::Deref;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Debug)]
 pub struct LinCowCellInner<T> {
@@ -42,21 +41,17 @@ pub struct LinCowCellWriteTxn<'a, T: 'a> {
     work: T,
     // This way we know who to contact for updating our data ....
     caller: &'a LinCowCell<T>,
-    guard: MutexGuard<'a, ()>
+    guard: MutexGuard<'a, ()>,
 }
 
-
 impl<T> LinCowCell<T>
-    where T: Clone
+where
+    T: Clone,
 {
     pub fn new(data: T) -> Self {
         LinCowCell {
             write: Mutex::new(()),
-            active: Mutex::new(
-                Arc::new(
-                    LinCowCellInner::new(data)
-                )
-            ),
+            active: Mutex::new(Arc::new(LinCowCellInner::new(data))),
         }
     }
 
@@ -118,7 +113,8 @@ impl<T> AsRef<T> for LinCowCellInner<T> {
 }
 
 impl<'a, T> LinCowCellWriteTxn<'a, T>
-    where T: Clone
+where
+    T: Clone,
 {
     /* commit */
     /* get_mut data */
@@ -133,15 +129,14 @@ impl<'a, T> LinCowCellWriteTxn<'a, T>
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    extern crate time;
     extern crate crossbeam_utils;
+    extern crate time;
 
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use super::LinCowCell;
     use crossbeam_utils::thread::scope;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_simple_create() {
@@ -211,17 +206,19 @@ mod tests {
         scope(|scope| {
             let cc_ref = &cc;
 
-            let _readers: Vec<_> = (0..7).map(|_| {
-                scope.spawn(move || {
-                    rt_writer(cc_ref);
-                })
-            }).collect();
+            let _readers: Vec<_> = (0..7)
+                .map(|_| {
+                    scope.spawn(move || {
+                        rt_writer(cc_ref);
+                    })
+                }).collect();
 
-            let _writers: Vec<_> = (0..3).map(|_| {
-                scope.spawn(move || {
-                    mt_writer(cc_ref);
-                })
-            }).collect();
+            let _writers: Vec<_> = (0..3)
+                .map(|_| {
+                    scope.spawn(move || {
+                        mt_writer(cc_ref);
+                    })
+                }).collect();
         });
 
         let end = time::now();
@@ -232,7 +229,7 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct TestGcWrapper<T> {
-        data: T
+        data: T,
     }
 
     impl<T> Drop for TestGcWrapper<T> {
@@ -259,16 +256,17 @@ mod tests {
     #[test]
     fn test_gc_operation() {
         GC_COUNT.store(0, Ordering::Release);
-        let data = TestGcWrapper{data: 0};
+        let data = TestGcWrapper { data: 0 };
         let cc = LinCowCell::new(data);
 
         scope(|scope| {
             let cc_ref = &cc;
-            let _writers: Vec<_> = (0..3).map(|_| {
-                scope.spawn(move || {
-                    test_gc_operation_thread(cc_ref);
-                })
-            }).collect();
+            let _writers: Vec<_> = (0..3)
+                .map(|_| {
+                    scope.spawn(move || {
+                        test_gc_operation_thread(cc_ref);
+                    })
+                }).collect();
         });
 
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
@@ -286,7 +284,7 @@ mod tests_linear {
 
     #[derive(Debug, Clone)]
     struct TestGcWrapper<T> {
-        data: T
+        data: T,
     }
 
     impl<T> Drop for TestGcWrapper<T> {
@@ -304,7 +302,7 @@ mod tests_linear {
     fn test_gc_operation_linear() {
         GC_COUNT.store(0, Ordering::Release);
         assert!(GC_COUNT.load(Ordering::Acquire) == 0);
-        let data = TestGcWrapper{data: 0};
+        let data = TestGcWrapper { data: 0 };
         let cc = LinCowCell::new(data);
 
         // Open a read A.
@@ -353,5 +351,3 @@ mod tests_linear {
         assert!(GC_COUNT.load(Ordering::Acquire) == 2);
     }
 }
-
-
