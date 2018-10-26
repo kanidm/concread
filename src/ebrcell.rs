@@ -5,11 +5,14 @@
 //! not block writers, and writers do not block readers. Writers are serialised
 //! same as the write in a `RwLock`.
 //!
-//! This is the Ebr collected implementation. Ebr is faster than `Arc`,
+//! This is the Ebr collected implementation.
+//! Ebr is the crossbeam-epoch based reclaim system for async memory
+//! garbage collection. Ebr is faster than `Arc`,
 //! but long transactions can cause the memory usage to grow very quickly
 //! before a garbage reclaim. This is a space time trade, where you gain
 //! performance at the expense of delaying garbage collection. Holding Ebr
-//! reads for too long may impact garbage collection of other structures.
+//! reads for too long may impact garbage collection of other epoch structures
+//! or crossbeam library components.
 //! If you need accurate memory reclaim, use the Arc (`CowCell`) implementation.
 
 use crossbeam_epoch as epoch;
