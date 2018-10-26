@@ -94,6 +94,8 @@ impl<'a, T> DerefMut for EbrCellWriteTxn<'a, T> {
 /// of the transaction. There can be an "unlimited" number of readers in parallel
 /// accessing different generations of data of the `EbrCell`.
 ///
+/// Data that is copied is garbage collected using the crossbeam-epoch library.
+///
 /// Writers are serialised and are guaranteed they have exclusive write access
 /// to the structure.
 ///
