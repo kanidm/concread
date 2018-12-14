@@ -5,7 +5,7 @@ use std::ptr;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::{Mutex, MutexGuard};
 
-use super::node::{BptreeBranch, BptreeLeaf, BptreeNode};
+use super::node::BptreeNode;
 
 struct BptreeMap<K, V> {
     write: Mutex<()>,
@@ -43,7 +43,7 @@ pub enum BptreeErr {
 
 impl<K, V> BptreeMap<K, V>
 where
-    K: Clone + PartialEq,
+    K: Clone + PartialEq + Ord,
     V: Clone,
 {
     pub fn new() -> Self {
@@ -100,7 +100,7 @@ where
 
 impl<K, V> BptreeTxn<K, V>
 where
-    K: Clone + PartialEq,
+    K: Clone + PartialEq + Ord,
     V: Clone,
 {
     #[inline(always)]
@@ -160,7 +160,7 @@ impl<K, V> Clone for BptreeTxn<K, V> {
 
 impl<K, V> BptreeReadTxn<K, V>
 where
-    K: Clone + PartialEq,
+    K: Clone + PartialEq + Ord,
     V: Clone,
 {
     pub fn search(&self, key: &K) -> Option<&V> {
@@ -175,7 +175,7 @@ where
 // This is really just a gateway wrapper to the bsttxn fns.
 impl<'a, K, V> BptreeWriteTxn<'a, K, V>
 where
-    K: Clone + PartialEq,
+    K: Clone + PartialEq + Ord,
     V: Clone,
 {
     pub fn search(&self, key: &K) -> Option<&V> {
