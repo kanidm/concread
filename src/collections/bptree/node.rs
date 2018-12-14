@@ -31,6 +31,7 @@ where
         BptreeNode {
             key: [None, None, None, None, None],
             inner: BptreeNodeInner::Leaf {
+                // value = mem::uninitialized();
                 value: [None, None, None, None, None],
             },
             parent: ptr::null_mut(),
@@ -49,6 +50,9 @@ where
         BptreeNode {
             key: [Some(key), None, None, None, None],
             inner: BptreeNodeInner::Branch {
+                // links = mem::uninitialized();
+                // links[0] = ;
+                // links[1] = ;
                 links: [
                     left,
                     right,
