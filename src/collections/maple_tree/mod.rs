@@ -13,6 +13,9 @@ enum M<T> {
 }
 
 struct SparseLeaf<K, V> {
+    // This is an unsorted set of K, V pairs. Insert just appends (if possible),
+    //, remove does NOT move the slots. On split, we sort-compact then move some
+    // values (if needed).
     key: [M<K>; CAPACITY],
     value: [M<V>; CAPACITY],
 }
@@ -47,6 +50,59 @@ struct Node<K, V> {
     tid: u64,
     // checksum: u32,
     inner: NodeTag<K, V>,
+}
+
+
+impl<K, V> SparseLeaf<K, V> {
+    pub fn new() -> Self {
+        unimplemented!();
+    }
+
+    pub fn insert(&mut self, k: K, v: V) -> Option<()> {
+        unimplemented!();
+    }
+
+    pub fn update(&mut self, k: K, v: V) -> Option<V> {
+        unimplemented!();
+    }
+
+    pub fn remove(&mut self, k: &K) -> Option<V> {
+        unimplemented!();
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::{SparseLeaf};
+
+    #[test]
+    fn test_sparse_leaf_basic() {
+        let mut sl: SparseLeaf<usize, usize> = SparseLeaf::new();
+        // insert
+        sl.insert(0, 0);
+        // remove
+        sl.remove(&0);
+        // Remove non-existant
+        sl.remove(&0);
+
+        sl.insert(1, 1);
+        sl.insert(2, 2);
+
+        // Insert duplicate
+        sl.insert(2, 2); // error?
+
+        // update inplace.
+        sl.update(2, 3);
+
+        // split?
+        // compact/sort
+        // verify
+        // clone
+        // eq?
+        // pass
+    }
+
 }
 
 

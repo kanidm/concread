@@ -42,7 +42,6 @@ often only requires operational consistency, where databases require transaction
 
 An example of this to explain is:
 
-::
 
     T0          T1
     read(x) -> 0
@@ -55,7 +54,6 @@ don't imply locking or ordering. Only that the read/write are guaranteed consist
 
 Contrast to concurrent readability, which provides:
 
-::
 
     T0          T1
     start_read()
@@ -91,7 +89,6 @@ The RangeBranch node is a subtle variation of the class B+Tree branch node. It c
 and N-1 pivots or keys. An important element of the RangeBranch type is that there is an implied
 pivot/key at min and max. For example, if you have a node laid out as follows:
 
-::
 
     ------------------------------------------------------
     |  |  4  |  8  |  12  |  16  |  20  |  24  |  28  |  |
@@ -101,7 +98,6 @@ pivot/key at min and max. For example, if you have a node laid out as follows:
 It is implied from the value at index 0 and index N-1 that min and max values must exist either
 side.
 
-::
 
         ------------------------------------------------------
      | (0) |  4  |  8  |  12  |  16  |  20  |  24  |  28  | (TYPE_MAX) |
@@ -118,7 +114,6 @@ in a leaf that is larger than the right parent pivot).
 However, the importance of this range behaviour is shown with a subsequent RangeBranch or RangeLeaf.
 This is that MIN/MAX are bounded by the pivots relative to the pointer. In an example such as:
 
-::
 
         ------------------------------------------------------
      | (0) |  4  |  8  |  12  |  16  |  20  |  24  |  28  | (TYPE_MAX) |
@@ -148,11 +143,10 @@ B+Tree construction is a "build up" process (which seems counter intuitive given
 grow down). This process involves split and rebalance. For example, a B+tree with key storage
 of three keys would grow like the following.
 
-::
 
     [ 1, 2, 3 ]
 
-    inesrt 4
+    insert 4
 
     [ 1, 2, NULL ] -> [ 3, 4, NULL ]
 
@@ -167,11 +161,10 @@ The Maple Tree sparse nodes attempt *not* to rebalance to prevent this. Given th
 highly randomised, or they are sequential, this turns out pretty well and keys nodes well used. An
 example insert (note, I'm using a 64byte node, not 128 for brevity) would be:
 
-::
 
     [ 1, 2, 3 ]
 
-    inesrt 4
+    insert 4
 
     [ 1, 2, 3 ] -> [ 4, NULL, NULL ]
 
@@ -192,7 +185,6 @@ A DenseLeaf is similar to a SparseLeaf in being a 128byte structure, however it 
 sparseleaf, 64bytes of the capacity is consumed by the storage of these keys. A DenseLeaf omits keys
 relying on implied keying of the values. In Rust, this would require the struct to be of the form:
 
-::
 
     let tree: MapleTree<usize, _> = MapleTree::new();
 
@@ -205,7 +197,6 @@ starts at 0. Fast quick arrays anyone?
 An example of this structure in a different scenario is assuming we have a RangeBranch as a parent
 with the left and right pivots as 32 and 48.
 
-::
 
     [ ...., 32, 48, .... ]
             |
@@ -229,7 +220,6 @@ types. There is no "max" string, so ranges are not possible by definition.
 
 As an example:
 
-::
 
         ------------------------------------------------------
      | (16) |  17  |  19  |  END  |   -  |   -  |   -  |   -  | (20) |
@@ -290,8 +280,6 @@ inplace conversion, but it would be better to know that we have highly sequentia
 data to inform our choice, rather than rely on heuristics.
 
 I would propose an insert interface such as:
-
-::
 
     pub enum MapleUsage {
         Linear,
