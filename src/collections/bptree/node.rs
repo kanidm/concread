@@ -16,7 +16,7 @@ enum OptionNode<T> {
 
 pub enum BptreeNodeInner<K, V> {
     Leaf {
-        value: [Option<V>; CAPACITY],
+        value: [OptionNode<V>; CAPACITY],
     },
     Branch {
         links: [*mut BptreeNode<K, V>; L_CAPACITY],
@@ -24,7 +24,7 @@ pub enum BptreeNodeInner<K, V> {
 }
 
 pub struct BptreeNode<K, V> {
-    key: [Option<K>; CAPACITY],
+    key: [OptionNode<K>; CAPACITY],
     inner: BptreeNodeInner<K, V>,
     parent: *mut BptreeNode<K, V>,
     parent_idx: u16,
@@ -39,10 +39,10 @@ where
 {
     pub fn new_leaf(tid: u64) -> Self {
         BptreeNode {
-            key: [None, None, None, None, None],
+            key: [OptionNode::None, OptionNode::None, OptionNode::None, OptionNode::None, OptionNode::None],
             inner: BptreeNodeInner::Leaf {
                 // value = mem::uninitialized();
-                value: [None, None, None, None, None],
+                value: [OptionNode::None, OptionNode::None, OptionNode::None, OptionNode::None, OptionNode::None],
             },
             parent: ptr::null_mut(),
             parent_idx: 0,
@@ -93,7 +93,7 @@ where
     // if K already exists?
     pub fn insert(&mut self, key: K, value: V) -> Result<*mut BptreeNode<K, V>, BptreeErr> {
         /* Should we auto split? */
-        match self.key.binary_search(&Some(key)) {
+        match self.key.binary_search(&OptionNode::Some(key)) {
             Ok(idx) => {
                 println!("{:?}", idx);
             }
