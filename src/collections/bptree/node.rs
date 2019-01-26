@@ -1,13 +1,23 @@
 use super::map::BptreeErr;
 use std::ptr;
+use std::cmp::PartialOrd;
 
 const CAPACITY: usize = 5;
 const L_CAPACITY: usize = CAPACITY + 1;
 
+// We have to define our own "Option" style type to provide correct ording with PartialOrd
+// as Option puts None before Some.
+
+#[derive(PartialEq, PartialOrd, Clone, Eq, Ord, Debug, Hash)]
+enum OptionNode<T> {
+    Some(T),
+    None,
+}
+
 pub struct BptreeLeaf<K, V> {
     /* These options get null pointer optimised for us :D */
-    key: [Option<K>; CAPACITY],
-    value: [Option<V>; CAPACITY],
+    key: [OptionNode<K>; CAPACITY],
+    value: [OptionNode<V>; CAPACITY],
     parent: *mut BptreeNode<K, V>,
     parent_idx: u16,
     capacity: u16,
@@ -15,7 +25,7 @@ pub struct BptreeLeaf<K, V> {
 }
 
 pub struct BptreeBranch<K, V> {
-    key: [Option<K>; CAPACITY],
+    key: [OptionNode<K>; CAPACITY],
     links: [*mut BptreeNode<K, V>; L_CAPACITY],
     parent: *mut BptreeNode<K, V>,
     parent_idx: u16,
@@ -36,8 +46,8 @@ where
     pub fn new_leaf(tid: u64) -> Self {
         BptreeNode::Leaf {
             inner: BptreeLeaf {
-                key: [None, None, None, None, None],
-                value: [None, None, None, None, None],
+                key: [OptionNode::None, OptionNode::None, OptionNode::None, OptionNode::None, OptionNode::None],
+                value: [OptionNode::None, OptionNode::None, OptionNode::None, OptionNode::None, OptionNode::None],
                 parent: ptr::null_mut(),
                 parent_idx: 0,
                 capacity: 0,
@@ -54,7 +64,7 @@ where
     ) -> Self {
         BptreeNode::Branch {
             inner: BptreeBranch {
-                key: [Some(key), None, None, None, None],
+                key: [OptionNode::Some(key), OptionNode::None, OptionNode::None, OptionNode::None, OptionNode::None],
                 links: [
                     left,
                     right,
@@ -73,6 +83,7 @@ where
 
     // Recurse and search.
     pub fn search(&self, key: &K) -> Option<&V> {
+        unimplemented!();
         match self {
             &BptreeNode::Leaf { ref inner } => None,
             &BptreeNode::Branch { ref inner } => None,
@@ -87,21 +98,26 @@ where
     pub fn update(&mut self, key: K, value: V) {
         /* If not present, insert */
         /* If present, replace */
+        unimplemented!()
     }
 
     // Should this be a reference?
     pub fn remove(&mut self, key: &K) -> Option<(K, V)> {
         /* If present, remove */
         /* Else nothing, no-op */
+        unimplemented!();
         None
     }
 
     /* Return if the node is valid */
     fn verify() -> bool {
+        unimplemented!();
         false
     }
 
-    fn map_nodes() -> () {}
+    fn map_nodes() -> () {
+        unimplemented!()
+    }
 }
 
 #[cfg(test)]
@@ -109,7 +125,17 @@ mod tests {
     use super::{BptreeBranch, BptreeLeaf, BptreeNode};
 
     #[test]
-    fn test_node_basic() {
-        
+    fn test_node_leaf_basic() {
+        let mut leaf: BptreeNode<u64, u64> = BptreeNode::new_leaf(0);
+
+        // Insert
+        assert!(leaf.insert(0, 0).is_ok())
+
+        // Delete
+        // Search
+    }
+
+    #[test]
+    fn test_node_leaf_split() {
     }
 }
