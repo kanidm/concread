@@ -1,4 +1,3 @@
-
 use std::fmt::Debug;
 use std::mem;
 
@@ -77,14 +76,33 @@ struct Node<K, V> {
     inner: NodeTag<K, V>,
 }
 
-impl<K, V> SparseLeaf<K, V> 
-    where K: PartialEq + Debug,
-          V: Debug,
+impl<K, V> SparseLeaf<K, V>
+where
+    K: PartialEq + Debug,
+    V: Debug,
 {
     pub fn new() -> Self {
         SparseLeaf {
-            key: [M::None, M::None, M::None, M::None, M::None, M::None, M::None, M::None],
-            value: [M::None, M::None, M::None, M::None, M::None, M::None, M::None, M::None],
+            key: [
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+            ],
+            value: [
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+            ],
         }
     }
 
@@ -92,7 +110,7 @@ impl<K, V> SparseLeaf<K, V>
         // Just find a free slot and insert
         for i in 0..CAPACITY {
             println!("insert: {:?}", self.key[i]);
-            if ! self.key[i].is_some() {
+            if !self.key[i].is_some() {
                 // Make the new k: v here
                 let mut nk = M::Some(k);
                 let mut nv = M::Some(v);
@@ -104,66 +122,156 @@ impl<K, V> SparseLeaf<K, V>
             }
         }
 
-        // If there is no slot, return a failure?
+        return None;
+    }
 
-        unimplemented!();
+    pub fn search(&mut self, k: &K) -> Option<&V> {
+        for i in 0..CAPACITY {
+            match &self.key[i] {
+                M::Some(v) => {
+                    if v == k {
+                        match &self.value[i] {
+                            M::Some(v) => {
+                                return Some(v);
+                            }
+                            M::None => {
+                                return None;
+                            }
+                        }
+                    }
+                }
+
+                M::None => {}
+            }
+        }
+
+        None
     }
 
     pub fn update(&mut self, k: K, v: V) -> Option<V> {
-        unimplemented!();
+        for i in 0..CAPACITY {
+            match &self.key[i] {
+                M::Some(v) => {
+                    if v != &k {
+                        continue;
+                    }
+                }
+
+                M::None => {
+                    continue;
+                }
+            }
+
+            let mut nv = M::Some(v);
+
+            mem::swap(&mut self.value[i], &mut nv);
+
+            match nv {
+                M::Some(v) => return Some(v),
+                M::None => return None,
+            }
+        }
+
+        None
     }
 
     pub fn remove(&mut self, k: &K) -> Option<V> {
         for i in 0..CAPACITY {
             println!("remove: {:?}", self.key[i]);
 
-            if self.key[i] == k {
-                let mut nk = M::None;
-                let mut nv = M::None;
+            match &self.key[i] {
+                M::Some(v) => {
+                    if v != k {
+                        continue;
+                    }
+                }
+                M::None => {
+                    continue;
+                }
+            }
 
-                mem::swap(&mut self.key[i], &mut nk);
-                mem::swap(&mut self.value[i], &mut nv);
-                return Some(nv);
+            let mut nk = M::None;
+            let mut nv = M::None;
+
+            mem::swap(&mut self.key[i], &mut nk);
+            mem::swap(&mut self.value[i], &mut nv);
+
+            match nv {
+                M::Some(v) => {
+                    return Some(v);
+                }
+                M::None => {}
             }
         }
-        unimplemented!();
+        None
     }
 
     // We need to sort *just before* we split if required.
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::{SparseLeaf};
+    use super::SparseLeaf;
 
     #[test]
-    fn test_sparse_leaf_basic() {
+    fn test_sparse_leaf_search() {
         let mut sl: SparseLeaf<usize, usize> = SparseLeaf::new();
-        // insert
-        sl.insert(0, 0);
-        // remove
-        sl.remove(&0);
-        // Remove non-existant
-        sl.remove(&0);
 
-        sl.insert(1, 1);
+        // test valid search
         sl.insert(2, 2);
 
-        // Insert duplicate
-        sl.insert(2, 2); // error?
+        assert!(sl.search(&2).is_some());
+
+        // test invalid search
+        assert!(sl.search(&3).is_none());
+    }
+
+    #[test]
+    fn test_sparse_leaf_update() {
+        let mut sl: SparseLeaf<usize, usize> = SparseLeaf::new();
+
+        // Insert K:V pair
+        sl.insert(2, 2);
 
         // update inplace.
         sl.update(2, 3);
 
-        // split?
-        // compact/sort
-        // verify
-        // clone
-        // eq?
-        // pass
+        // check that the value was correctly changed
+        assert!(sl.search(&2) == Some(&3));
     }
 
+    #[test]
+    fn test_sparse_leaf_insert() {
+        let mut sl: SparseLeaf<usize, usize> = SparseLeaf::new();
+
+        // insert
+        sl.insert(2, 2);
+
+        // test valid search
+        assert!(sl.search(&2) == Some(&2));
+
+        // test invalid search
+        assert!(sl.search(&1).is_none());
+
+        // test insert after node is already full
+
+        for i in 0..7 {
+            // i+1 because 0 was already used as a key
+            sl.insert(i + 1, i + 1);
+        }
+
+        assert!(sl.insert(8, 8).is_none())
+    }
+
+    #[test]
+    fn test_sparse_leaf_remove() {
+        let mut sl: SparseLeaf<usize, usize> = SparseLeaf::new();
+
+        // check removing a non-existent value fails
+        assert!(sl.remove(&0).is_none());
+
+        // check removing a value that exists
+        sl.insert(0, 0);
+        assert!(sl.remove(&0).is_some());
+    }
 }
-
-
