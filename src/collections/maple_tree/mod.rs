@@ -4,7 +4,7 @@ use std::mem;
 // Number of k,v in sparse, and number of range values/links.
 const CAPACITY: usize = 8;
 // Number of pivots in range
-const R_CAPACITY: usize = CAPACITY - 1;
+const R_CAPACITY: usize = CAPACITY;
 // Number of values in dense.
 const D_CAPACITY: usize = CAPACITY * 2;
 
@@ -46,7 +46,7 @@ struct DenseLeaf<V> {
 
 #[derive(Debug)]
 struct RangeLeaf<K, V> {
-    pivot: [M<K>; R_CAPACITY],
+    pivot: [M<K>; CAPACITY],
     value: [M<V>; CAPACITY],
 }
 
@@ -75,6 +75,123 @@ struct Node<K, V> {
     // checksum: u32,
     inner: NodeTag<K, V>,
 }
+
+// I am working on the implementation for RangeLeaf but it isn't anywhere near ready, this code is
+// just a first attempt at trying to understand the problems that I need to solve
+/*
+impl<K, V> RangeLeaf<K, V>
+where
+    K: Clone + PartialEq + PartialOrd + Debug,
+    V: Debug,
+{
+    pub fn new() -> Self {
+
+        RangeLeaf {
+            key : [
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+            ],
+            value: [
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+                M::None,
+            ],
+        }
+    }
+
+    // returns the number of available spots for new keys
+    pub fn len(&mut self) -> u32 {
+        let count: u32 = 0;
+
+        for key in self.key.iter(){
+            match key{
+                M::Some(_) => continue,
+                M::None => count += 1,
+            }
+        }
+
+        count
+    }
+
+    pub fn insert(&mut self, k:K, v:V) -> bool {
+
+        // if the node is full or doesn't have 2 free pivots return false
+        let len = self.len();
+        let startIndex:usize = -1;
+        if len == 0 {
+
+            self.key[0] = k;
+            self.key[1] = k+1;
+            self.value[0] = v;
+
+            return true;
+        }
+
+        for i in 0..R_CAPACITY{
+
+
+            match self.key[i]{
+
+                M::Some(value) => {
+
+                    if value == k-1 || value == k+1{
+
+                        // check to make sure we won't access memory out of the arrays bounds
+                        if i < R_CAPACITY-1{
+                            if self.key[i+1] == M::Some(v){
+                                // if the value already assigned to the key is the same that
+                                // we are trying to insert then return true
+                                if self.value[i+1] == v{
+                                    return true;
+                                }
+                                else{
+
+                                    startIndex = i+1;
+                                    break;
+                                }
+
+
+                            }
+                        }
+
+
+                    }
+
+                },
+                M::None => break,
+
+            }
+        }
+
+        // if we are here startIndex should always be set to something other than -1, make sure this is the case
+        if(startIndex < 0 || startIndex >= R_CAPACITY){
+            panic!("startIndex wasn't set");
+
+        }
+
+        // if we are here then a range needs to be split, if the node has 2 free pivots we can
+        // always do this
+        if(len == 2){
+
+        }
+        else{
+            return false;
+        }
+
+    }
+}
+*/
 
 impl<K, V> SparseLeaf<K, V>
 where
@@ -222,27 +339,92 @@ where
         None
     }
 
+    // either returns some(k) holding the largest key in the node
+    // or none if the node is empty
+    pub fn get_max(&self) -> Option<&K> {
+        let mut max: &M<K> = &self.key[0];
+        let mut key_found: bool = false;
+
+        for key in self.key.iter() {
+            match key {
+                M::Some(_) => {
+                    if key_found == false {
+                        max = key;
+                        key_found = true;
+                    } else if max < key {
+                        max = key;
+                    }
+                }
+                M::None => continue,
+            }
+        }
+
+        match max {
+            M::Some(v) => return Some(&v),
+            M::None => return None,
+        }
+    }
+
+    // returns the number of keys in a node
+    // should we store a lenth value on a node instead of calculating it on the fly?
+    pub fn get_len(&self) -> usize {
+        let mut size: usize = 0;
+        for key in self.key.iter() {
+            match key {
+                M::Some(_) => size += 1,
+                M::None => continue,
+            }
+        }
+
+        size
+    }
+
+    // either returns some(k) holding the smallest key in the node
+    // or none if the node is empty
+    pub fn get_min(&self) -> Option<&K> {
+        let mut min: &M<K> = &self.key[0];
+        let mut key_found: bool = false;
+
+        for key in self.key.iter() {
+            match key {
+                M::Some(k) => {
+                    if key_found == false {
+                        min = key;
+                        key_found = true;
+                    } else if min > key {
+                        min = key;
+                    }
+                }
+                M::None => {}
+            }
+        }
+
+        match min {
+            M::Some(k) => return Some(k),
+            M::None => return None,
+        }
+    }
+
     // This function is used to help verify the validity of the entire tree
     // this function returns true if all keys within the SparseLeaf are within the bounds
     // min to max or equal to min or max or the SparseLeaf node is empty
     // otherwise this returns false
-    pub fn check_min_max(&mut self, min: &K, max: &K) -> bool {
-        for i in 0..CAPACITY {
-            match &self.key[i] {
-                M::Some(v) => {
-                    if v >= min && v <= max {
-                        continue;
-                    } else {
-                        return false;
-                    }
-                }
-                M::None => {
-                    continue;
-                }
-            }
+    pub fn check_bounds(&mut self, minBound: &K, maxBound: &K) -> bool {
+        let min = self.get_min();
+        let max = self.get_max();
+
+        // if either min or max is None they must both be None
+        // if they are both None then the Node MUST be empty and
+        // we can return true
+        if min == None && max == None {
+            return true;
         }
 
-        return true;
+        if (min >= Some(&minBound) && max <= Some(&maxBound)) {
+            return true;
+        }
+
+        false
     }
 
     // We need to sort *just before* we split if required.
@@ -297,6 +479,78 @@ mod tests {
     use super::SparseLeaf;
     use super::M;
     use collections::maple_tree::CAPACITY;
+
+    #[test]
+    fn test_sparse_leaf_get_len() {
+        let mut sl: SparseLeaf<usize, usize> = SparseLeaf::new();
+
+        assert!(sl.get_len() == 0);
+
+        let mut test_vals: [usize; 8] = [3, 8, 7, 4, 2, 1, 5, 6];
+
+        for val in test_vals.iter() {
+            sl.insert(*val, *val);
+        }
+
+        assert!(sl.get_len() == 8);
+
+        let del_vals: [usize; 4] = [3, 8, 2, 1];
+        for val in del_vals.iter() {
+            sl.remove(val);
+        }
+
+        assert!(sl.get_len() == 4);
+    }
+
+    #[test]
+    fn test_sparse_leaf_get_max() {
+        let mut sl: SparseLeaf<usize, usize> = SparseLeaf::new();
+        let mut test_vals: [usize; 8] = [3, 8, 7, 4, 2, 1, 5, 6];
+
+        for val in test_vals.iter() {
+            sl.insert(*val, *val);
+        }
+
+        // check that get_max() works for a full node
+        assert!(sl.get_max() == Some(&8));
+
+        //check that get_max() works for a node with Nones inbetween values
+        let del_vals: [usize; 4] = [3, 8, 2, 1];
+        for val in del_vals.iter() {
+            sl.remove(val);
+        }
+
+        assert!(sl.get_max() == Some(&7));
+
+        // check that get_min() works for empty nodes
+        let mut slEmpty: SparseLeaf<usize, usize> = SparseLeaf::new();
+        assert!(slEmpty.get_max() == None);
+    }
+
+    #[test]
+    fn test_sparse_leaf_get_min() {
+        let mut sl: SparseLeaf<usize, usize> = SparseLeaf::new();
+        let mut test_vals: [usize; 8] = [3, 8, 7, 4, 2, 1, 5, 6];
+
+        for val in test_vals.iter() {
+            sl.insert(*val, *val);
+        }
+
+        // check that get_min() works for a full node
+        assert!(sl.get_min() == Some(&1));
+
+        //check that get_min() works for a node with Nones inbetween values
+        let del_vals: [usize; 4] = [3, 8, 2, 1];
+        for val in del_vals.iter() {
+            sl.remove(val);
+        }
+
+        assert!(sl.get_min() == Some(&4));
+
+        // check that get_min() works for empty nodes
+        let mut slEmpty: SparseLeaf<usize, usize> = SparseLeaf::new();
+        assert!(slEmpty.get_min() == None);
+    }
 
     #[test]
     fn test_sparse_leaf_search() {
@@ -379,18 +633,18 @@ mod tests {
     }
 
     #[test]
-    fn test_sparse_leaf_check_min_max() {
+    fn test_sparse_leaf_check_bounds() {
         let mut sl: SparseLeaf<usize, usize> = SparseLeaf::new();
 
         // test that check_min_max returns true when the sparseLeaf is empty
-        assert!(sl.check_min_max(&0, &8));
+        assert!(sl.check_bounds(&0, &8));
 
         // insert 8 values from 0 - 7
         for i in 0..CAPACITY - 3 {
             sl.insert(i, i);
         }
 
-        assert!(sl.check_min_max(&0, &8));
+        assert!(sl.check_bounds(&0, &8));
 
         // test that check_min_max returns some when the values are out of the range
         // and returns the first value that is found outside the range.
@@ -398,7 +652,7 @@ mod tests {
         sl.insert(10, 10);
         sl.insert(11, 11);
         sl.insert(12, 12);
-        assert!(sl.check_min_max(&0, &8) == false);
+        assert!(sl.check_bounds(&0, &8) == false);
     }
 
     #[test]
