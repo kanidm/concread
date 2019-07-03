@@ -17,6 +17,7 @@ license-file = "LICENSE.md"
 crossbeam-epoch = "0.5"
 crossbeam-utils = "0.5"
 parking_lot = "0.6"
+num = "0.2.0"
 
 [dev-dependencies]
 time = "0.1"

@@ -300,7 +300,8 @@ mod tests {
                             }
                         }
                     })
-                }).collect();
+                })
+                .collect();
 
             let _writers: Vec<_> = (0..3)
                 .map(|_| {
@@ -317,7 +318,8 @@ mod tests {
                             cc_wrtxn.commit();
                         }
                     })
-                }).collect();
+                })
+                .collect();
         });
 
         let end = time::now();
@@ -365,7 +367,8 @@ mod tests {
                     scope.spawn(move || {
                         test_gc_operation_thread(cc_ref);
                     })
-                }).collect();
+                })
+                .collect();
         });
 
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
