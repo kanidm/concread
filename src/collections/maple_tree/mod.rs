@@ -1,5 +1,5 @@
 use std::fmt::Debug;
-use std::mem;
+use std::{mem, fmt};
 extern crate num;
 
 // Number of k,v in sparse, and number of range values/links.
@@ -83,6 +83,46 @@ pub enum FoundRange{
         Max(usize), // this range goes from the index K to max
         MinMax, // this range goes from min to max
         Pivots(usize, usize), // this range is from the pivots
+}
+
+impl<K, V> fmt::Display for RangeLeaf<K, V>
+where K: std::fmt::Display,
+      V: std::fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+
+        let mut result = write!(f, "pivot = [");
+        
+        if result.is_err(){
+            return result;
+        }
+
+        for i in 0..R_CAPACITY{
+            match &self.pivot[i]{
+                M::Some(p) => result = write!(f, "{}, ", p),
+                M::None => result = write!(f, "X, "),
+            };
+
+            if result.is_err(){
+                return result;
+            }
+        }
+        result = write!(f, "]\nvalue = [");
+        if result.is_err(){
+            return result;
+        }
+        for i in 0..CAPACITY{
+            match &self.value[i]{
+                M::Some(v) => result = write!(f, "{}, ", v),
+                M::None => result = write!(f, "X, "),
+            };
+
+            if result.is_err(){
+                return result; 
+            }
+        }
+        write!(f, "]\n\n")
+    }
 }
 
 impl<K, V> RangeLeaf<K, V>
@@ -186,7 +226,7 @@ where
         if !set{
             return Max(R_CAPACITY-1);
         }
-        
+
         println!("{} ---", rangeB);
 
         for i in (rangeB-1)..R_CAPACITY{
@@ -848,9 +888,8 @@ mod tests {
         rn.pivot[4] = M::Some(35);
         rn.pivot[5] = M::Some(69);
         rn.pivot[6] = M::Some(85);
-        
 
-        assert!(rn.find_range(&3, &4, &min, &max) == Min(0));
+        assert!(rn.find_range(&3, &4, &min, &max) == Min(4));
         assert!(rn.find_range(&5, &17, &min, &max) == Min(2));
         assert!(rn.find_range(&7, &25, &min, &max) == Pivots(0, 3));
         assert!(rn.find_range(&3, &100, &min, &max) == MinMax); 
@@ -964,8 +1003,9 @@ mod tests {
 
         assert!(rn.move_pivots_right(2, 3) == false);
 
-    }
+    } 
     
+    #[cfg(test)]
     fn check_node_state(pivots: [usize; R_CAPACITY], values: [usize; CAPACITY], node: &RangeLeaf<usize, usize> ){
         
         print!("Pivots - [");
@@ -1000,27 +1040,4 @@ mod tests {
         }
         print!("]\n\n");
     }
-
-    fn print_range_node_state(rn: &RangeLeaf<usize, usize>){
-
-        print!("rn.pivot = [");
-        for i in 0..CAPACITY{
-            match &rn.pivot[i]{
-                
-                M::Some(p) => print!("{}, ", p),
-                M::None => print!("X, "),
-            }
-        }
-        print!("]\nrn.value =   [");
-        for i in 0..CAPACITY{
-            match &rn.value[i]{
-                M::Some(v) => print!("{}, ", v),
-                M::None => print!("X, "),
-
-            }
-        }
-        println!("]\n");
-    }
-
-    
 }
