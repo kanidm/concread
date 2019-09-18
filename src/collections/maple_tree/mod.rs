@@ -1,5 +1,6 @@
+use std::collections;
 use std::fmt::Debug;
-use std::{mem, fmt, ops};
+use std::{fmt, mem, ops};
 
 extern crate num;
 
@@ -79,47 +80,47 @@ struct Node<K, V> {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum FoundRange{
-        Min(usize), // this range goes from min to the index at K
-        Max(usize), // this range goes from the index K to max
-        MinMax, // this range goes from min to max
-        Pivots(usize, usize), // this range is from the pivots
+pub enum FoundRange {
+    Min(usize),           // this range goes from min to the index at K
+    Max(usize),           // this range goes from the index K to max
+    MinMax,               // this range goes from min to max
+    Pivots(usize, usize), // this range is from the pivots
 }
 
 impl<K, V> fmt::Display for RangeLeaf<K, V>
-where K: std::fmt::Display,
-      V: std::fmt::Display,
+where
+    K: std::fmt::Display,
+    V: std::fmt::Display,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-
         let mut result = write!(f, "pivot =   [");
-        
-        if result.is_err(){
+
+        if result.is_err() {
             return result;
         }
 
-        for i in 0..R_CAPACITY{
-            match &self.pivot[i]{
+        for i in 0..R_CAPACITY {
+            match &self.pivot[i] {
                 M::Some(p) => result = write!(f, "{}, ", p),
                 M::None => result = write!(f, "X, "),
             };
 
-            if result.is_err(){
+            if result.is_err() {
                 return result;
             }
         }
         result = write!(f, "]\nvalue = [");
-        if result.is_err(){
+        if result.is_err() {
             return result;
         }
-        for i in 0..CAPACITY{
-            match &self.value[i]{
+        for i in 0..CAPACITY {
+            match &self.value[i] {
                 M::Some(v) => result = write!(f, "{}, ", v),
                 M::None => result = write!(f, "X, "),
             };
 
-            if result.is_err(){
-                return result; 
+            if result.is_err() {
+                return result;
             }
         }
         write!(f, "]\n\n")
@@ -154,12 +155,12 @@ where
             ],
         }
     }
-    
+
     // TODO: remove this function and in move_pivots_right just count down from R_CAPACITY-1 untill
     // there isn't a None or untill the number of places to move has been reached and use that to
     // decide if the operation will succede or not
     // returns the number of used pivots
-    pub fn len(&mut self) -> usize{
+    pub fn len(&mut self) -> usize {
         let mut count: usize = 0;
 
         for pivot in self.pivot.iter() {
@@ -174,193 +175,327 @@ where
         count
     }
 
-    // wraps insert_range, must be here since we need to add one to the key
-    // and thus we need to make sure K implements num::Num so we can use 
-    // num::Num::One()
-    pub fn insert(&mut self, key: K, value: V, min: &K, max: &K) -> bool{
-        
-        self.insert_range(key.clone(), key+K::one(), value, min, max)    
+    pub fn find_ranges_to_condense(&mut self, foundKeyIndexRanges: &mut Vec<ops::Range<usize>>) {
+        let mut rangeStartIndex = 0;
+        let mut matched = false;
+
+        {
+            let mut lastValue: &M<V> = &M::None;
+
+            for i in 0..CAPACITY {
+                if i == 0 {
+                    lastValue = &self.value[0];
+                    continue;
+                }
+                if &self.value[i] == lastValue {
+                    if !matched {
+                        matched = true;
+                        rangeStartIndex = i;
+                    }
+                } else if matched {
+                    foundKeyIndexRanges.push(ops::Range {
+                        start: rangeStartIndex,
+                        end: i - 1,
+                    });
+                    matched = false;
+                }
+
+                lastValue = &self.value[i];
+            }
+        }
+
+        if matched {
+            foundKeyIndexRanges.push(ops::Range {
+                start: rangeStartIndex,
+                end: R_CAPACITY,
+            });
+        }
     }
 
-    // inserts the range:value pair keyLower..keyUpper and value into the node, 
+    pub fn condense_node(&mut self, max: &K) -> bool {
+        // holds ranges of contiguous index's of the value stack that are all the same
+        // which can be condensed
+        let mut foundKeyIndexRanges: Vec<ops::Range<usize>> = Vec::new();
+
+        self.find_ranges_to_condense(&mut foundKeyIndexRanges);
+
+        if foundKeyIndexRanges.is_empty() {
+            return false;
+        }
+
+        let mut lastRangeUsed = false;
+        let mut lastValue: M<V> = M::None;;
+        let mut pivotIndexToMove = 0;
+        let mut distance = 0;
+        if self.value[CAPACITY - 1] != M::None {
+            lastRangeUsed = true;
+        }
+        while true {
+            match foundKeyIndexRanges.pop() {
+                Some(range) => {
+                    let keyRangeStart = range.start - 1;
+
+                    // first range to condense includes max, this is a special case
+                    // since max doesn't reside in the node, we must first copy it
+                    // into the last position in the node.pivot array and move the last value
+                    // in the node.value array forward one position then we can shift the
+                    // pivots and values as normal
+                    if range.end == R_CAPACITY {
+                        // move last pivot and value forward one
+                        self.value[CAPACITY - 2] = self.value[CAPACITY - 1].clone();
+                        self.pivot[R_CAPACITY - 1] = M::Some(max.clone());
+                        self.value[CAPACITY - 1] = M::None;
+
+                        distance = range.end - keyRangeStart - 1;
+                        pivotIndexToMove = R_CAPACITY - 1;
+                        lastRangeUsed = false;
+                    } else {
+                        pivotIndexToMove = range.end;
+                        distance = range.end - keyRangeStart;
+                    }
+
+                    if lastRangeUsed {
+                        lastValue = self.value[CAPACITY - 1].clone();
+                    }
+                    self.move_pivots_left(pivotIndexToMove, distance);
+                    if lastRangeUsed {
+                        let endIndex = CAPACITY - 1 - (range.end - keyRangeStart);
+
+                        self.pivot[endIndex] = M::Some(max.clone());
+                        self.value[endIndex] = lastValue.clone();
+                        self.value[CAPACITY - 1] = M::None;
+                        lastRangeUsed = false;
+                    }
+                }
+                None => {
+                    break;
+                }
+            }
+        }
+
+        true
+    }
+
+    // inserts the range:value pair keyLower..keyUpper and value into the node,
     // returns false if the node is full even if condesing will allow the insert
     // it is the cursors job too try to compress the node on failure
     // returns true on success or false on failure
-    pub fn insert_range(&mut self, keyLower: K, keyUpper: K, value: V, min: &K, max: &K) -> bool{
-        
-        let range = self.find_range(&keyLower, &keyUpper, &min, &max);  
+    pub fn insert_range(&mut self, keyLower: K, keyUpper: K, value: V, min: &K, max: &K) -> bool {
+        let mut range = self.find_range(&keyLower, &keyUpper, &min, &max);
         let mut start: usize = range.start as usize;
         let mut end: usize = range.end as usize;
+
+        let distanceBetweenPivots = range.end - range.start - 1; //i.e adjacent pivots will make this 0
+        let mut pivotInsertCount = 0;
+
+        let mut insertLowerPivot = false;
+        let mut insertUpperPivot = false;
+        let mut endPivotIsNone = false;
+
         let includesMin = range.start == -1;
         let includesMax = range.end == R_CAPACITY as isize;
-        let distanceBetweenPivots = range.end - range.start - 1; //i.e adjacent pivots will make this 0
-        let mut pivotShiftCount = 0; 
-        let mut shiftLowerPivot= false;  
-        let mut shiftUpperPivot= false;
-        let mut leftShiftAmount: isize = 0;
-        let mut endPivotIsNone = false; 
-        
-        //discover if the end of the range is a valid value or M::None
-        if includesMax == false{
-            match &self.pivot[range.end as usize]{
-                M::Some(p) => {},
-                M::None => endPivotIsNone = true
-            };
-        }
-          
-        // #######
-        // ######## need to check if range.start is -1 and range.end is R_CAPACITY
-        // ######## which is when the range includes either min or max
-        // ######
 
-        // ### if no shift is needed then the new range can always be inserted
-        // ###  more so if no shift is needed and the distanceBetweenPivots > 0
-        // ###  the range can also be inserted, but if the distanceBetweenPivots == 0
-        // ###  only the value needs to be updated
-        if includesMin{
-            shiftLowerPivot = &keyLower != min;
-        }
-        else{
-            shiftLowerPivot = match &self.pivot[range.start as usize]{
-                M::Some(b1) => &keyLower != b1,
-                M::None => false, 
+        //discover if the end of the range is a valid value or M::None
+        if includesMax == false {
+            endPivotIsNone = match &self.pivot[range.end as usize] {
+                M::Some(p) => false,
+                M::None => true,
             };
         }
-        if includesMax{
-            // can't shift max up so return false the node is full
-            if &keyUpper != max{
+
+        if includesMin {
+            insertLowerPivot = &keyLower != min;
+        } else {
+            insertLowerPivot = match &self.pivot[range.start as usize] {
+                M::Some(b1) => &keyLower != b1,
+                M::None => false,
+            };
+        }
+
+        if includesMax {
+            // need to make room for upper pivot to be inserted but
+            // the node is full since
+            if &keyUpper != max {
                 return false;
             }
-        }
-        else{
-            shiftUpperPivot = match &self.pivot[range.end as usize]{
+        } else {
+            insertUpperPivot = match &self.pivot[range.end as usize] {
                 M::Some(b2) => &keyUpper != b2,
                 M::None => false,
             };
         }
-        
-        if shiftLowerPivot{
+
+        if insertLowerPivot {
             start = (range.start + 1) as usize;
-            pivotShiftCount += 1;
+            pivotInsertCount += 1;
+        } else if !includesMin {
+            start = range.start as usize;
         }
-        else if !includesMin{
-                start = range.start as usize;
-        }
-        if shiftUpperPivot{
-            pivotShiftCount += 1;
-        }
-        
-        println!("range = {:?}", range);
-        println!("distanceBetweenPivots = {}", distanceBetweenPivots);
-        println!("pivotShiftCount = {}", pivotShiftCount);
-        // pivots arne't adjacent
-        if distanceBetweenPivots != 0{
-
-            leftShiftAmount  = distanceBetweenPivots - pivotShiftCount; 
-            
-            // pivotShiftCount can only ever be 2 so if distanceBetweenPivots is 1
-            // leftShift amount could be -1 so we need to right shift by 1
-            if leftShiftAmount == -1 {
-                if self.move_pivots_right(range.end as usize, 1) == false{
-                    return false;
-                }
-                end = range.end as usize; 
-            }
-            else if includesMax{
-                if self.move_pivots_left(R_CAPACITY-1, leftShiftAmount as usize) == false{
-                    return false; 
-                }
-                end = R_CAPACITY-1-leftShiftAmount as usize;
-            }
-            else{
-                println!("leftShiftAmount = {}", leftShiftAmount);
-                if self.move_pivots_left(range.end as usize, leftShiftAmount as usize) == false{
-                    return false;
-                }
-                end = range.end as usize - leftShiftAmount as usize; 
-            }
-        }
-        else{
-            if includesMax && (shiftLowerPivot || shiftUpperPivot){
-                return false;
-            }
-            if self.move_pivots_right(range.end as usize, pivotShiftCount as usize) == false{
-                //there isn't enough room in the node to insert
-                return false;
-            }
-            end = range.end as usize + pivotShiftCount as usize;       
-
-            if shiftUpperPivot{
-                end -= 1;
-            }
+        if insertUpperPivot {
+            pivotInsertCount += 1;
         }
 
-        if !shiftLowerPivot && !shiftUpperPivot && !endPivotIsNone{
+        if !self.make_space_for_insert(
+            distanceBetweenPivots,
+            pivotInsertCount,
+            range.end,
+            includesMax,
+            insertLowerPivot,
+            insertUpperPivot,
+        ) {
+            return false;
+        }
+
+        end = self.calculate_end_pivot_index(
+            distanceBetweenPivots,
+            pivotInsertCount,
+            range.end,
+            includesMax,
+            insertUpperPivot,
+        );
+
+        if !insertLowerPivot && !insertUpperPivot && !endPivotIsNone {
             self.value[end] = M::Some(value);
             return true;
         }
-        
-        if shiftLowerPivot{ // rename this variable its very hard to understand what it is meant to signify
-            self.pivot[start] = M::Some(keyLower); 
+
+        if insertLowerPivot {
+            // rename this variable its very hard to understand what it is meant to signify
+            self.pivot[start] = M::Some(keyLower);
         }
-        if shiftUpperPivot && !endPivotIsNone{
+        if insertUpperPivot && !endPivotIsNone {
             self.pivot[end] = M::Some(keyUpper.clone());
-        }     
-        else if endPivotIsNone{
+        } else if endPivotIsNone {
             self.pivot[end] = M::Some(keyUpper);
         }
-        
-        if shiftUpperPivot && shiftLowerPivot && distanceBetweenPivots == 0{
-            self.value[start] = self.value[end+1].clone();
-        }
-        else if shiftLowerPivot && !shiftUpperPivot && distanceBetweenPivots == 0{
-            self.value[start] = self.value[end].clone();   
+
+        if insertUpperPivot && insertLowerPivot && distanceBetweenPivots == 0 {
+            self.value[start] = self.value[end + 1].clone();
+        } else if insertLowerPivot && !insertUpperPivot && distanceBetweenPivots == 0 {
+            self.value[start] = self.value[end].clone();
         }
 
         self.value[end] = M::Some(value);
         /*
-        if shiftLowerPivot{
+        if insertLowerPivot{
         }
         else{
-            self.value[) as usize] = M::Some(value); 
+            self.value[) as usize] = M::Some(value);
         }
         */
         true
     }
-    
+
+    pub fn calculate_end_pivot_index(
+        &mut self,
+        distanceBetweenPivots: isize,
+        pivotInsertCount: usize,
+        rangeEndPivotIndex: isize,
+        includesMax: bool,
+        insertUpperPivot: bool,
+    ) -> usize {
+        let mut end: usize;
+        let leftShiftAmount: isize = distanceBetweenPivots as isize - pivotInsertCount as isize;
+
+        if distanceBetweenPivots != 0 {
+            if leftShiftAmount == -1 {
+                end = rangeEndPivotIndex as usize;
+            } else if includesMax {
+                end = R_CAPACITY - 1 - leftShiftAmount as usize;
+            } else {
+                end = rangeEndPivotIndex as usize - leftShiftAmount as usize;
+            }
+        } else {
+            end = rangeEndPivotIndex as usize + pivotInsertCount as usize;
+
+            if insertUpperPivot {
+                end -= 1;
+            }
+        }
+
+        end
+    }
+
+    pub fn make_space_for_insert(
+        &mut self,
+        distanceBetweenPivots: isize,
+        pivotInsertCount: usize,
+        rangeEndPivotIndex: isize,
+        includesMax: bool,
+        insertLowerPivot: bool,
+        insertUpperPivot: bool,
+    ) -> bool {
+        // start and end pivots of the range have pivots inbetween
+        if distanceBetweenPivots != 0 {
+            let leftShiftAmount: isize = distanceBetweenPivots as isize - pivotInsertCount as isize;
+
+            // pivotInsertCount can only ever be 2 so if distanceBetweenPivots is 1
+            // leftShift amount could be -1 so we need to right shift by 1
+            if leftShiftAmount == -1 {
+                if self.move_pivots_right(rangeEndPivotIndex as usize, 1) == false {
+                    return false;
+                }
+            } else if includesMax {
+                if self.move_pivots_left(R_CAPACITY - 1, leftShiftAmount as usize) == false {
+                    return false;
+                }
+            } else {
+                if self.move_pivots_left(rangeEndPivotIndex as usize, leftShiftAmount as usize)
+                    == false
+                {
+                    return false;
+                }
+            }
+        }
+        // pivots are adjacent
+        else {
+            if includesMax && (insertLowerPivot || insertUpperPivot) {
+                return false;
+            }
+            if self.move_pivots_right(rangeEndPivotIndex as usize, pivotInsertCount as usize)
+                == false
+            {
+                //there isn't enough room in the node to insert
+                return false;
+            }
+        }
+
+        true
+    }
+
     /*
-    * Definitions for comparing ranges:
-    *  
-    *  A = [a_1, a_2) Note: a_1 < a_2
-    *  B = [b_1, b_2) Note: b_1 < b_2
-    *  x, a_1, a_2, b_1 and b_2 all have '<', '>' and '=' defined
-    *
-    *  SINGLE VALUE DEFINITIONS:
-    *
-    *  (x < A)         := x < a_1
-    *  (x > A)         := x >= a_2 (Note: a_2 is exclusive to the range so if x = a_2 it is larger than the range)
-    *  (x \in A)       := a_1 < x < a_2
-    *
-    *  RANGE DEFINITIONS:
-    *
-    *  Note: if !(A > B) that doesn't neccesarily mean (B > A)
-    *  (A < B)         := a_2 <= b_1
-    *  (A > B)         := a_1 >= b_2 
-    *  (A \subset B)   := (a_1 >= b_1) & (a_2 < b_2
-    *  ((A \intersect B) != {}) & (A \notSubset B))
-    *
-    */
+     * Definitions for comparing ranges:
+     *
+     *  A = [a_1, a_2) Note: a_1 < a_2
+     *  B = [b_1, b_2) Note: b_1 < b_2
+     *  x, a_1, a_2, b_1 and b_2 all have '<', '>' and '=' defined
+     *
+     *  SINGLE VALUE DEFINITIONS:
+     *
+     *  (x < A)         := x < a_1
+     *  (x > A)         := x >= a_2 (Note: a_2 is exclusive to the range so if x = a_2 it is larger than the range)
+     *  (x \in A)       := a_1 < x < a_2
+     *
+     *  RANGE DEFINITIONS:
+     *
+     *  Note: if !(A > B) that doesn't neccesarily mean (B > A)
+     *  (A < B)         := a_2 <= b_1
+     *  (A > B)         := a_1 >= b_2
+     *  (A \subset B)   := (a_1 >= b_1) & (a_2 < b_2
+     *  ((A \intersect B) != {}) & (A \notSubset B))
+     *
+     */
 
     // TODO: re-write this description following the advice from programming/communication
     // returns the index's of the range that holds the pivot
     // Note: This can be over many ranges i.e from R1 - R6
-    //       which would return ops::Range{start: -1, end: 5} as the indexes 
+    //       which would return ops::Range{start: -1, end: 5} as the indexes
     //
     // Range A is the range to be inserted i.e rangeLower..rangeUpper
     // Range B is the current range being assesed within the RangeLeaf node
     // Range C is the range that came before B Note: C's UpperBound is B's lowerBound
     //
-    // rangeNumbers     -   [ R1  | R2 | R3 | R4 | R5 | R6 | R7 |  R8 ] 
+    // rangeNumbers     -   [ R1  | R2 | R3 | R4 | R5 | R6 | R7 |  R8 ]
     // Pivots & min max - [min | P1 | P2 | P3 | P4 | P5 | P6 | P7 | max]
     //
     // this function assumes the following to be true:
@@ -370,159 +505,185 @@ where
     // The algorithm bellow follows the following basic steps:
     //  1. Find where !(A > B) (This lets us know where the range A starts at)
     //      since a_1 < b_2 and we know a_1 > c_2 since C comes before B
-    //  2. Check if (A \subset C) in which case we know that the Range is C 
+    //  2. Check if (A \subset C) in which case we know that the Range is C
     //      return Range here if found
-    //  3. Find where A < D where D is a range that is after B 
+    //  3. Find where A < D where D is a range that is after B
     //
-    pub fn find_range(&mut self, rangeLower: &K, rangeUpper: &K, min: &K, max: &K) -> ops::Range<isize>{
-
+    pub fn find_range(
+        &mut self,
+        rangeLower: &K,
+        rangeUpper: &K,
+        min: &K,
+        max: &K,
+    ) -> ops::Range<isize> {
         // range number of B
         // i.e range number 1 [min, P1)
-        let mut rangeB: usize = 0; 
+        let mut rangeB: usize = 0;
         let mut index: isize = 0; // used to keep the index from the for loops
         let mut set = false;
         let mut isNone = false;
 
-        // find range B  where !(A > B)   
-        // since we know that for all index's up to the current value of i 
+        // find range B  where !(A > B)
+        // since we know that for all index's up to the current value of i
         // rangeLower > self.pivot[i] when rangeLower < self.pivot[i] we know
-        // that the range starts at the (i-1)th index 
-        for i in 0..R_CAPACITY{
+        // that the range starts at the (i-1)th index
+        for i in 0..R_CAPACITY {
             index = i as isize;
-            match &self.pivot[i]{
+            match &self.pivot[i] {
                 M::Some(b2) => {
-                    if rangeLower < b2{
-                        rangeB = i+1; 
+                    if rangeLower < b2 {
+                        rangeB = i + 1;
                         set = true;
                         break;
                     }
-                },
+                }
                 M::None => {
-                    isNone = true;     
+                    isNone = true;
                     break;
-                },
-            }   
+                }
+            }
         }
-        
 
         // if we didn't find any pivot where rangeLower < self.pivot[i]
         // then we either ran into a None value or since we don't check min or max
         // the range must be between pivots at the index's R_CAPACITY and R_CAPCITY-1
-        if !set{
-            if isNone{
-                return ops::Range{start: (index-1) as isize, end: index as isize};
-            }
-            else{
-
-                return ops::Range{start: (R_CAPACITY-1) as isize, end: R_CAPACITY as isize};
+        if !set {
+            if isNone {
+                return ops::Range {
+                    start: (index - 1) as isize,
+                    end: index as isize,
+                };
+            } else {
+                return ops::Range {
+                    start: (R_CAPACITY - 1) as isize,
+                    end: R_CAPACITY as isize,
+                };
             }
         }
 
         // now we know that the range starts at index rangeB-1 and we need to find
-        // where the range ends. 
-        for i in (rangeB-1)..R_CAPACITY{
-            match &self.pivot[i]{
-                M::Some(b2) => { 
-                    if rangeUpper <= b2{
-                        if rangeB == 1{
-                            return ops::Range{start: -1, end: i as isize};
+        // where the range ends.
+        for i in (rangeB - 1)..R_CAPACITY {
+            match &self.pivot[i] {
+                M::Some(b2) => {
+                    if rangeUpper <= b2 {
+                        if rangeB == 1 {
+                            return ops::Range {
+                                start: -1,
+                                end: i as isize,
+                            };
                         }
-                        return ops::Range{start: (rangeB-2) as isize, end: i as isize};
+                        return ops::Range {
+                            start: (rangeB - 2) as isize,
+                            end: i as isize,
+                        };
                     }
                 }
                 M::None => {
-                        return ops::Range{start: (rangeB-2) as isize, end: i as isize};
+                    return ops::Range {
+                        start: (rangeB - 2) as isize,
+                        end: i as isize,
+                    };
                 }
             }
         }
 
-        if rangeB == 1{
-            return ops::Range{start: -1, end: R_CAPACITY as isize};
+        if rangeB == 1 {
+            return ops::Range {
+                start: -1,
+                end: R_CAPACITY as isize,
+            };
+        } else {
+            return ops::Range {
+                start: (rangeB - 2) as isize,
+                end: R_CAPACITY as isize,
+            };
         }
-        else{
-            return ops::Range{start: (rangeB-2) as isize, end: R_CAPACITY as isize}; 
-        }
-
     }
 
-    pub fn move_pivots_left(&mut self, pivotIndex: usize, places: usize) -> bool{
-        
-        if pivotIndex >= R_CAPACITY || pivotIndex < 0 || places > R_CAPACITY{
+    pub fn move_pivots_left(&mut self, pivotIndex: usize, distance: usize) -> bool {
+        if pivotIndex >= R_CAPACITY || pivotIndex < 0 || distance > R_CAPACITY {
             return false;
         }
-        
-        // the new index for the pivot at pivotIndex is pivotIndex-places
+
+        // the new index for the pivot at pivotIndex is pivotIndex-distance
         // make sure this is not negative
-        if (pivotIndex as isize) - (places as isize) < 0{
+        if (pivotIndex as isize) - (distance as isize) < 0 {
             return false;
         }
-           
+
         let mut pivotHolder: M<K> = M::None;
         let mut valueHolder: M<V> = M::None;
-               
-        for i in pivotIndex..R_CAPACITY{
 
+        for i in pivotIndex..R_CAPACITY {
             mem::swap(&mut self.pivot[i], &mut pivotHolder);
             mem::swap(&mut self.value[i], &mut valueHolder);
 
-            mem::swap(&mut self.pivot[i-places], &mut pivotHolder);
-            mem::swap(&mut self.value[i-places], &mut valueHolder); 
-            
+            mem::swap(&mut self.pivot[i - distance], &mut pivotHolder);
+            mem::swap(&mut self.value[i - distance], &mut valueHolder);
+
             pivotHolder = M::None;
             valueHolder = M::None;
         }
 
+        //TODO: replace these magic numbers with variables
+        if R_CAPACITY - pivotIndex < distance {
+            for i in (pivotIndex - distance + 1) + (R_CAPACITY - pivotIndex) - 1..R_CAPACITY {
+                self.pivot[i] = M::None;
+                self.value[i] = M::None;
+                self.value[i + 1] = M::None;
+            }
+        }
+
         return true;
     }
-     
-    // moves the pivot/s at pivotIndex and above to the right x places where x = places variable
-    // if the move would push values off the end then false is returned 
-    pub fn move_pivots_right(&mut self, pivotIndex: usize, places: usize) -> bool{
-       
-        if places == 0{
+
+    // moves the pivot/s at pivotIndex and above to the right x distance where x = distance variable
+    // if the move would push values off the end then false is returned
+    pub fn move_pivots_right(&mut self, pivotIndex: usize, distance: usize) -> bool {
+        if distance == 0 {
             return true;
         }
-        let freePivots = R_CAPACITY-self.len();
+        let freePivots = R_CAPACITY - self.len();
 
         // make sure there is enough room to move the pivots into
-        if freePivots < places{
+        if freePivots < distance {
             return false;
         }
-        // make sure the pivot is greater than 0 and less than the index of the 
+        // make sure the pivot is greater than 0 and less than the index of the
         // last pivot as moving that would push it out of the array
-        else if pivotIndex < 0 || pivotIndex >= R_CAPACITY-1{
+        else if pivotIndex < 0 || pivotIndex >= R_CAPACITY - 1 {
             return false;
-            //panic!("PivotIndex isn't within the correct bounds"); 
-        }
-        else if pivotIndex+places > R_CAPACITY{
+        //panic!("PivotIndex isn't within the correct bounds");
+        } else if pivotIndex + distance > R_CAPACITY {
             return false;
-            //panic!("the number of places to move the pivots was to large, must be bellow {}", R_CAPACITY); 
+            //panic!("the number of distance to move the pivots was to large, must be bellow {}", R_CAPACITY);
         }
 
         // must use a variable to hold the pivots and values between swaps as we can't have two
         // mutable borrows of the same array at the same time :(
         let mut pivotHolder: M<K> = M::None;
         let mut valueHolder: M<V> = M::None;
-        let lastIndex = (R_CAPACITY)-freePivots;
-        
-        // starts at lastPivotIndex and goes until reaching the pivot at pivotIndex 
-        // so moving pivots and values from righ to left so each pivot and value is moved 
-        // into a free place in the arrays
-        for i in 0..lastIndex+1{
-            if lastIndex-i >= pivotIndex {
-                match &self.pivot[lastIndex-i]{
-                    M::None => {
-                        continue; 
-                    },
-                    M::Some(_) => {  
-                            mem::swap(&mut pivotHolder, &mut self.pivot[lastIndex-i]);
-                            mem::swap(&mut pivotHolder, &mut self.pivot[lastIndex-i+places]);
+        let lastIndex = (R_CAPACITY) - freePivots;
 
-                            mem::swap(&mut valueHolder, &mut self.value[lastIndex-i]);
-                            mem::swap(&mut valueHolder, &mut self.value[lastIndex-i+places]);
+        // starts at lastPivotIndex and goes until reaching the pivot at pivotIndex
+        // so moving pivots and values from righ to left so each pivot and value is moved
+        // into a free place in the arrays
+        for i in 0..lastIndex + 1 {
+            if lastIndex - i >= pivotIndex {
+                match &self.pivot[lastIndex - i] {
+                    M::None => {
+                        continue;
+                    }
+                    M::Some(_) => {
+                        mem::swap(&mut pivotHolder, &mut self.pivot[lastIndex - i]);
+                        mem::swap(&mut pivotHolder, &mut self.pivot[lastIndex - i + distance]);
+
+                        mem::swap(&mut valueHolder, &mut self.value[lastIndex - i]);
+                        mem::swap(&mut valueHolder, &mut self.value[lastIndex - i + distance]);
                     }
                 }
-            }            
+            }
         }
         return true;
     }
@@ -811,13 +972,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::ops;
-    use super::SparseLeaf;
     use super::RangeLeaf;
+    use super::SparseLeaf;
     use super::M;
     use collections::maple_tree::CAPACITY;
     use collections::maple_tree::R_CAPACITY;
-    use collections::maple_tree::FoundRange::*;
+    use std::ops;
 
     #[test]
     fn test_sparse_leaf_get_len() {
@@ -1052,46 +1212,156 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_range_node_condense_node() {
+        let mut rn: RangeLeaf<usize, usize> = RangeLeaf::new();
+        let min = 0;
+        let max = std::usize::MAX;
+
+        //pivot = min [5, 10, 20, 30, 40, 50 ,60] max
+        //value =   [1,  1,  1,  4,  2,  2,  2,  8]
+        rn.pivot[0] = M::Some(5);
+        rn.pivot[1] = M::Some(10);
+        rn.pivot[2] = M::Some(20);
+        rn.pivot[3] = M::Some(30);
+        rn.pivot[4] = M::Some(40);
+        rn.pivot[5] = M::Some(50);
+        rn.pivot[6] = M::Some(60);
+
+        rn.value[0] = M::Some(1);
+        rn.value[1] = M::Some(1);
+        rn.value[2] = M::Some(1);
+        rn.value[3] = M::Some(4);
+        rn.value[4] = M::Some(2);
+        rn.value[5] = M::Some(2);
+        rn.value[6] = M::Some(2);
+        rn.value[7] = M::Some(8);
+
+        // after condense shold be
+        //pivot = min [20, 30 ,60, max, X, X] max
+        //value =   [1,  4,  2,  8, X, X, X, X]
+
+        assert!(rn.condense_node(&max) == true);
+        println!("{}", rn);
+        check_node_state([20, 30, 60, max, 0, 0, 0], [1, 4, 2, 8, 0, 0, 0, 0], &rn);
+
+        //pivot = min [5, 10, 20, 30, 40, 50 ,60] max
+        //value =   [1,  1,  1,  4,  2,  2,  2,  2]
+        rn.pivot[0] = M::Some(5);
+        rn.pivot[1] = M::Some(10);
+        rn.pivot[2] = M::Some(20);
+        rn.pivot[3] = M::Some(30);
+        rn.pivot[4] = M::Some(40);
+        rn.pivot[5] = M::Some(50);
+        rn.pivot[6] = M::Some(60);
+
+        rn.value[0] = M::Some(1);
+        rn.value[1] = M::Some(1);
+        rn.value[2] = M::Some(1);
+        rn.value[3] = M::Some(4);
+        rn.value[4] = M::Some(2);
+        rn.value[5] = M::Some(2);
+        rn.value[6] = M::Some(2);
+        rn.value[7] = M::Some(2);
+
+        // after condense shold be
+        //pivot = min [20, 30 ,60, max, X, X] max
+        //value =   [1,  4,  2,  8, X, X, X, X]
+        assert!(rn.condense_node(&max) == true);
+        println!("{}", rn);
+        check_node_state([20, 30, max, 0, 0, 0, 0], [1, 4, 2, 0, 0, 0, 0, 0], &rn);
+
+        //pivot = min [5, 10, 20, 30, 40, 50 ,60] max
+        //value =   [1,  1,  1,  1,  1,  1,  1,  1]
+        rn.pivot[0] = M::Some(5);
+        rn.pivot[1] = M::Some(10);
+        rn.pivot[2] = M::Some(20);
+        rn.pivot[3] = M::Some(30);
+        rn.pivot[4] = M::Some(40);
+        rn.pivot[5] = M::Some(50);
+        rn.pivot[6] = M::Some(60);
+
+        rn.value[0] = M::Some(1);
+        rn.value[1] = M::Some(1);
+        rn.value[2] = M::Some(1);
+        rn.value[3] = M::Some(1);
+        rn.value[4] = M::Some(1);
+        rn.value[5] = M::Some(1);
+        rn.value[6] = M::Some(1);
+        rn.value[7] = M::Some(1);
+
+        // after condense shold be
+        //pivot = min [max, X, X, X, X, X] max
+        //value =   [1,  X,  X,  X, X, X, X, X]
+        assert!(rn.condense_node(&max) == true);
+        println!("{}", rn);
+        check_node_state([max, 0, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0, 0, 0], &rn);
+
+        //pivot = min [5, 10, 20, 30, 40, 50 ,60] max
+        //value =   [1,  1,  1,  1,  1,  1,  1,  1]
+        rn.pivot[0] = M::Some(5);
+        rn.pivot[1] = M::Some(10);
+        rn.pivot[2] = M::Some(20);
+        rn.pivot[3] = M::Some(30);
+        rn.pivot[4] = M::Some(40);
+        rn.pivot[5] = M::Some(50);
+        rn.pivot[6] = M::Some(60);
+
+        rn.value[0] = M::Some(3);
+        rn.value[1] = M::Some(4);
+        rn.value[2] = M::Some(5);
+        rn.value[3] = M::Some(6);
+        rn.value[4] = M::Some(7);
+        rn.value[5] = M::Some(8);
+        rn.value[6] = M::Some(1);
+        rn.value[7] = M::Some(1);
+
+        // after condense shold be
+        //pivot = min [max, X, X, X, X, X] max
+        //value =   [1,  X,  X,  X, X, X, X, X]
+        assert!(rn.condense_node(&max) == true);
+        println!("{}", rn);
+        check_node_state([5, 10, 20, 30, 40, 50, max], [3, 4, 5, 6, 7, 8, 1, 0], &rn);
+    }
 
     #[test]
-    fn test_range_node_insert_range(){
-        
+    fn test_range_node_insert_range() {
         let mut rn: RangeLeaf<usize, usize> = RangeLeaf::new();
         let min = 0;
         let max = std::usize::MAX;
 
         assert!(rn.insert_range(10, 20, 1, &min, &max) == true);
         print!("{}", rn);
-        check_node_state([10, 20, 0, 0, 0, 0, 0],[ 0, 1, 0, 0, 0, 0, 0, 0], &rn);
-        
+        check_node_state([10, 20, 0, 0, 0, 0, 0], [0, 1, 0, 0, 0, 0, 0, 0], &rn);
+
         assert!(rn.insert_range(15, 17, 6, &min, &max) == true);
         print!("{}", rn);
-        check_node_state([10, 15, 17, 20, 0, 0, 0],[ 0, 1, 6, 1, 0, 0, 0, 0], &rn);
+        check_node_state([10, 15, 17, 20, 0, 0, 0], [0, 1, 6, 1, 0, 0, 0, 0], &rn);
 
         assert!(rn.insert_range(20, 40, 7, &min, &max) == true);
         print!("{}", rn);
-        check_node_state([10, 15, 17, 20, 40, 0, 0],[ 0, 1, 6, 1, 7, 0, 0, 0], &rn);
+        check_node_state([10, 15, 17, 20, 40, 0, 0], [0, 1, 6, 1, 7, 0, 0, 0], &rn);
 
         assert!(rn.insert_range(10, 40, 3, &min, &max) == true);
         print!("{}", rn);
-        check_node_state([10, 40, 0, 0, 0, 0, 0],[ 0, 3, 0, 0, 0, 0, 0, 0], &rn);
+        check_node_state([10, 40, 0, 0, 0, 0, 0], [0, 3, 0, 0, 0, 0, 0, 0], &rn);
 
-        assert!(rn.insert_range(7, 8, 7 , &min, &max) == true);
+        assert!(rn.insert_range(7, 8, 7, &min, &max) == true);
         print!("{}", rn);
-        check_node_state([7, 8, 10, 40,  0, 0, 0],[ 0, 7, 0, 3, 0, 0, 0, 0], &rn);
+        check_node_state([7, 8, 10, 40, 0, 0, 0], [0, 7, 0, 3, 0, 0, 0, 0], &rn);
 
-        assert!(rn.insert_range(0, 7, 2 , &min, &max) == true);
+        assert!(rn.insert_range(0, 7, 2, &min, &max) == true);
         print!("{}", rn);
-        check_node_state([7, 8, 10, 40,  0, 0, 0],[ 2, 7, 0, 3, 0, 0, 0, 0], &rn);
-        
-        assert!(rn.insert_range(5, 7, 10 , &min, &max) == true);
+        check_node_state([7, 8, 10, 40, 0, 0, 0], [2, 7, 0, 3, 0, 0, 0, 0], &rn);
+
+        assert!(rn.insert_range(5, 7, 10, &min, &max) == true);
         print!("{}", rn);
-        check_node_state([5, 7, 8, 10, 40, 0, 0],[ 2, 10, 7, 0, 3, 0, 0, 0], &rn);
-       
-        assert!(rn.insert_range(5, 7, 10 , &min, &max) == true);
+        check_node_state([5, 7, 8, 10, 40, 0, 0], [2, 10, 7, 0, 3, 0, 0, 0], &rn);
+
+        assert!(rn.insert_range(5, 7, 10, &min, &max) == true);
         print!("{}", rn);
-        check_node_state([5, 7, 8, 10, 40, 0, 0],[ 2, 10, 7, 0, 3, 0, 0, 0], &rn);
-        
+        check_node_state([5, 7, 8, 10, 40, 0, 0], [2, 10, 7, 0, 3, 0, 0, 0], &rn);
+
         assert!(rn.insert_range(9, 30, 15, &min, &max) == true);
         print!("{}", rn);
         check_node_state([5, 7, 8, 9, 30, 40, 0], [2, 10, 7, 0, 15, 3, 0, 0], &rn);
@@ -1106,24 +1376,22 @@ mod tests {
         print!("{}", rn);
         check_node_state([5, 7, 8, 9, 30, 40, 60], [2, 10, 7, 0, 15, 3, 5, 9], &rn);
 
-    
         // get new rangeLeaf to clear state
         rn = RangeLeaf::new();
-        assert!(rn.insert_range(50, max, 1, &min, &max) == true); 
+        assert!(rn.insert_range(50, max, 1, &min, &max) == true);
         print!("{}", rn);
-        check_node_state([50, max, 0, 0, 0, 0, 0], [ 0, 1, 0, 0, 0, 0, 0, 0], &rn);
+        check_node_state([50, max, 0, 0, 0, 0, 0], [0, 1, 0, 0, 0, 0, 0, 0], &rn);
 
-        assert!(rn.insert_range(50, 75, 2, &min, &max) == true); 
+        assert!(rn.insert_range(50, 75, 2, &min, &max) == true);
         print!("{}", rn);
-        check_node_state([50, 75, max, 0, 0, 0, 0], [ 0, 2, 1, 0, 0, 0, 0, 0], &rn);
+        check_node_state([50, 75, max, 0, 0, 0, 0], [0, 2, 1, 0, 0, 0, 0, 0], &rn);
 
         assert!(rn.insert_range(20, 40, 3, &min, &max) == true);
         print!("{}", rn);
-        check_node_state([20, 40, 50, 75, max, 0, 0], [ 0, 3, 0, 2, 1, 0, 0, 0], &rn);
+        check_node_state([20, 40, 50, 75, max, 0, 0], [0, 3, 0, 2, 1, 0, 0, 0], &rn);
 
-
-        /* 
-         * test what happens when we insert a range x..Max when i.e 
+        /*
+         * test what happens when we insert a range x..Max when i.e
          * pivot = [x, Max, 0, 0, 0, 0, 0] what happens when the node
          * becomes
          * pivot = [p1, p2, p3. p4, p5, x, MAX] and we are inserting a
@@ -1133,19 +1401,18 @@ mod tests {
     }
 
     #[test]
-    fn test_range_node_find_range(){
-        
+    fn test_range_node_find_range() {
         let mut rn: RangeLeaf<usize, usize> = RangeLeaf::new();
         let min: usize = 3;
         let max: usize = 100;
 
         //println!("{:?}", rn.find_range(&3, &4, &min, &max));
-        assert!(rn.find_range(&3, &4, &min, &max) == ops::Range{start:-1,end:0});
+        assert!(rn.find_range(&3, &4, &min, &max) == ops::Range { start: -1, end: 0 });
 
-        assert!(rn.find_range(&10, &20, &min, &max) == ops::Range{start:-1, end:0}); 
+        assert!(rn.find_range(&10, &20, &min, &max) == ops::Range { start: -1, end: 0 });
         rn.pivot[0] = M::Some(7);
 
-        assert!(rn.find_range(&4, &6, &min, &max) == ops::Range{start:-1, end:0});
+        assert!(rn.find_range(&4, &6, &min, &max) == ops::Range { start: -1, end: 0 });
 
         rn.pivot[1] = M::Some(11);
         rn.pivot[2] = M::Some(20);
@@ -1154,24 +1421,41 @@ mod tests {
         rn.pivot[5] = M::Some(69);
         rn.pivot[6] = M::Some(85);
 
-        assert!(rn.find_range(&20, &25, &min, &max) == ops::Range{start:2, end: 3});
-        assert!(rn.find_range(&3, &4, &min, &max)  == ops::Range{start:-1,end: 0});
-        assert!(rn.find_range(&5, &17, &min, &max) == ops::Range{start:-1,end: 2});
-        assert!(rn.find_range(&7, &25, &min, &max) == ops::Range{start:0,end: 3});
-        assert!(rn.find_range(&3, &100, &min, &max) == ops::Range{start:-1,end: R_CAPACITY as isize}); 
-        assert!(rn.find_range(&90, &95, &min, &max) == ops::Range{start:6,end: R_CAPACITY as isize});
-        assert!(rn.find_range(&20, &95, &min, &max) == ops::Range{start:2,end: R_CAPACITY as isize});
+        assert!(rn.find_range(&20, &25, &min, &max) == ops::Range { start: 2, end: 3 });
+        assert!(rn.find_range(&3, &4, &min, &max) == ops::Range { start: -1, end: 0 });
+        assert!(rn.find_range(&5, &17, &min, &max) == ops::Range { start: -1, end: 2 });
+        assert!(rn.find_range(&7, &25, &min, &max) == ops::Range { start: 0, end: 3 });
+        assert!(
+            rn.find_range(&3, &100, &min, &max)
+                == ops::Range {
+                    start: -1,
+                    end: R_CAPACITY as isize
+                }
+        );
+        assert!(
+            rn.find_range(&90, &95, &min, &max)
+                == ops::Range {
+                    start: 6,
+                    end: R_CAPACITY as isize
+                }
+        );
+        assert!(
+            rn.find_range(&20, &95, &min, &max)
+                == ops::Range {
+                    start: 2,
+                    end: R_CAPACITY as isize
+                }
+        );
     }
 
     #[test]
-    fn test_range_node_move_pivots_left(){
-        
+    fn test_range_node_move_pivots_left() {
         let mut rn: RangeLeaf<usize, usize> = RangeLeaf::new();
 
         rn.pivot[0] = M::Some(1);
         rn.value[0] = M::Some(3);
 
-        rn.pivot[1] = M::Some(2); 
+        rn.pivot[1] = M::Some(2);
         rn.value[1] = M::Some(5);
 
         rn.pivot[2] = M::Some(6);
@@ -1185,11 +1469,11 @@ mod tests {
 
         rn.pivot[5] = M::Some(19);
         rn.pivot[6] = M::None;
-        
-        assert!(rn.move_pivots_left(3, 3) == true);
-        check_node_state([7, 17, 19, 0, 0, 0, 0],[ 5, 2, 0, 0, 0, 0, 0, 0], &rn);
 
-        assert!(rn.move_pivots_left(3,4) == false);
+        assert!(rn.move_pivots_left(3, 3) == true);
+        check_node_state([7, 17, 19, 0, 0, 0, 0], [5, 2, 0, 0, 0, 0, 0, 0], &rn);
+
+        assert!(rn.move_pivots_left(3, 4) == false);
 
         assert!(rn.move_pivots_left(10, 3) == false);
 
@@ -1198,110 +1482,149 @@ mod tests {
         assert!(rn.move_pivots_left(0, 1) == false);
 
         assert!(rn.move_pivots_left(1, 1) == true);
-        check_node_state([17, 19, 0, 0, 0, 0, 0],[ 2, 0, 0, 0, 0, 0, 0, 0], &rn);
+        check_node_state([17, 19, 0, 0, 0, 0, 0], [2, 0, 0, 0, 0, 0, 0, 0], &rn);
 
+        rn.pivot[0] = M::Some(5);
+        rn.pivot[1] = M::Some(10);
+        rn.pivot[2] = M::Some(20);
+        rn.pivot[3] = M::Some(30);
+        rn.pivot[4] = M::Some(40);
+        rn.pivot[5] = M::Some(50);
+        rn.pivot[6] = M::Some(60);
+
+        rn.value[0] = M::Some(1);
+        rn.value[1] = M::Some(1);
+        rn.value[2] = M::Some(1);
+        rn.value[3] = M::Some(4);
+        rn.value[4] = M::Some(2);
+        rn.value[5] = M::Some(2);
+        rn.value[6] = M::Some(2);
+        rn.value[7] = M::Some(2);
+
+        assert!(rn.move_pivots_left(6, 3) == true);
+        println!("{}", rn);
+        check_node_state([5, 10, 20, 60, 0, 0, 0], [1, 1, 1, 2, 0, 0, 0, 0], &rn);
+
+        rn.pivot[0] = M::Some(5);
+        rn.pivot[1] = M::Some(10);
+        rn.pivot[2] = M::Some(20);
+        rn.pivot[3] = M::Some(30);
+        rn.pivot[4] = M::Some(40);
+        rn.pivot[5] = M::Some(50);
+        rn.pivot[6] = M::Some(60);
+
+        rn.value[0] = M::Some(1);
+        rn.value[1] = M::Some(1);
+        rn.value[2] = M::Some(1);
+        rn.value[3] = M::Some(4);
+        rn.value[4] = M::Some(2);
+        rn.value[5] = M::Some(2);
+        rn.value[6] = M::Some(2);
+        rn.value[7] = M::Some(2);
+
+        assert!(rn.move_pivots_left(5, 3) == true);
+        println!("{}", rn);
+        check_node_state([5, 10, 50, 60, 0, 0, 0], [1, 1, 2, 2, 0, 0, 0, 0], &rn);
+
+        assert!(rn.move_pivots_left(2, 2) == true);
+        println!("{}", rn);
+        check_node_state([50, 60, 0, 0, 0, 0, 0], [2, 2, 0, 0, 0, 0, 0, 0], &rn);
     }
 
     // since RangeNode::move_pivots_right
     // is used in RangeNode::insert we will test this function by
     // inserting the pivots and values manually
     #[test]
-    fn test_range_node_move_pivots_right(){
-        
+    fn test_range_node_move_pivots_right() {
         let mut rn: RangeLeaf<usize, usize> = RangeLeaf::new();
         rn.pivot[0] = M::Some(6);
-         
+
         assert!(rn.move_pivots_right(0, 2) == true);
-        for i in 0..R_CAPACITY{
-            if i == 2{
+        for i in 0..R_CAPACITY {
+            if i == 2 {
                 assert!(rn.pivot[2] == M::Some(6));
-            }
-            else{
+            } else {
                 assert!(rn.pivot[i] == M::None);
             }
         }
 
-        let testOne: [usize; R_CAPACITY] = [1, 2, 6, 7, 0, 17, 19];  
+        let testOne: [usize; R_CAPACITY] = [1, 2, 6, 7, 0, 17, 19];
 
         rn.pivot[0] = M::Some(1);
-        rn.pivot[1] = M::Some(2); 
+        rn.pivot[1] = M::Some(2);
         rn.pivot[2] = M::Some(6);
         rn.pivot[3] = M::Some(7);
         rn.pivot[4] = M::Some(17);
         rn.pivot[5] = M::Some(19);
         rn.pivot[6] = M::None;
-        
+
         assert!(rn.move_pivots_right(4, 1) == true);
 
-
-        for i in 0..R_CAPACITY{
-            if testOne[i] == 0{
+        for i in 0..R_CAPACITY {
+            if testOne[i] == 0 {
                 assert!(rn.pivot[i] == M::None);
-            }
-            else{
+            } else {
                 println!("{}", i);
                 assert!(rn.pivot[i] == M::Some(testOne[i]));
             }
         }
-        
+
         let testTwo: [usize; R_CAPACITY] = [1, 2, 6, 7, 10, 15, 20];
 
-
-        for i in 0..R_CAPACITY{
+        for i in 0..R_CAPACITY {
             rn.pivot[i] = M::Some(testTwo[i]);
         }
 
-        assert!(rn.move_pivots_right(4,1) == false);
+        assert!(rn.move_pivots_right(4, 1) == false);
 
         let testThree: [usize; R_CAPACITY] = [1, 2, 6, 7, 10, 15, 0];
 
-        for i in 0.. R_CAPACITY-1{
-            if testThree[i] == 0{
+        for i in 0..R_CAPACITY - 1 {
+            if testThree[i] == 0 {
                 rn.pivot[i] = M::None;
-            }
-            else{
+            } else {
                 rn.pivot[i] = M::Some(testThree[i]);
-            }            
+            }
         }
 
         assert!(rn.move_pivots_right(2, 3) == false);
+    }
 
-    } 
-    
     #[cfg(test)]
-    fn check_node_state(pivots: [usize; R_CAPACITY], values: [usize; CAPACITY], node: &RangeLeaf<usize, usize> ){
-        
+    fn check_node_state(
+        pivots: [usize; R_CAPACITY],
+        values: [usize; CAPACITY],
+        node: &RangeLeaf<usize, usize>,
+    ) {
         println!("check_node_state output");
         print!("pivot = [");
-        for i in 0..R_CAPACITY{
-            if(pivots[i] == 0){
-                match node.pivot[i]{
-                    M::Some(p) => { print!("{}, ", p) },
-                    _ => {print!("X, ")}
-                } 
-                assert!(M::None == node.pivot[i]);
-            }
-            else{
-                match node.pivot[i]{
-                    M::Some(p) => { print!("{}, ", p) },
-                    _ => {print!("X, ")}
+        for i in 0..R_CAPACITY {
+            if pivots[i] == 0 {
+                match node.pivot[i] {
+                    M::Some(p) => print!("{}, ", p),
+                    _ => print!("X, "),
                 }
-                assert!(M::Some(pivots[i]) == node.pivot[i]); 
+                assert!(M::None == node.pivot[i]);
+            } else {
+                match node.pivot[i] {
+                    M::Some(p) => print!("{}, ", p),
+                    _ => print!("X, "),
+                }
+                assert!(M::Some(pivots[i]) == node.pivot[i]);
             }
         }
-        
+
         print!("]\nvalue = [");
-        for i in 0..CAPACITY{
-            if(values[i] == 0){
+        for i in 0..CAPACITY {
+            if values[i] == 0 {
                 print!("X, ");
                 assert!(M::None == node.value[i]);
-            }
-            else{
-                match node.value[i]{
-                    M::Some(p) => { print!("{}, ", p) },
-                    _ => {print!(", ")}
+            } else {
+                match node.value[i] {
+                    M::Some(p) => print!("{}, ", p),
+                    _ => print!(", "),
                 }
-             
+
                 assert!(M::Some(values[i]) == node.value[i]);
             }
         }
