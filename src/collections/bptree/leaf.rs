@@ -220,7 +220,7 @@ mod tests {
 
     // test insert and update to over-write out of order.
     #[test]
-    fn test_bptree_leaf_insert_out_of_order() {
+    fn test_bptree_leaf_update_out_of_order() {
         let mut leaf: Leaf<usize, usize> = Leaf::new();
 
         let kvs = [7, 5, 1, 6, 2, 3, 0, 8, 4, 9];
