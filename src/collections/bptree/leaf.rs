@@ -21,35 +21,27 @@ impl<K: PartialEq, V> Leaf<K, V> {
 
     fn insert_or_update(&mut self, k: K, v: V) -> BLInsertState<K, V> {
         // Update the node, and split if required.
-        // There are four possible states.
-        // * no values exist yet, so we should simply add the value
-        if self.count == 0 {
+
+        // There are three possible paths
+        // * some values (but not full) exist, and we need to update the value that does exist
+        for idx in 0..self.count {
             unsafe {
-                self.key[0].as_mut_ptr()
-                    .write(k);
-                self.value[0].as_mut_ptr()
-                    .write(v);
-            }
-            self.count = 1;
-            BLInsertState::Ok(None)
-        } else if self.count == L_CAPACITY {
-            // * the leaf is full, so we need to split and progress.
-            unimplemented!();
-        } else {
-            // * some values (but not full) exist, and we need to add the value that does not exist
-            // * some values (but not full) exist, and we need to update the value that doe exist
-            for idx in 0..self.count {
-                unsafe {
-                    if *self.key[idx].as_ptr() == k {
-                        // Update in place.
-                        let prev = self.value[idx].as_mut_ptr()
-                            .replace(v);
-                        // v now contains the original value, return it!
-                        return BLInsertState::Ok(Some(prev))
-                    }
+                if *self.key[idx].as_ptr() == k {
+                    // Update in place.
+                    let prev = self.value[idx].as_mut_ptr()
+                        .replace(v);
+                    // v now contains the original value, return it!
+                    return BLInsertState::Ok(Some(prev))
                 }
             }
-            // If we get here, not found - append.
+        }
+        // If we get here, not found - append or split as needed
+        if self.count == L_CAPACITY {
+            // * The node is full, so we must split
+            unimplemented!();
+        } else {
+            // * no values exist yet, so we should simply add the value
+            // * some values (but not full) exist, and we need to add the value that does not exist
             // Because self.count will be +1 to idx, then we can use it here before we
             // increment.
             unsafe {
@@ -174,8 +166,57 @@ mod tests {
     }
 
     // test insert and update to over-write in order.
+    #[test]
+    fn test_bptree_leaf_update_order() {
+        let mut leaf: Leaf<usize, usize> = Leaf::new();
+
+        for kv in 0..L_CAPACITY {
+            let r = leaf.insert_or_update(kv, kv);
+            match r {
+                BLInsertState::Ok(None) => {}
+                _ => panic!(),
+            }
+            println!("len -> {}", leaf.len());
+            let gr = leaf.get_ref(&kv);
+            println!("{:?}", gr);
+            assert!(gr == Some(&kv));
+        }
+
+        for kv in 0..L_CAPACITY {
+            let r = leaf.insert_or_update(kv, kv + 1);
+            match r {
+                // Check for some kv, that was the former value.
+                BLInsertState::Ok(Some(kv)) => {}
+                _ => panic!(),
+            }
+            println!("len -> {}", leaf.len());
+            let gr = leaf.get_ref(&kv);
+            println!("{:?}", gr);
+            // Check the new value is incremented.
+            assert!(gr == Some(&(kv + 1)));
+        }
+    }
 
     // test insert out of order
+    #[test]
+    fn test_bptree_leaf_insert_out_of_order() {
+        let mut leaf: Leaf<usize, usize> = Leaf::new();
+
+        let kvs = [7, 5, 1, 6, 2, 3, 0, 8, 4, 9];
+
+        for idx in 0..L_CAPACITY {
+            let kv = kvs[idx];
+            let r = leaf.insert_or_update(kv, kv);
+            match r {
+                BLInsertState::Ok(None) => {}
+                _ => panic!(),
+            }
+            println!("len -> {}", leaf.len());
+            let gr = leaf.get_ref(&kv);
+            println!("{:?}", gr);
+            assert!(gr == Some(&kv));
+        }
+    }
 
     // test insert and update to over-write out of order.
 
