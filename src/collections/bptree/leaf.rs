@@ -219,6 +219,38 @@ mod tests {
     }
 
     // test insert and update to over-write out of order.
+    #[test]
+    fn test_bptree_leaf_insert_out_of_order() {
+        let mut leaf: Leaf<usize, usize> = Leaf::new();
+
+        let kvs = [7, 5, 1, 6, 2, 3, 0, 8, 4, 9];
+
+        for idx in 0..L_CAPACITY {
+            let kv = kvs[idx];
+            let r = leaf.insert_or_update(kv, kv);
+            match r {
+                BLInsertState::Ok(None) => {}
+                _ => panic!(),
+            }
+            println!("len -> {}", leaf.len());
+            let gr = leaf.get_ref(&kv);
+            println!("{:?}", gr);
+            assert!(gr == Some(&kv));
+        }
+
+        for idx in 0..L_CAPACITY {
+            let kv = kvs[idx];
+            let r = leaf.insert_or_update(kv, kv + 1);
+            match r {
+                BLInsertState::Ok(Some(kv)) => {}
+                _ => panic!(),
+            }
+            println!("len -> {}", leaf.len());
+            let gr = leaf.get_ref(&kv);
+            println!("{:?}", gr);
+            assert!(gr == Some(&(kv + 1)));
+        }
+    }
 
     // assert min-max bounds correct
     // insert to split.
