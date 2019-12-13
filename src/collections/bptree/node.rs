@@ -1,10 +1,10 @@
 use std::mem::MaybeUninit;
-use std::sync::Arc;
 use std::ptr;
+use std::sync::Arc;
 
-use super::states::{BLInsertState, BNClone, BLRemoveState};
 use super::constants::{BK_CAPACITY, BV_CAPACITY};
 use super::leaf::Leaf;
+use super::states::{BLInsertState, BLRemoveState, BNClone};
 
 pub(crate) struct Branch<K, V> {
     count: usize,
@@ -19,14 +19,14 @@ pub(crate) enum T<K, V> {
 
 pub(crate) struct Node<K, V> {
     txid: usize,
-    inner: T<K, V>
+    inner: T<K, V>,
 }
 
 impl<K: Clone + PartialEq + PartialOrd, V: Clone> Node<K, V> {
     fn new_tree_root(txid: usize) -> Self {
         Node {
             txid: txid,
-            inner: T::L(Leaf::new())
+            inner: T::L(Leaf::new()),
         }
     }
 
@@ -35,19 +35,13 @@ impl<K: Clone + PartialEq + PartialOrd, V: Clone> Node<K, V> {
         if txid == self.txid {
             BNClone::Ok
         } else {
-            BNClone::Clone(
-                Box::new(Node {
-                    txid: txid,
-                    inner: match &self.inner {
-                        T::L(leaf) => {
-                            T::L(leaf.clone())
-                        }
-                        T::B(branch) => {
-                            T::B(branch.clone())
-                        }
-                    }
-                })
-            )
+            BNClone::Clone(Box::new(Node {
+                txid: txid,
+                inner: match &self.inner {
+                    T::L(leaf) => T::L(leaf.clone()),
+                    T::B(branch) => T::B(branch.clone()),
+                },
+            }))
         }
     }
 
@@ -98,8 +92,8 @@ impl<K, V> Drop for Branch<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use super::Node;
     use super::super::states::BNClone;
+    use super::Node;
 
     // check clone txid behaviour
     #[test]
@@ -108,7 +102,7 @@ mod tests {
         let nroot: Node<usize, usize> = Node::new_tree_root(0);
         // Req to clone it.
         match nroot.req_clone(0) {
-            BNClone::Ok => {},
+            BNClone::Ok => {}
             BNClone::Clone(_) => panic!(),
         };
         // Now do one where we do clone.
@@ -121,6 +115,3 @@ mod tests {
         assert!(nnode.len() == nroot.len());
     }
 }
-
-
-

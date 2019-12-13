@@ -1,4 +1,3 @@
-
 use super::leaf::Leaf;
 use super::node::Node;
 
@@ -19,6 +18,5 @@ pub(crate) enum BLRemoveState<V> {
 pub(crate) enum BNClone<K, V> {
     // Not needed
     Ok,
-    Clone(Box<Node<K, V>>)
+    Clone(Box<Node<K, V>>),
 }
-

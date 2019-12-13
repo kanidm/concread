@@ -1,8 +1,7 @@
-
 use super::node::Node;
 
 struct BptreeMap<K, V> {
-    root: Node<K, V>
+    root: Node<K, V>,
 }
 
 impl<K, V> BptreeMap<K, V> {
@@ -43,4 +42,3 @@ impl<K, V> BptreeMap<K, V> {
 
     // is_empty
 }
-

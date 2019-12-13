@@ -28,10 +28,9 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
             unsafe {
                 if *self.key[idx].as_ptr() == k {
                     // Update in place.
-                    let prev = self.value[idx].as_mut_ptr()
-                        .replace(v);
+                    let prev = self.value[idx].as_mut_ptr().replace(v);
                     // v now contains the original value, return it!
-                    return BLInsertState::Ok(Some(prev))
+                    return BLInsertState::Ok(Some(prev));
                 }
             }
         }
@@ -57,10 +56,8 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
             // Because self.count will be +1 to idx, then we can use it here before we
             // increment.
             unsafe {
-                self.key[self.count].as_mut_ptr()
-                    .write(k);
-                self.value[self.count].as_mut_ptr()
-                    .write(v);
+                self.key[self.count].as_mut_ptr().write(k);
+                self.value[self.count].as_mut_ptr().write(v);
             }
             self.count += 1;
             BLInsertState::Ok(None)
@@ -70,7 +67,7 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
     fn remove(&mut self, k: &K) -> BLRemoveState<V> {
         // We already were empty - should never occur, but let's be paranoid.
         if self.count == 0 {
-            return BLRemoveState::Shrink(None)
+            return BLRemoveState::Shrink(None);
         }
 
         // Find the value
@@ -143,7 +140,7 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
             unsafe {
                 if &*self.key[idx].as_ptr() == k {
                     // Shortcut return.
-                    return Some(idx)
+                    return Some(idx);
                 }
             }
         }
@@ -152,20 +149,12 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
 
     pub(crate) fn get_ref(&self, k: &K) -> Option<&V> {
         self.get_idx(k)
-            .map(|idx| {
-                unsafe {
-                    &*self.value[idx].as_ptr()
-                }
-            })
+            .map(|idx| unsafe { &*self.value[idx].as_ptr() })
     }
 
     fn get_mut_ref(&mut self, k: &K) -> Option<&mut V> {
         self.get_idx(k)
-            .map(|idx| {
-                unsafe {
-                    &mut *self.value[idx].as_mut_ptr()
-                }
-            })
+            .map(|idx| unsafe { &mut *self.value[idx].as_mut_ptr() })
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -176,7 +165,8 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
 impl<K: Clone, V: Clone> Clone for Leaf<K, V> {
     fn clone(&self) -> Self {
         let mut nkey: [MaybeUninit<K>; L_CAPACITY] = unsafe { MaybeUninit::uninit().assume_init() };
-        let mut nvalue: [MaybeUninit<V>; L_CAPACITY] = unsafe { MaybeUninit::uninit().assume_init() };
+        let mut nvalue: [MaybeUninit<V>; L_CAPACITY] =
+            unsafe { MaybeUninit::uninit().assume_init() };
 
         for idx in 0..self.count {
             // Clone all the keys.
@@ -213,7 +203,6 @@ impl<K, V> Drop for Leaf<K, V> {
     }
 }
 
-
 // From std::collections::btree::node.rs
 unsafe fn slice_remove<T>(slice: &mut [T], idx: usize) -> T {
     // setup the value to be returned, IE give ownership to ret.
@@ -221,18 +210,16 @@ unsafe fn slice_remove<T>(slice: &mut [T], idx: usize) -> T {
     ptr::copy(
         slice.as_ptr().add(idx + 1),
         slice.as_mut_ptr().add(idx),
-        slice.len() - idx - 1
+        slice.len() - idx - 1,
     );
     ret
 }
 
-
-
 #[cfg(test)]
 mod tests {
-    use super::Leaf;
     use super::super::constants::L_CAPACITY;
     use super::super::states::{BLInsertState, BLRemoveState};
+    use super::Leaf;
 
     // test insert in order
     #[test]
@@ -370,9 +357,9 @@ mod tests {
     #[test]
     fn test_bptree_leaf_insert_split() {
         let mut leaf: Leaf<usize, usize> = Leaf::new();
-        let high = L_CAPACITY+2;
+        let high = L_CAPACITY + 2;
         // First we insert from 1 to capacity + 1.
-        for kv in 1..(L_CAPACITY+1) {
+        for kv in 1..(L_CAPACITY + 1) {
             let r = leaf.insert_or_update(kv, kv);
             match r {
                 BLInsertState::Ok(None) => {}
@@ -386,7 +373,7 @@ mod tests {
             _ => panic!(),
         }
         // Then we insert 0, and we should get capacity + 1 back
-        let zret = L_CAPACITY+1;
+        let zret = L_CAPACITY + 1;
         let r_under = leaf.insert_or_update(0, 0);
         match r_over {
             BLInsertState::Split(zret, _) => {}
@@ -403,10 +390,10 @@ mod tests {
             let _ = leaf.insert_or_update(kv, kv);
         }
         // Remove all but one!
-        for kv in 0..(L_CAPACITY-1) {
+        for kv in 0..(L_CAPACITY - 1) {
             let r = leaf.remove(&kv);
             match r {
-                BLRemoveState::Ok(Some(kv)) => {},
+                BLRemoveState::Ok(Some(kv)) => {}
                 _ => panic!(),
             }
         }
@@ -414,22 +401,22 @@ mod tests {
         assert!(leaf.max() == &(L_CAPACITY - 1));
 
         // Remove non-existant
-        let r = leaf.remove(&(L_CAPACITY+20));
+        let r = leaf.remove(&(L_CAPACITY + 20));
         match r {
-            BLRemoveState::Ok(None) => {},
-            _=> panic!(),
+            BLRemoveState::Ok(None) => {}
+            _ => panic!(),
         }
         // Remove the last item.
-        let r = leaf.remove(&(L_CAPACITY-1));
+        let r = leaf.remove(&(L_CAPACITY - 1));
         match r {
-            BLRemoveState::Shrink(Some(_)) => {},
-            _=> panic!(),
+            BLRemoveState::Shrink(Some(_)) => {}
+            _ => panic!(),
         }
         // Remove non-existant post shrink
         let r = leaf.remove(&0);
         match r {
-            BLRemoveState::Shrink(None) => {},
-            _=> panic!(),
+            BLRemoveState::Shrink(None) => {}
+            _ => panic!(),
         }
     }
 
@@ -441,18 +428,18 @@ mod tests {
             let _ = leaf.insert_or_update(kv, kv);
         }
         // Remove all but one!
-        for kv in (L_CAPACITY/2)..(L_CAPACITY-1) {
+        for kv in (L_CAPACITY / 2)..(L_CAPACITY - 1) {
             let r = leaf.remove(&kv);
             match r {
-                BLRemoveState::Ok(_) => {},
+                BLRemoveState::Ok(_) => {}
                 _ => panic!(),
             }
         }
 
-        for kv in 0..(L_CAPACITY/2) {
+        for kv in 0..(L_CAPACITY / 2) {
             let r = leaf.remove(&kv);
             match r {
-                BLRemoveState::Ok(_) => {},
+                BLRemoveState::Ok(_) => {}
                 _ => panic!(),
             }
         }
