@@ -2,7 +2,7 @@
 
 // This should be 8 or 16 to represent how many 64 bit data we want
 // to contain (assuming a 64 bit type).
-pub const CAPACITY: usize = 8;
+pub const CAPACITY: usize = 16;
 
 // --> LEAVES
 // Have two usize, one for txnid, one for count, which puts our math at.

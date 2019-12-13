@@ -2,15 +2,17 @@
 use super::leaf::Leaf;
 use super::node::Node;
 
-
+#[derive(Debug)]
 pub(crate) enum BLInsertState<K, V> {
     Ok(Option<V>),
-    Split(Option<V>, Leaf<K, V>),
+    // Return's a K,V that should be put into a new leaf.
+    Split(K, V),
 }
 
 pub(crate) enum BLRemoveState<V> {
     Ok(Option<V>),
-    // Do we need to return the key we are removing?
+    // Indicate that we found the associated value, but this
+    // removal means we no longer exist so should be removed.
     Shrink(Option<V>),
 }
 

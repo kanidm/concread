@@ -22,7 +22,7 @@ pub(crate) struct Node<K, V> {
     inner: T<K, V>
 }
 
-impl<K: Clone + PartialEq, V: Clone> Node<K, V> {
+impl<K: Clone + PartialEq + PartialOrd, V: Clone> Node<K, V> {
     fn new_tree_root(txid: usize) -> Self {
         Node {
             txid: txid,
