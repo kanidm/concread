@@ -1,10 +1,15 @@
 use std::mem::MaybeUninit;
 use std::ptr;
 use std::sync::Arc;
+use std::fmt::{self, Debug, Error};
 
 use super::constants::{BK_CAPACITY, BV_CAPACITY};
 use super::leaf::Leaf;
 use super::states::{BLInsertState, BLRemoveState, BNClone};
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
+static NODE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) struct Branch<K, V> {
     count: usize,
@@ -12,19 +17,27 @@ pub(crate) struct Branch<K, V> {
     node: [MaybeUninit<Arc<Box<Node<K, V>>>>; BV_CAPACITY],
 }
 
+#[derive(Debug)]
 pub(crate) enum T<K, V> {
     B(Branch<K, V>),
     L(Leaf<K, V>),
 }
 
+#[derive(Debug)]
 pub(crate) struct Node<K, V> {
+    #[cfg(test)]
+    nid: usize,
     txid: usize,
     inner: T<K, V>,
 }
 
+type ABNode<K, V> = Arc<Box<Node<K, V>>>;
+
 impl<K: Clone + PartialEq + PartialOrd, V: Clone> Node<K, V> {
-    fn new_tree_root(txid: usize) -> Self {
+    fn new_leaf(txid: usize) -> Self {
         Node {
+            #[cfg(test)]
+            nid: NODE_COUNTER.fetch_add(1, Ordering::AcqRel),
             txid: txid,
             inner: T::L(Leaf::new()),
         }
@@ -36,6 +49,8 @@ impl<K: Clone + PartialEq + PartialOrd, V: Clone> Node<K, V> {
             BNClone::Ok
         } else {
             BNClone::Clone(Box::new(Node {
+                #[cfg(test)]
+                nid: NODE_COUNTER.fetch_add(1, Ordering::AcqRel),
                 txid: txid,
                 inner: match &self.inner {
                     T::L(leaf) => T::L(leaf.clone()),
@@ -56,17 +71,84 @@ impl<K: Clone + PartialEq + PartialOrd, V: Clone> Node<K, V> {
             T::B(branch) => branch.len(),
         }
     }
+
+    fn as_mut_leaf(&mut self) -> &mut Leaf<K, V> {
+        match &mut self.inner {
+            T::L(ref mut leaf) => leaf,
+            T::B(_) => panic!(),
+        }
+    }
 }
 
 impl<K, V> Branch<K, V> {
+
+    pub fn new(pivot: K, left: ABNode<K, V>, right: ABNode<K, V>) -> Self {
+        let mut new = Branch {
+            count: 1,
+            key: unsafe { MaybeUninit::uninit().assume_init() },
+            node: unsafe { MaybeUninit::uninit().assume_init() },
+        };
+        unsafe {
+            new.key[0].as_mut_ptr()
+                .write(pivot);
+            new.node[0].as_mut_ptr()
+                .write(left);
+            new.node[1].as_mut_ptr()
+                .write(right);
+        }
+        new
+    }
+
+    // Add a new pivot + node.
+
+    // remove a node by idx.
+
+    // get a node containing some K - need to return our related idx.
+
+    // 
+
+    // get min
+    // get max
+
+    // get child min
+    // get child max
+
     pub(crate) fn len(&self) -> usize {
         self.count
+    }
+
+    fn check_sorted(&self) -> bool {
+        // check the pivots are sorted.
+        false
+    }
+
+    fn check_descendents_valid(&self) -> bool {
+        // Ensure that the first left is less than pivot
+        // ensure all greater are greater than.
+        false
+    }
+
+    fn verify_children(&self) -> bool {
+        // For each child node call verify on it.
+        false
+    }
+
+    pub(crate) fn verify(&self) -> bool {
+        self.check_sorted() &&
+            self.check_descendents_valid() &&
+            self.verify_children()
     }
 }
 
 impl<K, V> Clone for Branch<K, V> {
     fn clone(&self) -> Self {
         unimplemented!();
+    }
+}
+
+impl<K, V> Debug for Branch<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), Error> {
+        write!(f, "Branch -> {}", self.count)
     }
 }
 
@@ -93,13 +175,14 @@ impl<K, V> Drop for Branch<K, V> {
 #[cfg(test)]
 mod tests {
     use super::super::states::BNClone;
-    use super::Node;
+    use super::{Node, Branch};
+    use std::sync::Arc;
 
     // check clone txid behaviour
     #[test]
     fn test_bptree_node_req_clone() {
         // Make a new node.
-        let nroot: Node<usize, usize> = Node::new_tree_root(0);
+        let nroot: Node<usize, usize> = Node::new_leaf(0);
         // Req to clone it.
         match nroot.req_clone(0) {
             BNClone::Ok => {}
@@ -113,5 +196,36 @@ mod tests {
 
         assert!(nnode.txid == 1);
         assert!(nnode.len() == nroot.len());
+    }
+
+    #[test]
+    fn test_bptree_node_new() {
+        let k: usize = 5;
+        let mut left = Arc::new(Box::new(Node::new_leaf(0)));
+        let mut right = Arc::new(Box::new(Node::new_leaf(0)));
+
+        // add some k, vs to each.
+        {
+            let lmut = Arc::get_mut(&mut left).unwrap()
+                .as_mut()
+                .as_mut_leaf();
+            lmut.insert_or_update(0,0);
+            lmut.insert_or_update(1,1);
+        }
+        {
+            let rmut = Arc::get_mut(&mut right).unwrap()
+                .as_mut()
+                .as_mut_leaf();
+            rmut.insert_or_update(5,5);
+            rmut.insert_or_update(6,6);
+        }
+
+        println!("{:?}", left);
+        println!("{:?}", right);
+
+        let branch = Branch::new(k, left, right);
+        println!("{:?}", branch);
+
+        assert!(branch.verify());
     }
 }

@@ -1,5 +1,6 @@
 use std::mem::MaybeUninit;
 use std::ptr;
+use std::fmt::{self, Debug, Error};
 
 use super::constants::L_CAPACITY;
 use super::states::{BLInsertState, BLRemoveState};
@@ -19,7 +20,7 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
         }
     }
 
-    fn insert_or_update(&mut self, k: K, v: V) -> BLInsertState<K, V> {
+    pub(crate) fn insert_or_update(&mut self, k: K, v: V) -> BLInsertState<K, V> {
         // Update the node, and split if required.
 
         // There are three possible paths
@@ -200,6 +201,12 @@ impl<K, V> Drop for Leaf<K, V> {
             }
         }
         // println!("leaf dropped {:?}", self.count);
+    }
+}
+
+impl<K, V> Debug for Leaf<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), Error> {
+        write!(f, "Leaf -> {}", self.count)
     }
 }
 
