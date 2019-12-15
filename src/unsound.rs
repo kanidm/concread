@@ -1,11 +1,9 @@
-
 extern crate concread;
 use concread::cowcell::CowCell;
 use std::ops::Deref;
 // use crossbeam_epoch::*;
-use std::rc::Rc;
 use std::mem::forget;
-
+use std::rc::Rc;
 
 struct StrRef<'a> {
     r: &'a str,
@@ -29,7 +27,10 @@ struct ChangesItselfString {
 
 impl Drop for ChangesItselfString {
     fn drop(&mut self) {
-        Rc::get_mut(&mut self.s).unwrap().as_mut_str().make_ascii_uppercase();
+        Rc::get_mut(&mut self.s)
+            .unwrap()
+            .as_mut_str()
+            .make_ascii_uppercase();
         // Keep object alive.
         forget(self.s.clone());
     }
@@ -37,7 +38,9 @@ impl Drop for ChangesItselfString {
 
 fn main() {
     {
-        let s = ChangesItselfString { s: Rc::new(String::from("lowercase_string")) };
+        let s = ChangesItselfString {
+            s: Rc::new(String::from("lowercase_string")),
+        };
         let f = StrRef { r: s.s.deref() };
         let cell = CowCell::new(f);
         drop(cell);
@@ -49,4 +52,3 @@ fn main() {
     // pin().flush();
     // pin().flush();
 }
-
