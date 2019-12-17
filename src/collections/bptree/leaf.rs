@@ -1,6 +1,6 @@
+use std::fmt::{self, Debug, Error};
 use std::mem::MaybeUninit;
 use std::ptr;
-use std::fmt::{self, Debug, Error};
 
 use super::constants::L_CAPACITY;
 use super::states::{BLInsertState, BLRemoveState};
@@ -102,7 +102,7 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
         for work_idx in 1..self.count {
             let k = unsafe { &*self.key[work_idx].as_ptr() };
             if k < tmp_k {
-                tmp_k = k.clone();
+                tmp_k = k;
                 idx = work_idx
             }
         }
@@ -118,7 +118,7 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
         for work_idx in 1..self.count {
             let k = unsafe { &*self.key[work_idx].as_ptr() };
             if k > tmp_k {
-                tmp_k = k.clone();
+                tmp_k = k;
                 idx = work_idx
             }
         }
@@ -126,12 +126,12 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
         idx
     }
 
-    fn min(&self) -> &K {
+    pub(crate) fn min(&self) -> &K {
         let idx = self.min_idx();
         unsafe { &*self.key[idx].as_ptr() }
     }
 
-    fn max(&self) -> &K {
+    pub(crate) fn max(&self) -> &K {
         let idx = self.max_idx();
         unsafe { &*self.key[idx].as_ptr() }
     }
@@ -160,6 +160,10 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
 
     pub(crate) fn len(&self) -> usize {
         self.count
+    }
+
+    pub(crate) fn verify(&self) -> bool {
+        true
     }
 }
 

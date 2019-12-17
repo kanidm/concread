@@ -1,7 +1,7 @@
+use std::fmt::{self, Debug, Error};
 use std::mem::MaybeUninit;
 use std::ptr;
 use std::sync::Arc;
-use std::fmt::{self, Debug, Error};
 
 use super::constants::{BK_CAPACITY, BV_CAPACITY};
 use super::leaf::Leaf;
@@ -60,15 +60,31 @@ impl<K: Clone + PartialEq + PartialOrd, V: Clone> Node<K, V> {
         }
     }
 
-    #[cfg(test)]
     fn verify(&self) -> bool {
-        false
+        match &self.inner {
+            T::L(leaf) => leaf.verify(),
+            T::B(branch) => branch.verify(),
+        }
     }
 
     fn len(&self) -> usize {
         match &self.inner {
             T::L(leaf) => leaf.len(),
             T::B(branch) => branch.len(),
+        }
+    }
+
+    fn min(&self) -> &K {
+        match &self.inner {
+            T::L(leaf) => leaf.min(),
+            T::B(branch) => branch.min(),
+        }
+    }
+
+    fn max(&self) -> &K {
+        match &self.inner {
+            T::L(leaf) => leaf.max(),
+            T::B(branch) => branch.max(),
         }
     }
 
@@ -80,8 +96,7 @@ impl<K: Clone + PartialEq + PartialOrd, V: Clone> Node<K, V> {
     }
 }
 
-impl<K, V> Branch<K, V> {
-
+impl<K: Clone + PartialEq + PartialOrd, V: Clone> Branch<K, V> {
     pub fn new(pivot: K, left: ABNode<K, V>, right: ABNode<K, V>) -> Self {
         let mut new = Branch {
             count: 1,
@@ -89,12 +104,9 @@ impl<K, V> Branch<K, V> {
             node: unsafe { MaybeUninit::uninit().assume_init() },
         };
         unsafe {
-            new.key[0].as_mut_ptr()
-                .write(pivot);
-            new.node[0].as_mut_ptr()
-                .write(left);
-            new.node[1].as_mut_ptr()
-                .write(right);
+            new.key[0].as_mut_ptr().write(pivot);
+            new.node[0].as_mut_ptr().write(left);
+            new.node[1].as_mut_ptr().write(right);
         }
         new
     }
@@ -105,13 +117,13 @@ impl<K, V> Branch<K, V> {
 
     // get a node containing some K - need to return our related idx.
 
-    // 
+    pub(crate) fn min(&self) -> &K {
+        unsafe { &*self.key[0].as_ptr() }
+    }
 
-    // get min
-    // get max
-
-    // get child min
-    // get child max
+    pub(crate) fn max(&self) -> &K {
+        unsafe { &*self.key[self.count - 1].as_ptr() }
+    }
 
     pub(crate) fn len(&self) -> usize {
         self.count
@@ -119,24 +131,55 @@ impl<K, V> Branch<K, V> {
 
     fn check_sorted(&self) -> bool {
         // check the pivots are sorted.
-        false
+        if self.count == 0 {
+            false
+        } else {
+            let mut lk: &K = unsafe { &*self.key[0].as_ptr() };
+            for work_idx in 1..self.count {
+                let rk: &K = unsafe { &*self.key[work_idx].as_ptr() };
+                if lk >= rk {
+                    return false;
+                }
+                lk = rk;
+            }
+            println!("Passed sorting");
+            true
+        }
     }
 
     fn check_descendents_valid(&self) -> bool {
-        // Ensure that the first left is less than pivot
-        // ensure all greater are greater than.
-        false
+        for work_idx in 0..self.count {
+            // get left max and right min
+            let lnode = unsafe { &*self.node[work_idx].as_ptr() };
+            let rnode = unsafe { &*self.node[work_idx + 1].as_ptr() };
+
+            let pkey = unsafe { &*self.key[work_idx].as_ptr() };
+            let lkey = lnode.max();
+            let rkey = rnode.min();
+            if lkey >= pkey || pkey > rkey {
+                println!("out of order key found");
+                return false;
+            }
+        }
+        println!("Passed descendants");
+        true
     }
 
     fn verify_children(&self) -> bool {
         // For each child node call verify on it.
-        false
+        for work_idx in 0..self.count {
+            let node = unsafe { &*self.node[work_idx].as_ptr() };
+            if !node.verify() {
+                println!("Failed children");
+                return false;
+            }
+        }
+        println!("Passed children");
+        true
     }
 
     pub(crate) fn verify(&self) -> bool {
-        self.check_sorted() &&
-            self.check_descendents_valid() &&
-            self.verify_children()
+        self.check_sorted() && self.check_descendents_valid() && self.verify_children()
     }
 }
 
@@ -175,7 +218,7 @@ impl<K, V> Drop for Branch<K, V> {
 #[cfg(test)]
 mod tests {
     use super::super::states::BNClone;
-    use super::{Node, Branch};
+    use super::{Branch, Node};
     use std::sync::Arc;
 
     // check clone txid behaviour
@@ -206,18 +249,14 @@ mod tests {
 
         // add some k, vs to each.
         {
-            let lmut = Arc::get_mut(&mut left).unwrap()
-                .as_mut()
-                .as_mut_leaf();
-            lmut.insert_or_update(0,0);
-            lmut.insert_or_update(1,1);
+            let lmut = Arc::get_mut(&mut left).unwrap().as_mut().as_mut_leaf();
+            lmut.insert_or_update(0, 0);
+            lmut.insert_or_update(1, 1);
         }
         {
-            let rmut = Arc::get_mut(&mut right).unwrap()
-                .as_mut()
-                .as_mut_leaf();
-            rmut.insert_or_update(5,5);
-            rmut.insert_or_update(6,6);
+            let rmut = Arc::get_mut(&mut right).unwrap().as_mut().as_mut_leaf();
+            rmut.insert_or_update(5, 5);
+            rmut.insert_or_update(6, 6);
         }
 
         println!("{:?}", left);
