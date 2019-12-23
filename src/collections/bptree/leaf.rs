@@ -1,16 +1,21 @@
+use std::fmt::{self, Debug, Error};
 use std::mem::MaybeUninit;
 use std::ptr;
 
 use super::constants::L_CAPACITY;
 use super::states::{BLInsertState, BLRemoveState};
 
-pub(crate) struct Leaf<K, V> {
+pub(crate) struct Leaf<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
     count: usize,
     key: [MaybeUninit<K>; L_CAPACITY],
     value: [MaybeUninit<V>; L_CAPACITY],
 }
 
-impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
     pub fn new() -> Self {
         Leaf {
             count: 0,
@@ -19,7 +24,7 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
         }
     }
 
-    fn insert_or_update(&mut self, k: K, v: V) -> BLInsertState<K, V> {
+    pub(crate) fn insert_or_update(&mut self, k: K, v: V) -> BLInsertState<K, V> {
         // Update the node, and split if required.
 
         // There are three possible paths
@@ -101,7 +106,7 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
         for work_idx in 1..self.count {
             let k = unsafe { &*self.key[work_idx].as_ptr() };
             if k < tmp_k {
-                tmp_k = k.clone();
+                tmp_k = k;
                 idx = work_idx
             }
         }
@@ -117,7 +122,7 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
         for work_idx in 1..self.count {
             let k = unsafe { &*self.key[work_idx].as_ptr() };
             if k > tmp_k {
-                tmp_k = k.clone();
+                tmp_k = k;
                 idx = work_idx
             }
         }
@@ -125,12 +130,12 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
         idx
     }
 
-    fn min(&self) -> &K {
+    pub(crate) fn min(&self) -> &K {
         let idx = self.min_idx();
         unsafe { &*self.key[idx].as_ptr() }
     }
 
-    fn max(&self) -> &K {
+    pub(crate) fn max(&self) -> &K {
         let idx = self.max_idx();
         unsafe { &*self.key[idx].as_ptr() }
     }
@@ -160,9 +165,13 @@ impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
     pub(crate) fn len(&self) -> usize {
         self.count
     }
+
+    pub(crate) fn verify(&self) -> bool {
+        true
+    }
 }
 
-impl<K: Clone, V: Clone> Clone for Leaf<K, V> {
+impl<K: Ord + Clone, V: Clone> Clone for Leaf<K, V> {
     fn clone(&self) -> Self {
         let mut nkey: [MaybeUninit<K>; L_CAPACITY] = unsafe { MaybeUninit::uninit().assume_init() };
         let mut nvalue: [MaybeUninit<V>; L_CAPACITY] =
@@ -190,7 +199,7 @@ impl<K: Clone, V: Clone> Clone for Leaf<K, V> {
     }
 }
 
-impl<K, V> Drop for Leaf<K, V> {
+impl<K: Ord + Clone, V: Clone> Drop for Leaf<K, V> {
     fn drop(&mut self) {
         // Due to the use of maybe uninit we have to drop any contained values.
         for idx in 0..self.count {
@@ -199,7 +208,18 @@ impl<K, V> Drop for Leaf<K, V> {
                 ptr::drop_in_place(self.value[idx].as_mut_ptr());
             }
         }
-        // println!("leaf dropped {:?}", self.count);
+        println!("leaf dropped {}", self.count);
+    }
+}
+
+impl<K: Ord + Clone + Debug, V: Clone> Debug for Leaf<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), Error> {
+        write!(f, "Leaf -> {}", self.count);
+        write!(f, "  \\-> [ ");
+        for idx in 0..self.count {
+            write!(f, "{:?}, ", unsafe { &*self.key[idx].as_ptr() });
+        }
+        write!(f, " ]")
     }
 }
 
