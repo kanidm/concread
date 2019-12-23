@@ -1,10 +1,14 @@
 use super::node::Node;
 
-struct BptreeMap<K, V> {
+struct BptreeMap<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
     root: Node<K, V>,
 }
 
-impl<K, V> BptreeMap<K, V> {
+impl<K: Clone + Ord, V: Clone> BptreeMap<K, V> {
     // new
 
     // clear

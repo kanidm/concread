@@ -5,7 +5,11 @@ use std::ptr;
 use super::constants::L_CAPACITY;
 use super::states::{BLInsertState, BLRemoveState};
 
-pub(crate) struct Leaf<K, V> {
+pub(crate) struct Leaf<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
     count: usize,
     key: [MaybeUninit<K>; L_CAPACITY],
     value: [MaybeUninit<V>; L_CAPACITY],
@@ -167,7 +171,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
     }
 }
 
-impl<K: Clone, V: Clone> Clone for Leaf<K, V> {
+impl<K: Ord + Clone, V: Clone> Clone for Leaf<K, V> {
     fn clone(&self) -> Self {
         let mut nkey: [MaybeUninit<K>; L_CAPACITY] = unsafe { MaybeUninit::uninit().assume_init() };
         let mut nvalue: [MaybeUninit<V>; L_CAPACITY] =
@@ -195,7 +199,7 @@ impl<K: Clone, V: Clone> Clone for Leaf<K, V> {
     }
 }
 
-impl<K, V> Drop for Leaf<K, V> {
+impl<K: Ord + Clone, V: Clone> Drop for Leaf<K, V> {
     fn drop(&mut self) {
         // Due to the use of maybe uninit we have to drop any contained values.
         for idx in 0..self.count {
@@ -204,11 +208,11 @@ impl<K, V> Drop for Leaf<K, V> {
                 ptr::drop_in_place(self.value[idx].as_mut_ptr());
             }
         }
-        println!("leaf dropped {:?}", self.count);
+        println!("leaf dropped {}", self.count);
     }
 }
 
-impl<K: Debug, V> Debug for Leaf<K, V> {
+impl<K: Ord + Clone + Debug, V: Clone> Debug for Leaf<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), Error> {
         write!(f, "Leaf -> {}", self.count);
         write!(f, "  \\-> [ ");
