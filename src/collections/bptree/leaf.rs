@@ -166,6 +166,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         self.count
     }
 
+    #[cfg(test)]
     pub(crate) fn verify(&self) -> bool {
         true
     }

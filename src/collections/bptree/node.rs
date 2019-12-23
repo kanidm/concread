@@ -40,14 +40,14 @@ where
 {
     #[cfg(test)]
     pub nid: usize,
-    txid: usize,
+    pub txid: usize,
     inner: T<K, V>,
 }
 
 pub(crate) type ABNode<K, V> = Arc<Box<Node<K, V>>>;
 
 impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
-    fn new_leaf(txid: usize) -> Self {
+    pub(crate) fn new_leaf(txid: usize) -> Self {
         Node {
             #[cfg(test)]
             nid: NODE_COUNTER.fetch_add(1, Ordering::AcqRel),
@@ -56,7 +56,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
-    fn req_clone(&self, txid: usize) -> BNClone<K, V> {
+    pub(crate) fn req_clone(&self, txid: usize) -> BNClone<K, V> {
         // Do we need to clone this node before we work on it?
         if txid == self.txid {
             BNClone::Ok
@@ -73,7 +73,8 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
-    fn verify(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn verify(&self) -> bool {
         match &self.inner {
             T::L(leaf) => leaf.verify(),
             T::B(branch) => branch.verify(),
@@ -101,7 +102,14 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
-    fn as_mut_leaf(&mut self) -> &mut Leaf<K, V> {
+    pub(crate) fn is_leaf(&self) -> bool {
+        match &self.inner {
+            T::L(leaf) => true,
+            T::B(branch) => false,
+        }
+    }
+
+    pub(crate) fn as_mut_leaf(&mut self) -> &mut Leaf<K, V> {
         match &mut self.inner {
             T::L(ref mut leaf) => leaf,
             T::B(_) => panic!(),
@@ -324,6 +332,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         self.count
     }
 
+    #[cfg(test)]
     fn check_sorted(&self) -> bool {
         // check the pivots are sorted.
         if self.count == 0 {
@@ -342,6 +351,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         }
     }
 
+    #[cfg(test)]
     fn check_descendents_valid(&self) -> bool {
         for work_idx in 0..self.count {
             // get left max and right min
@@ -360,6 +370,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         true
     }
 
+    #[cfg(test)]
     fn verify_children(&self) -> bool {
         // For each child node call verify on it.
         for work_idx in 0..self.count {
@@ -373,6 +384,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn verify(&self) -> bool {
         self.check_sorted() && self.check_descendents_valid() && self.verify_children()
     }

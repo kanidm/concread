@@ -23,6 +23,8 @@
 //! In the future, a concurrent BTree and HashTree will be added, that can be used inplace
 //! of a `RwLock<BTreeMap>` or `RwLock<HashMap>`. Stay tuned!
 
+// #![deny(warnings)]
+#![warn(unused_extern_crates)]
 #![warn(missing_docs)]
 
 extern crate crossbeam_epoch;
