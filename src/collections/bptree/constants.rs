@@ -11,4 +11,5 @@ pub const L_CAPACITY: usize = (CAPACITY - 2) / 2;
 // --> BRANCHES
 // We need one more value than key.
 pub const BK_CAPACITY: usize = L_CAPACITY - 1;
+pub const BK_CAPACITY_MIN_N1: usize = BK_CAPACITY - 1;
 pub const BV_CAPACITY: usize = L_CAPACITY;

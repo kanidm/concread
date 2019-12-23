@@ -11,7 +11,7 @@ pub(crate) struct Leaf<K, V> {
     value: [MaybeUninit<V>; L_CAPACITY],
 }
 
-impl<K: PartialEq + PartialOrd, V> Leaf<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
     pub fn new() -> Self {
         Leaf {
             count: 0,
@@ -204,13 +204,18 @@ impl<K, V> Drop for Leaf<K, V> {
                 ptr::drop_in_place(self.value[idx].as_mut_ptr());
             }
         }
-        // println!("leaf dropped {:?}", self.count);
+        println!("leaf dropped {:?}", self.count);
     }
 }
 
-impl<K, V> Debug for Leaf<K, V> {
+impl<K: Debug, V> Debug for Leaf<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), Error> {
-        write!(f, "Leaf -> {}", self.count)
+        write!(f, "Leaf -> {}", self.count);
+        write!(f, "  \\-> [ ");
+        for idx in 0..self.count {
+            write!(f, "{:?}, ", unsafe { &*self.key[idx].as_ptr() });
+        }
+        write!(f, " ]")
     }
 }
 

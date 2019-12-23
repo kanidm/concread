@@ -1,5 +1,5 @@
 use super::leaf::Leaf;
-use super::node::Node;
+use super::node::{ABNode, Node};
 
 #[derive(Debug)]
 pub(crate) enum BLInsertState<K, V> {
@@ -8,6 +8,7 @@ pub(crate) enum BLInsertState<K, V> {
     Split(K, V),
 }
 
+#[derive(Debug)]
 pub(crate) enum BLRemoveState<V> {
     Ok(Option<V>),
     // Indicate that we found the associated value, but this
@@ -15,6 +16,14 @@ pub(crate) enum BLRemoveState<V> {
     Shrink(Option<V>),
 }
 
+#[derive(Debug)]
+pub(crate) enum BRInsertState<K, V> {
+    Ok,
+    // Returns two nodes (l, r) that need to be handled.
+    Split(ABNode<K, V>, ABNode<K, V>),
+}
+
+#[derive(Debug)]
 pub(crate) enum BNClone<K, V> {
     // Not needed
     Ok,
