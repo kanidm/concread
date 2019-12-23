@@ -1,2 +1,3 @@
 pub mod bptree;
-// pub mod maple_tree;
+#[cfg(test)]
+pub mod maple_tree;
