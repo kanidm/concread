@@ -4,7 +4,7 @@
 // Additionally, the cursor also is responsible for general movement
 // throughout the structure and how to handle that effectively
 
-use super::node::ABNode;
+use super::node::{ABNode, Node};
 use std::collections::LinkedList;
 use std::fmt::Debug;
 use std::mem;
@@ -12,8 +12,9 @@ use std::sync::Arc;
 
 use super::leaf::Leaf;
 // use super::branch::Branch;
-use super::states::{BLInsertState, BNClone};
+use super::states::{BLInsertState, BNClone, CRInsertState};
 
+#[derive(Debug)]
 pub(crate) struct CursorRead<K, V>
 where
     K: Ord + Clone + Debug,
@@ -22,6 +23,7 @@ where
     root: ABNode<K, V>,
 }
 
+#[derive(Debug)]
 pub(crate) struct CursorWrite<K, V>
 where
     K: Ord + Clone + Debug,
@@ -30,7 +32,6 @@ where
     // Need to build a stack as we go - of what, I'm not sure ...
     txid: usize,
     root: ABNode<K, V>,
-    stack: LinkedList<()>,
 }
 
 impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
@@ -42,152 +43,46 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         CursorWrite {
             txid: txid,
             root: root,
-            stack: LinkedList::new(),
         }
     }
 
     pub(crate) fn finalise(self) -> ABNode<K, V> {
-        // Return the new root.
+        // Return the new root for replacement into the txn manager.
         self.root
-    }
-
-    fn clone_and_position(&mut self) -> *mut Leaf<K, V> {
-        /*
-         * Let's talk about the magic of this function. Come, join
-         * me around the [🔥🔥🔥]
-         *
-         * This function is the heart and soul of a copy on write
-         * structure - as we progress to the leaf location where we
-         * wish to perform an alteration, we clone (if required) all
-         * nodes on the path. This way an abort (rollback) of the
-         * commit simply is to drop the cursor, where the "new"
-         * cloned values are only referenced. To commit, we only need
-         * to replace the tree root in the parent structures as
-         * the cloned path must by definition include the root, and
-         * will contain references to nodes that did not need cloning,
-         * thus keeping them alive.
-         *
-         * To achieve this, there are some possible states we have to account.
-         * - the root is the leaf
-         * - the root is a branch with arbitrary branch nodes until leaf
-         *
-         * We must, effectively handle these situtations.
-         *
-         * As we are having to clone the path, this means we need access to
-         * the previous node *and* the next node. Why? Because if we need
-         * to clone the next node, we must update the value pointer to our
-         * node in the previous node to keep the cloned path consistent.
-         *
-         * This is why we need to consider the root is leaf situation - there
-         * is no previous node!
-         */
-
-        // If this isn't 0, we didn't unwind fully before!
-        assert!(self.stack.len() == 0);
-        /*
-         * [🔥🔥🔥]
-         * To start this process, we begin by cloning the root if required.
-         */
-        match self.root.req_clone(self.txid) {
-            BNClone::Ok => {}
-            BNClone::Clone(broot) => {
-                let mut abroot = Arc::new(broot);
-                mem::swap(&mut self.root, &mut abroot);
-                println!("Swapped root in cursor!");
-            }
-        };
-
-        /*
-         * [🔥🔥🔥]
-         * If the root is a leaf, then we return at this point. This is
-         * because we are now positioned to update the leaf, and we have
-         * no path to unwind (the empty list). The leaf is certainly from
-         * this transaction.
-         */
-        debug_assert!(self.root.txid == self.txid);
-        if self.root.is_leaf() {
-            // Turn it into a mut inner. This involves arc shenangians.
-            /*
-            let mref = if cfg!(test) {
-                Arc::get_mut(&mut self.root).unwrap()
-            } else {
-                Arc::get_mut_unchecked(&mut self.root)
-            };
-            */
-            let mref = Arc::get_mut(&mut self.root).unwrap();
-            // We know this will live long enough.
-            return mref.as_mut_leaf() as *mut Leaf<K, V>;
-        }
-
-        /*
-         * [🔥🔥🔥]
-         * If the root is a branch, then we must now begin to clone on the path.
-         * We have to search to find where the next node should be. We store the
-         * index of the node, so we have:
-         *
-         *  prev (cloned)
-         *   | .. some node idx
-         *   v
-         *  work_node
-         *
-         * The reason to retain the node idx of prev, is so that if work_node is
-         * cloned, then we can look back to prev and replace the previous arc
-         * with the new node. We'll also need to stash the idx and the prev as
-         * a tuple for unwinding.
-         *
-         *               prev (cloned)
-         *                | .. some node idx
-         *                v
-         *  work_node   new_node (cloned)
-         *    ^
-         *    \---- this will be referenced by the prev from a former transaction
-         *          so won't be dropped yet.
-         */
-
-        // Now that we have the root setup, we can do:
-        let mut prev_node = &self.root;
-        unimplemented!();
-        /*
-        while !work_node.is_leaf() {
-            unimplemented!();
-        }
-        */
-        // Work_node must contain a leaf.
-        // Prep it
     }
 
     // Functions as insert_or_update
     pub(crate) fn insert(&mut self, k: K, v: V) -> Option<V> {
-        // Walk down the tree to the k location, cloning on the path.
-        let leaf = self.clone_and_position();
-        // Now insert and unwind.
-        let mut r = unsafe { (&mut *leaf).insert_or_update(k, v) };
-        /*
-         * Now begin to unwind, this is entirely dictated by r.
-         * Because r is from leaf, it's going to set the course.
-         */
-        let mut nnode = match r {
-            BLInsertState::Ok(ir) => {
-                /*
-                 * If this is Ok -> Simply clear the ll and return. Done.
-                 */
-                self.stack.clear();
-                return ir;
+        match clone_and_insert(&mut self.root, self.txid, k, v) {
+            CRInsertState::NoClone(res) => res,
+            CRInsertState::Clone(res, mut nnode) => {
+                // We have a new root node, swap it in.
+                mem::swap(&mut self.root, &mut nnode);
+                // Return the insert result
+                res
             }
-            BLInsertState::Split(k, v) => {
-                /*
-                 *
-                 * If this is split - we may need to split and walk back all the way
-                 * back up the tree, this is why we stored all those pointers and
-                 * indexes!
-                 */
-                // Make a new node, and return
-                unimplemented!();
+            CRInsertState::CloneSplit(lnode, rnode) => {
+                // The previous root had to split - make a new
+                // root now and put it inplace.
+                let mut nroot = Node::new_branch(self.txid, lnode, rnode);
+                mem::swap(&mut self.root, &mut nroot);
+                // As we split, there must NOT have been an existing
+                // key to overwrite.
+                None
             }
-        };
-
-        // Now, while we keep getting BRInsertState::Split, keep
-        // walking back up and inserting as needed.
+            CRInsertState::Split(rnode) => {
+                // The previous root was already part of this txn, but has now
+                // split. We need to construct a new root and swap them.
+                //
+                // Note, that we have to briefly take an extra RC on the root so
+                // that we can get it into the branch.
+                let mut nroot = Node::new_branch(self.txid, self.root.clone(), rnode);
+                mem::swap(&mut self.root, &mut nroot);
+                // As we split, there must NOT have been an existing
+                // key to overwrite.
+                None
+            }
+        }
     }
 
     #[cfg(test)]
@@ -208,8 +103,69 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorRead<K, V> {
     }
 }
 
+fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
+    node: &mut ABNode<K, V>,
+    txid: usize,
+    k: K,
+    v: V,
+) -> CRInsertState<K, V> {
+    /*
+     * Let's talk about the magic of this function. Come, join
+     * me around the [🔥🔥🔥]
+     *
+     * This function is the heart and soul of a copy on write
+     * structure - as we progress to the leaf location where we
+     * wish to perform an alteration, we clone (if required) all
+     * nodes on the path. This way an abort (rollback) of the
+     * commit simply is to drop the cursor, where the "new"
+     * cloned values are only referenced. To commit, we only need
+     * to replace the tree root in the parent structures as
+     * the cloned path must by definition include the root, and
+     * will contain references to nodes that did not need cloning,
+     * thus keeping them alive.
+     *
+     *
+     */
+
+    if node.is_leaf() {
+        // Leaf path
+        if node.txid == txid {
+            // No clone required.
+            // simply do the insert.
+            let mref = Arc::get_mut(node).unwrap();
+            match mref.as_mut_leaf().insert_or_update(k, v) {
+                BLInsertState::Ok(res) => CRInsertState::NoClone(res),
+                BLInsertState::Split(sk, sv) => {
+                    // We split, but left is already part of the txn group, so lets
+                    // just return what's new.
+                    let rnode = Node::new_leaf_ins(txid, sk, sv);
+                    CRInsertState::Split(rnode)
+                }
+            }
+        } else {
+            // Clone required.
+            let mut cnode = node.req_clone(txid);
+            let mref = Arc::get_mut(&mut cnode).unwrap();
+            // insert to the new node.
+            match mref.as_mut_leaf().insert_or_update(k, v) {
+                BLInsertState::Ok(res) => CRInsertState::Clone(res, cnode),
+                BLInsertState::Split(sk, sv) => {
+                    let rnode = Node::new_leaf_ins(txid, sk, sv);
+                    CRInsertState::CloneSplit(cnode, rnode)
+                }
+            }
+        }
+    } else {
+        // Branch path
+        //    if we need to clone
+        //    we dont.
+        unimplemented!();
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::constants::L_CAPACITY;
     use super::super::leaf::Leaf;
     use super::super::node::{ABNode, Node};
     use super::CursorWrite;
@@ -220,6 +176,19 @@ mod tests {
         {
             let nmut = Arc::get_mut(&mut node).unwrap().as_mut().as_mut_leaf();
             nmut.insert_or_update(v, v);
+        }
+        node
+    }
+
+    fn create_leaf_node_full(vbase: usize) -> ABNode<usize, usize> {
+        assert!(vbase % 10 == 0);
+        let mut node = Arc::new(Box::new(Node::new_leaf(0)));
+        {
+            let nmut = Arc::get_mut(&mut node).unwrap().as_mut().as_mut_leaf();
+            for idx in 0..L_CAPACITY {
+                let v = vbase + idx;
+                nmut.insert_or_update(v, v);
+            }
         }
         node
     }
@@ -246,4 +215,111 @@ mod tests {
         assert!(wcurs.verify());
     }
 
+    #[test]
+    fn test_bptree_cursor_insert_split_1() {
+        // Given a leaf at max, insert such that:
+        //
+        // leaf
+        //
+        // leaf -> split leaf
+        //
+        //
+        //      root
+        //     /    \
+        //  leaf    split leaf
+        //
+        // It's worth noting that this is testing the CloneSplit path
+        // as leaf needs a clone AND to split to achieve the new root.
+
+        let node = create_leaf_node_full(10);
+        let mut wcurs = CursorWrite::new(node);
+        let prev_txid = wcurs.root_txid();
+
+        let r = wcurs.insert(1, 1);
+        assert!(r.is_none());
+        let r1_txid = wcurs.root_txid();
+        assert!(r1_txid == prev_txid + 1);
+        assert!(wcurs.verify());
+        println!("{:?}", wcurs);
+    }
+
+    #[test]
+    fn test_bptree_cursor_insert_split_2() {
+        // Similar to split_1, but test the Split only path. This means
+        // leaf needs to be below max to start, and we insert enough in-txn
+        // to trigger a clone of leaf AND THEN to cause the split.
+        let node = create_leaf_node(0);
+        let mut wcurs = CursorWrite::new(node);
+
+        for v in 1..(L_CAPACITY + 1) {
+            println!("ITER v {}", v);
+            let r = wcurs.insert(v, v);
+            assert!(r.is_none());
+            assert!(wcurs.verify());
+        }
+        println!("{:?}", wcurs);
+    }
+
+    #[test]
+    fn test_bptree_cursor_insert_split_3() {
+        //      root
+        //     /    \
+        //  leaf    split leaf
+        //       ^
+        //        \----- nnode
+        //
+        //  Check leaf split inbetween l/sl (new txn)
+        //
+    }
+
+    #[test]
+    fn test_bptree_cursor_insert_split_4() {
+        //      root
+        //     /    \
+        //  leaf    split leaf
+        //                       ^
+        //                        \----- nnode
+        //
+        //  Check leaf split of sl (new txn)
+        //
+    }
+
+    #[test]
+    fn test_bptree_cursor_insert_split_5() {
+        //      root
+        //     /    \
+        //  leaf    split leaf
+        //       ^
+        //        \----- nnode
+        //
+        //  Check leaf split inbetween l/sl (same txn)
+        //
+    }
+
+    #[test]
+    fn test_bptree_cursor_insert_split_6() {
+        //      root
+        //     /    \
+        //  leaf    split leaf
+        //                       ^
+        //                        \----- nnode
+        //
+        //  Check leaf split of sl (same txn)
+        //
+    }
+
+    #[test]
+    fn test_bptree_cursor_insert_stress_1() {
+        // Insert ascending
+    }
+
+    #[test]
+    fn test_bptree_cursor_insert_stress_2() {
+        // Insert descending
+    }
+
+    #[test]
+    fn test_bptree_cursor_insert_stress_3() {
+        // Insert random
+    }
 }

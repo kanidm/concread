@@ -56,21 +56,40 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
-    pub(crate) fn req_clone(&self, txid: usize) -> BNClone<K, V> {
-        // Do we need to clone this node before we work on it?
-        if txid == self.txid {
-            BNClone::Ok
-        } else {
-            BNClone::Clone(Box::new(Node {
-                #[cfg(test)]
-                nid: NODE_COUNTER.fetch_add(1, Ordering::AcqRel),
-                txid: txid,
-                inner: match &self.inner {
-                    T::L(leaf) => T::L(leaf.clone()),
-                    T::B(branch) => T::B(branch.clone()),
-                },
-            }))
+    pub(crate) fn new_branch(txid: usize, l: ABNode<K, V>, r: ABNode<K, V>) -> ABNode<K, V> {
+        Arc::new(Box::new(Node {
+            #[cfg(test)]
+            nid: NODE_COUNTER.fetch_add(1, Ordering::AcqRel),
+            txid: txid,
+            inner: T::B(Branch::new(l, r)),
+        }))
+    }
+
+    pub(crate) fn new_leaf_ins(txid: usize, k: K, v: V) -> ABNode<K, V> {
+        let mut node = Arc::new(Box::new(Node::new_leaf(txid)));
+        {
+            let nmut = Arc::get_mut(&mut node).unwrap().as_mut().as_mut_leaf();
+            nmut.insert_or_update(k, v);
         }
+        node
+    }
+
+    pub(crate) fn inner_clone(&self) -> T<K, V> {
+        match &self.inner {
+            T::L(leaf) => T::L(leaf.clone()),
+            T::B(branch) => T::B(branch.clone()),
+        }
+    }
+
+    pub(crate) fn req_clone(&self, txid: usize) -> ABNode<K, V> {
+        debug_assert!(txid != self.txid);
+        // Do we need to clone this node before we work on it?
+        Arc::new(Box::new(Node {
+            #[cfg(test)]
+            nid: NODE_COUNTER.fetch_add(1, Ordering::AcqRel),
+            txid: txid,
+            inner: self.inner_clone(),
+        }))
     }
 
     #[cfg(test)]
@@ -418,7 +437,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Debug for Branch<K, V> {
                 write!(f, "{:^7?}", unsafe { (*self.node[idx + 1].as_ptr()).min() });
             }
         }
-        write!(f, " ]")
+        write!(f, " ]\n")
     }
 }
 
@@ -438,7 +457,7 @@ impl<K: Clone + Ord, V: Clone> Drop for Branch<K, V> {
                 ptr::drop_in_place(self.node[idx].as_mut_ptr());
             }
         }
-        println!("branch dropped {} + 1", self.count);
+        println!("branch dropped k:{}, v:{}", self.count, self.count + 1);
     }
 }
 
@@ -457,26 +476,6 @@ mod tests {
     use super::super::states::{BNClone, BRInsertState};
     use super::{ABNode, Branch, Node};
     use std::sync::Arc;
-
-    // check clone txid behaviour
-    #[test]
-    fn test_bptree_node_req_clone() {
-        // Make a new node.
-        let nroot: Node<usize, usize> = Node::new_leaf(0);
-        // Req to clone it.
-        match nroot.req_clone(0) {
-            BNClone::Ok => {}
-            BNClone::Clone(_) => panic!(),
-        };
-        // Now do one where we do clone.
-        let nnode = match nroot.req_clone(1) {
-            BNClone::Ok => panic!(),
-            BNClone::Clone(nnode) => nnode,
-        };
-
-        assert!(nnode.txid == 1);
-        assert!(nnode.len() == nroot.len());
-    }
 
     #[test]
     fn test_bptree_node_new() {
