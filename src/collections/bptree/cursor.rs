@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use super::leaf::Leaf;
 // use super::branch::Branch;
-use super::states::{BLInsertState, BNClone, CRInsertState};
+use super::states::{BLInsertState, BNClone, BRInsertState, CRInsertState};
 
 #[derive(Debug)]
 pub(crate) struct CursorRead<K, V>
@@ -157,9 +157,64 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
         }
     } else {
         // Branch path
-        //    if we need to clone
-        //    we dont.
-        unimplemented!();
+        // The branch path is a bit more reactive than the leaf path, as we trigger
+        // the leaf op, and then decide what we need to do.
+        //
+        // - locate the node we need to work on.
+        let node_txid = node.txid;
+        let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
+        let anode_idx = nmref.locate_node(&k);
+        let mut anode = nmref.get_mut_idx(anode_idx);
+        match clone_and_insert(&mut anode, txid, k, v) {
+            CRInsertState::Clone(_, _) => {
+                #[cfg(test)]
+                println!("TEMP -> {:?}", anode.nid);
+                unimplemented!();
+            }
+            CRInsertState::NoClone(res) => {
+                // If our descendant did not clone, then we don't have to either.
+                debug_assert!(txid == node.txid);
+                CRInsertState::NoClone(res)
+            }
+            CRInsertState::Split(_) => {
+                #[cfg(test)]
+                println!("TEMP -> {:?}", anode.nid);
+                unimplemented!();
+            }
+            CRInsertState::CloneSplit(lnode, rnode) => {
+                // So we updated our descendant at anode_idx, and it cloned and split.
+                // This means we need to take a number of steps.
+
+                // First, we need to determine if we require cloning.
+                if txid == node_txid {
+                    // work inplace.
+                    // Second, we update anode_idx node with our lnode as the new clone.
+                    nmref.replace_by_idx(anode_idx, lnode);
+
+                    // Third we insert rnode - perfect world it's at anode_idx + 1, but
+                    // we use the normal insert routine for now.
+                    unimplemented!();
+                } else {
+                    let mut cnode = node.req_clone(txid);
+                    let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
+
+                    // Second, we update anode_idx node with our lnode as the new clone.
+                    nmref.replace_by_idx(anode_idx, lnode);
+
+                    // Third we insert rnode - perfect world it's at anode_idx + 1, but
+                    // we use the normal insert routine for now.
+                    match nmref.add_node(rnode) {
+                        BRInsertState::Ok => CRInsertState::Clone(None, cnode),
+                        BRInsertState::Split(clnode, crnode) => {
+                            // Create a new branch to hold these children.
+                            let nrnode = Node::new_branch(txid, clnode, crnode);
+                            // Return it
+                            CRInsertState::CloneSplit(cnode, nrnode)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -269,7 +324,17 @@ mod tests {
         //        \----- nnode
         //
         //  Check leaf split inbetween l/sl (new txn)
-        //
+        let lnode = create_leaf_node_full(10);
+        let rnode = create_leaf_node_full(20);
+        let root = Node::new_branch(0, lnode, rnode);
+        let mut wcurs = CursorWrite::new(root);
+        assert!(wcurs.verify());
+        println!("{:?}", wcurs);
+
+        let r = wcurs.insert(19, 19);
+        assert!(r.is_none());
+        assert!(wcurs.verify());
+        println!("{:?}", wcurs);
     }
 
     #[test]
@@ -282,6 +347,16 @@ mod tests {
         //
         //  Check leaf split of sl (new txn)
         //
+        let lnode = create_leaf_node_full(10);
+        let rnode = create_leaf_node_full(20);
+        let root = Node::new_branch(0, lnode, rnode);
+        let mut wcurs = CursorWrite::new(root);
+        assert!(wcurs.verify());
+
+        let r = wcurs.insert(29, 29);
+        assert!(r.is_none());
+        assert!(wcurs.verify());
+        println!("{:?}", wcurs);
     }
 
     #[test]

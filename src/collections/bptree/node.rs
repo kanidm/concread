@@ -134,6 +134,13 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
             T::B(_) => panic!(),
         }
     }
+
+    pub(crate) fn as_mut_branch(&mut self) -> &mut Branch<K, V> {
+        match &mut self.inner {
+            T::L(_) => panic!(),
+            T::B(ref mut branch) => branch,
+        }
+    }
 }
 
 impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
@@ -331,13 +338,41 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         }
     }
 
+    // get a node containing some K - need to return our related idx.
+    pub(crate) fn locate_node(&self, k: &K) -> usize {
+        let r = {
+            let (left, _) = self.key.split_at(self.count);
+            let inited: &[K] =
+                unsafe { slice::from_raw_parts(left.as_ptr() as *const K, left.len()) };
+            inited.binary_search(&k)
+        };
+
+        // If the value is Ok(idx), then that means
+        // we were located to the right node. This is because we
+        // exactly hit and located on the key.
+        //
+        // If the value is Err(idx), then we have the exact index already.
+        // as branches is one more.
+        match r {
+            Ok(v) => v + 1,
+            Err(v) => v,
+        }
+    }
+
     // remove a node by idx.
-    pub(crate) fn remove_by_idx(idx: usize) -> () {
+    pub(crate) fn remove_by_idx(&mut self, idx: usize) -> () {
         // remove by idx.
         unimplemented!();
     }
 
-    // get a node containing some K - need to return our related idx.
+    pub(crate) fn replace_by_idx(&mut self, idx: usize, node: ABNode<K, V>) -> () {
+        unimplemented!();
+    }
+
+    pub(crate) fn get_mut_idx(&mut self, idx: usize) -> &mut ABNode<K, V> {
+        debug_assert!(idx < self.count);
+        unsafe { &mut *self.node[idx].as_mut_ptr() }
+    }
 
     pub(crate) fn min(&self) -> &K {
         unsafe { &*self.key[0].as_ptr() }
