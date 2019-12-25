@@ -155,6 +155,13 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
+    pub(crate) fn as_leaf(&self) -> &Leaf<K, V> {
+        match &self.inner {
+            T::L(ref leaf) => leaf,
+            T::B(_) => panic!(),
+        }
+    }
+
     pub(crate) fn as_mut_branch(&mut self) -> &mut Branch<K, V> {
         match &mut self.inner {
             T::L(_) => panic!(),
@@ -162,10 +169,24 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
+    pub(crate) fn as_branch(&self) -> &Branch<K, V> {
+        match &self.inner {
+            T::L(_) => panic!(),
+            T::B(ref branch) => branch,
+        }
+    }
+
     pub(crate) fn tree_density(&self) -> (usize, usize) {
         match &self.inner {
             T::L(leaf) => leaf.tree_density(),
             T::B(branch) => branch.tree_density(),
+        }
+    }
+
+    pub(crate) fn leaf_count(&self) -> usize {
+        match &self.inner {
+            T::L(leaf) => 1,
+            T::B(branch) => branch.leaf_count(),
         }
     }
 }
@@ -399,6 +420,19 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         unsafe { &mut *self.node[idx].as_mut_ptr() }
     }
 
+    pub(crate) fn get_idx(&self, idx: usize) -> &ABNode<K, V> {
+        debug_assert!(idx <= self.count);
+        unsafe { &*self.node[idx].as_ptr() }
+    }
+
+    pub(crate) fn get_idx_checked(&self, idx: usize) -> Option<&ABNode<K, V>> {
+        if idx <= self.count {
+            Some(unsafe { &*self.node[idx].as_ptr() })
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn min(&self) -> &K {
         unsafe { (*self.node[0].as_ptr()).min() }
     }
@@ -420,12 +454,20 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
     pub(crate) fn tree_density(&self) -> (usize, usize) {
         let mut lcount = 0; // leaf populated
         let mut mcount = 0; // leaf max possible
-        for idx in 0..(self.count) {
+        for idx in 0..(self.count + 1) {
             let (l, m) = unsafe { (*self.node[idx].as_ptr()).tree_density() };
             lcount += l;
             mcount += m;
         }
         (lcount, mcount)
+    }
+
+    pub(crate) fn leaf_count(&self) -> usize {
+        let mut lcount = 0;
+        for idx in 0..(self.count + 1) {
+            lcount += unsafe { (*self.node[idx].as_ptr()).leaf_count() };
+        }
+        lcount
     }
 
     #[cfg(test)]

@@ -162,6 +162,16 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
             .map(|idx| unsafe { &mut *self.value[idx].as_mut_ptr() })
     }
 
+    pub(crate) fn get_kv_idx_checked(&self, idx: usize) -> Option<(&K, &V)> {
+        if idx < self.count {
+            Some((unsafe { &*self.key[idx].as_ptr() }, unsafe {
+                &*self.value[idx].as_ptr()
+            }))
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.count
     }

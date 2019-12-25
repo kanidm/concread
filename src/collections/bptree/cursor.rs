@@ -184,10 +184,6 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<K, V> 
     }
 
     fn len(&self) -> usize {
-        if cfg!(test) {
-            let (l, _) = self.tree_density();
-            assert!(l == self.length);
-        }
         self.length
     }
 }
@@ -200,6 +196,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite<K, V>
     fn len(&self) -> usize {
         if cfg!(test) {
             let (l, _) = self.tree_density();
+            println!("{}, {}", l, self.length);
             assert!(l == self.length);
         }
         self.length
