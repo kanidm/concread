@@ -84,7 +84,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
             Some(idx) => {
                 // Get the k/v out. These slots will be over-written, and pk/pv
                 // are now subject to drop handling.
-                let pk = unsafe { slice_remove(&mut self.key, idx).assume_init() };
+                let _pk = unsafe { slice_remove(&mut self.key, idx).assume_init() };
                 let pv = unsafe { slice_remove(&mut self.value, idx).assume_init() };
                 // drop our count, as we have removed a k/v
                 self.count -= 1;
@@ -170,6 +170,10 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
     pub(crate) fn verify(&self) -> bool {
         true
     }
+
+    pub(crate) fn tree_density(&self) -> (usize, usize) {
+        (self.count, L_CAPACITY)
+    }
 }
 
 impl<K: Ord + Clone, V: Clone> Clone for Leaf<K, V> {
@@ -215,10 +219,10 @@ impl<K: Ord + Clone, V: Clone> Drop for Leaf<K, V> {
 
 impl<K: Ord + Clone + Debug, V: Clone> Debug for Leaf<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), Error> {
-        write!(f, "Leaf -> {}", self.count);
-        write!(f, "  \\-> [ ");
+        write!(f, "Leaf -> {}", self.count)?;
+        write!(f, "  \\-> [ ")?;
         for idx in 0..self.count {
-            write!(f, "{:?}, ", unsafe { &*self.key[idx].as_ptr() });
+            write!(f, "{:?}, ", unsafe { &*self.key[idx].as_ptr() })?;
         }
         write!(f, " ]")
     }

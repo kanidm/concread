@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use super::constants::{BK_CAPACITY, BK_CAPACITY_MIN_N1, BV_CAPACITY};
 use super::leaf::Leaf;
-use super::states::{BLInsertState, BLRemoveState, BNClone, BRInsertState};
+use super::states::BRInsertState;
 
+#[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static NODE_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -56,6 +57,10 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
             txid: txid,
             inner: T::L(Leaf::new()),
         }
+    }
+
+    pub(crate) fn new_ableaf(txid: usize) -> ABNode<K, V> {
+        Arc::new(Box::new(Self::new_leaf(txid)))
     }
 
     pub(crate) fn new_branch(txid: usize, l: ABNode<K, V>, r: ABNode<K, V>) -> ABNode<K, V> {
@@ -123,10 +128,23 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
+    pub(crate) fn get_ref(&self, k: &K) -> Option<&V> {
+        match &self.inner {
+            T::L(leaf) => {
+                println!("leaf -> {:?}", leaf);
+                leaf.get_ref(k)
+            }
+            T::B(branch) => {
+                println!("branch -> {:?}", branch);
+                branch.get_ref(k)
+            }
+        }
+    }
+
     pub(crate) fn is_leaf(&self) -> bool {
         match &self.inner {
-            T::L(leaf) => true,
-            T::B(branch) => false,
+            T::L(_leaf) => true,
+            T::B(_branch) => false,
         }
     }
 
@@ -141,6 +159,13 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         match &mut self.inner {
             T::L(_) => panic!(),
             T::B(ref mut branch) => branch,
+        }
+    }
+
+    pub(crate) fn tree_density(&self) -> (usize, usize) {
+        match &self.inner {
+            T::L(leaf) => leaf.tree_density(),
+            T::B(branch) => branch.tree_density(),
         }
     }
 }
@@ -163,7 +188,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
 
     // Add a new pivot + node.
     pub(crate) fn add_node(&mut self, node: ABNode<K, V>) -> BRInsertState<K, V> {
-        println!("pre ins -> {:?}", self);
         // Do we have space?
         if self.count == BK_CAPACITY {
             // if no space ->
@@ -183,12 +207,10 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                     unsafe { slice::from_raw_parts(left.as_ptr() as *const K, left.len()) };
                 inited.binary_search(kr)
             };
-            println!("bst result {:?}", r);
             let ins_idx = r.unwrap_err();
             let res = match ins_idx {
                 // Case 2
                 BK_CAPACITY => {
-                    println!("Case 2");
                     // Greater than all current values, so we'll just return max and node.
                     let max = unsafe {
                         ptr::read(self.node.get_unchecked(BV_CAPACITY - 1)).assume_init()
@@ -201,7 +223,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 }
                 // Case 3
                 BK_CAPACITY_MIN_N1 => {
-                    println!("Case 3");
                     // Greater than all but max, so we return max and node in the correct order.
                     let max = unsafe {
                         ptr::read(self.node.get_unchecked(BV_CAPACITY - 1)).assume_init()
@@ -214,7 +235,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 }
                 // Case 1
                 ins_idx => {
-                    println!("Case 1");
                     // Get the max - 1 and max nodes out.
                     let maxn1 = unsafe {
                         ptr::read(self.node.get_unchecked(BV_CAPACITY - 2)).assume_init()
@@ -246,7 +266,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
 
             // Adjust the count, because we always remove at least 1 from the keys.
             self.count -= 1;
-            println!("post ins -> {:?}", self);
             res
         } else {
             // if space ->
@@ -279,7 +298,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             // Now we insert 5, and 7, splits. 5 would remain in the tree and we'd split 7 to the right
             //
             // As a result, any "Ok(idx)" must represent a corruption of the tree.
-            println!("bst result {:?}", r);
             // debug_assert!(r.is_err());
             let ins_idx = r.unwrap_err();
             let leaf_ins_idx = ins_idx + 1;
@@ -334,7 +352,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             }
             // finally update the count
             self.count += 1;
-            println!("post ins -> {:?}", self);
             // Return that we are okay to go!
             BRInsertState::Ok
         }
@@ -370,7 +387,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
 
     pub(crate) fn replace_by_idx(&mut self, idx: usize, mut node: ABNode<K, V>) -> () {
         debug_assert!(idx <= self.count);
-        println!("replacing by idx");
         // We have to swap the value at idx with this node, then ensure that the
         // prev is droped.
         unsafe {
@@ -384,15 +400,32 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
     }
 
     pub(crate) fn min(&self) -> &K {
-        unsafe { &*self.key[0].as_ptr() }
+        unsafe { (*self.node[0].as_ptr()).min() }
     }
 
     pub(crate) fn max(&self) -> &K {
-        unsafe { &*self.key[self.count - 1].as_ptr() }
+        unsafe { (*self.node[self.count].as_ptr()).max() }
     }
 
     pub(crate) fn len(&self) -> usize {
         self.count
+    }
+
+    pub(crate) fn get_ref(&self, k: &K) -> Option<&V> {
+        // Which node should hold this value?
+        let idx = self.locate_node(k);
+        unsafe { (*self.node[idx].as_ptr()).get_ref(k) }
+    }
+
+    pub(crate) fn tree_density(&self) -> (usize, usize) {
+        let mut lcount = 0; // leaf populated
+        let mut mcount = 0; // leaf max possible
+        for idx in 0..(self.count) {
+            let (l, m) = unsafe { (*self.node[idx].as_ptr()).tree_density() };
+            lcount += l;
+            mcount += m;
+        }
+        (lcount, mcount)
     }
 
     #[cfg(test)]
@@ -485,24 +518,24 @@ impl<K: Clone + Ord, V: Clone> Clone for Branch<K, V> {
 
 impl<K: Clone + Ord + Debug, V: Clone> Debug for Branch<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), Error> {
-        write!(f, "Branch -> {}\n", self.count);
-        write!(f, "  \\-> [  |");
+        write!(f, "Branch -> {}\n", self.count)?;
+        write!(f, "  \\-> [  |")?;
         for idx in 0..self.count {
-            write!(f, "{:^6?}|", unsafe { &*self.key[idx].as_ptr() });
+            write!(f, "{:^6?}|", unsafe { &*self.key[idx].as_ptr() })?;
         }
         #[cfg(test)]
         {
-            write!(f, " ]\n");
-            write!(f, " nids [{:^6?}", unsafe { (*self.node[0].as_ptr()).nid });
+            write!(f, " ]\n")?;
+            write!(f, " nids [{:^6?}", unsafe { (*self.node[0].as_ptr()).nid })?;
             for idx in 0..self.count {
-                write!(f, "{:^7?}", unsafe { (*self.node[idx + 1].as_ptr()).nid });
+                write!(f, "{:^7?}", unsafe { (*self.node[idx + 1].as_ptr()).nid })?;
             }
-            write!(f, " ]\n");
+            write!(f, " ]\n")?;
             write!(f, " mins [{:^6?}", unsafe {
                 (*self.node[0].as_ptr()).min()
-            });
+            })?;
             for idx in 0..self.count {
-                write!(f, "{:^7?}", unsafe { (*self.node[idx + 1].as_ptr()).min() });
+                write!(f, "{:^7?}", unsafe { (*self.node[idx + 1].as_ptr()).min() })?;
             }
         }
         write!(f, " ]\n")

@@ -28,15 +28,16 @@
 #![warn(missing_docs)]
 
 extern crate crossbeam_epoch;
-extern crate crossbeam_utils;
+// extern crate crossbeam_utils;
 extern crate parking_lot;
 
 #[cfg(test)]
 extern crate rand;
 
-mod collections;
+pub mod collections;
 pub mod cowcell;
 pub mod ebrcell;
+#[cfg(test)]
 mod lincowcell;
 
 pub use cowcell::CowCell;
