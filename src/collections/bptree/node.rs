@@ -11,6 +11,8 @@ use super::states::{BLInsertState, BLRemoveState, BNClone, BRInsertState};
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static NODE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static DROP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) struct Branch<K, V>
 where
@@ -361,16 +363,23 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
 
     // remove a node by idx.
     pub(crate) fn remove_by_idx(&mut self, idx: usize) -> () {
+        debug_assert!(idx <= self.count);
         // remove by idx.
         unimplemented!();
     }
 
-    pub(crate) fn replace_by_idx(&mut self, idx: usize, node: ABNode<K, V>) -> () {
-        unimplemented!();
+    pub(crate) fn replace_by_idx(&mut self, idx: usize, mut node: ABNode<K, V>) -> () {
+        debug_assert!(idx <= self.count);
+        println!("replacing by idx");
+        // We have to swap the value at idx with this node, then ensure that the
+        // prev is droped.
+        unsafe {
+            ptr::swap(self.node[idx].as_mut_ptr(), &mut node as *mut ABNode<K, V>);
+        }
     }
 
     pub(crate) fn get_mut_idx(&mut self, idx: usize) -> &mut ABNode<K, V> {
-        debug_assert!(idx < self.count);
+        debug_assert!(idx <= self.count);
         unsafe { &mut *self.node[idx].as_mut_ptr() }
     }
 
@@ -446,7 +455,31 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
 
 impl<K: Clone + Ord, V: Clone> Clone for Branch<K, V> {
     fn clone(&self) -> Self {
-        unimplemented!();
+        let mut nkey: [MaybeUninit<K>; BK_CAPACITY] =
+            unsafe { MaybeUninit::uninit().assume_init() };
+        let mut nnode: [MaybeUninit<Arc<Box<Node<K, V>>>>; BV_CAPACITY] =
+            unsafe { MaybeUninit::uninit().assume_init() };
+        for idx in 0..self.count {
+            unsafe {
+                let lkey = (*self.key[idx].as_ptr()).clone();
+                nkey[idx].as_mut_ptr().write(lkey);
+            }
+            unsafe {
+                let lnode = (*self.node[idx].as_ptr()).clone();
+                nnode[idx].as_mut_ptr().write(lnode);
+            }
+        }
+        // clone the last node.
+        unsafe {
+            let lnode = (*self.node[self.count].as_ptr()).clone();
+            nnode[self.count].as_mut_ptr().write(lnode);
+        }
+
+        Branch {
+            count: self.count,
+            key: nkey,
+            node: nnode,
+        }
     }
 }
 
@@ -494,6 +527,20 @@ impl<K: Clone + Ord, V: Clone> Drop for Branch<K, V> {
         }
         println!("branch dropped k:{}, v:{}", self.count, self.count + 1);
     }
+}
+
+#[cfg(test)]
+impl<K: Clone + Ord, V: Clone> Drop for Node<K, V> {
+    fn drop(&mut self) {
+        DROP_COUNTER.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn check_drop_count() {
+    let node = NODE_COUNTER.load(Ordering::Acquire);
+    let drop = DROP_COUNTER.load(Ordering::Acquire);
+    assert!(node == drop);
 }
 
 unsafe fn slice_insert<T>(slice: &mut [T], new: T, idx: usize) {

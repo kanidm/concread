@@ -166,20 +166,46 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
         let anode_idx = nmref.locate_node(&k);
         let mut anode = nmref.get_mut_idx(anode_idx);
         match clone_and_insert(&mut anode, txid, k, v) {
-            CRInsertState::Clone(_, _) => {
-                #[cfg(test)]
-                println!("TEMP -> {:?}", anode.nid);
-                unimplemented!();
+            CRInsertState::Clone(res, lnode) => {
+                // Do we require cloning?
+                if txid == node_txid {
+                    // This is reached by a sibling leaf already cloning, then a second leaf
+                    // updates.
+                    nmref.replace_by_idx(anode_idx, lnode);
+                    CRInsertState::NoClone(res)
+                } else {
+                    let mut cnode = node.req_clone(txid);
+                    let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
+                    nmref.replace_by_idx(anode_idx, lnode);
+                    // We have be cloned and done the needed replace of the child, so now we
+                    // pass our cloned state back up.
+                    CRInsertState::Clone(res, cnode)
+                }
             }
             CRInsertState::NoClone(res) => {
                 // If our descendant did not clone, then we don't have to either.
                 debug_assert!(txid == node.txid);
                 CRInsertState::NoClone(res)
             }
-            CRInsertState::Split(_) => {
-                #[cfg(test)]
-                println!("TEMP -> {:?}", anode.nid);
-                unimplemented!();
+            CRInsertState::Split(rnode) => {
+                // Our child has split, but was already cloned in this txn. Now we need to decide
+                // what is needed.
+                if txid == node_txid {
+                    match nmref.add_node(rnode) {
+                        // Similar to CloneSplit - we are either okay, and the insert was happy.
+                        BRInsertState::Ok => CRInsertState::NoClone(None),
+                        // Or *we* split as well, and need to return a new sibling branch.
+                        BRInsertState::Split(clnode, crnode) => {
+                            // Create a new branch to hold these children.
+                            let nrnode = Node::new_branch(txid, clnode, crnode);
+                            // Return it
+                            CRInsertState::Split(nrnode)
+                        }
+                    }
+                } else {
+                    // I think
+                    unreachable!("This represents a corrupt tree state");
+                }
             }
             CRInsertState::CloneSplit(lnode, rnode) => {
                 // So we updated our descendant at anode_idx, and it cloned and split.
@@ -193,7 +219,17 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
 
                     // Third we insert rnode - perfect world it's at anode_idx + 1, but
                     // we use the normal insert routine for now.
-                    unimplemented!();
+                    match nmref.add_node(rnode) {
+                        // Similar to CloneSplit - we are either okay, and the insert was happy.
+                        BRInsertState::Ok => CRInsertState::NoClone(None),
+                        // Or *we* split as well, and need to return a new sibling branch.
+                        BRInsertState::Split(clnode, crnode) => {
+                            // Create a new branch to hold these children.
+                            let nrnode = Node::new_branch(txid, clnode, crnode);
+                            // Return it
+                            CRInsertState::Split(nrnode)
+                        }
+                    }
                 } else {
                     let mut cnode = node.req_clone(txid);
                     let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
@@ -222,8 +258,11 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
 mod tests {
     use super::super::constants::L_CAPACITY;
     use super::super::leaf::Leaf;
-    use super::super::node::{ABNode, Node};
+    use super::super::node::{check_drop_count, ABNode, Node};
     use super::CursorWrite;
+    use rand::prelude::*;
+    use rand::seq::SliceRandom;
+    use std::mem;
     use std::sync::Arc;
 
     fn create_leaf_node(v: usize) -> ABNode<usize, usize> {
@@ -296,6 +335,9 @@ mod tests {
         assert!(r1_txid == prev_txid + 1);
         assert!(wcurs.verify());
         println!("{:?}", wcurs);
+        // On shutdown, check we dropped all as needed.
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -313,6 +355,9 @@ mod tests {
             assert!(wcurs.verify());
         }
         println!("{:?}", wcurs);
+        // On shutdown, check we dropped all as needed.
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -335,6 +380,10 @@ mod tests {
         assert!(r.is_none());
         assert!(wcurs.verify());
         println!("{:?}", wcurs);
+
+        // On shutdown, check we dropped all as needed.
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -357,6 +406,10 @@ mod tests {
         assert!(r.is_none());
         assert!(wcurs.verify());
         println!("{:?}", wcurs);
+
+        // On shutdown, check we dropped all as needed.
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -369,6 +422,26 @@ mod tests {
         //
         //  Check leaf split inbetween l/sl (same txn)
         //
+        let lnode = create_leaf_node(10);
+        let rnode = create_leaf_node(20);
+        let root = Node::new_branch(0, lnode, rnode);
+        let mut wcurs = CursorWrite::new(root);
+        assert!(wcurs.verify());
+
+        // Now insert to trigger the needed actions.
+        // Remember, we only need L_CAPACITY because there is already a
+        // value in the leaf.
+        for idx in 0..(L_CAPACITY) {
+            let v = 10 + 1 + idx;
+            let r = wcurs.insert(v, v);
+            assert!(r.is_none());
+            assert!(wcurs.verify());
+        }
+        println!("{:?}", wcurs);
+
+        // On shutdown, check we dropped all as needed.
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -381,20 +454,207 @@ mod tests {
         //
         //  Check leaf split of sl (same txn)
         //
+        let lnode = create_leaf_node(10);
+        let rnode = create_leaf_node(20);
+        let root = Node::new_branch(0, lnode, rnode);
+        let mut wcurs = CursorWrite::new(root);
+        assert!(wcurs.verify());
+
+        // Now insert to trigger the needed actions.
+        // Remember, we only need L_CAPACITY because there is already a
+        // value in the leaf.
+        for idx in 0..(L_CAPACITY) {
+            let v = 20 + 1 + idx;
+            let r = wcurs.insert(v, v);
+            assert!(r.is_none());
+            assert!(wcurs.verify());
+        }
+        println!("{:?}", wcurs);
+
+        // On shutdown, check we dropped all as needed.
+        mem::drop(wcurs);
+        check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_insert_split_7() {
+        //      root
+        //     /    \
+        //  leaf    split leaf
+        // Insert to leaf then split leaf such that root has cloned
+        // in step 1, but doesn't need clone in 2.
+        let lnode = create_leaf_node(10);
+        let rnode = create_leaf_node(20);
+        let root = Node::new_branch(0, lnode, rnode);
+        let mut wcurs = CursorWrite::new(root);
+        assert!(wcurs.verify());
+
+        let r = wcurs.insert(11, 11);
+        assert!(r.is_none());
+        assert!(wcurs.verify());
+
+        let r = wcurs.insert(21, 21);
+        assert!(r.is_none());
+        assert!(wcurs.verify());
+
+        println!("{:?}", wcurs);
+
+        // On shutdown, check we dropped all as needed.
+        mem::drop(wcurs);
+        check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_insert_split_8() {
+        //      root
+        //     /    \
+        //  leaf    split leaf
+        //        ^               ^
+        //        \---- nnode 1    \----- nnode 2
+        //
+        //  Check double leaf split of sl (same txn). This is to
+        // take the clonesplit path in the branch case where branch already
+        // cloned.
+        //
+        let lnode = create_leaf_node_full(10);
+        let rnode = create_leaf_node_full(20);
+        let root = Node::new_branch(0, lnode, rnode);
+        let mut wcurs = CursorWrite::new(root);
+        assert!(wcurs.verify());
+
+        let r = wcurs.insert(19, 19);
+        assert!(r.is_none());
+        assert!(wcurs.verify());
+
+        let r = wcurs.insert(29, 29);
+        assert!(r.is_none());
+        assert!(wcurs.verify());
+
+        println!("{:?}", wcurs);
+
+        // On shutdown, check we dropped all as needed.
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
     fn test_bptree_cursor_insert_stress_1() {
-        // Insert ascending
+        // Insert ascending - we want to ensure the tree is a few levels deep
+        // so we do this to a reasonable number.
+        let node = create_leaf_node(0);
+        let mut wcurs = CursorWrite::new(node);
+
+        for v in 1..(L_CAPACITY << 4) {
+            println!("ITER v {}", v);
+            let r = wcurs.insert(v, v);
+            assert!(r.is_none());
+            assert!(wcurs.verify());
+        }
+        println!("{:?}", wcurs);
+        // On shutdown, check we dropped all as needed.
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
     fn test_bptree_cursor_insert_stress_2() {
         // Insert descending
+        let node = create_leaf_node(0);
+        let mut wcurs = CursorWrite::new(node);
+
+        for v in (1..(L_CAPACITY << 4)).rev() {
+            println!("ITER v {}", v);
+            let r = wcurs.insert(v, v);
+            assert!(r.is_none());
+            assert!(wcurs.verify());
+        }
+        println!("{:?}", wcurs);
+        // On shutdown, check we dropped all as needed.
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
     fn test_bptree_cursor_insert_stress_3() {
         // Insert random
+        let mut rng = rand::thread_rng();
+        let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
+        ins.shuffle(&mut rng);
+
+        let node = create_leaf_node(0);
+        let mut wcurs = CursorWrite::new(node);
+
+        for v in ins.into_iter() {
+            let r = wcurs.insert(v, v);
+            assert!(r.is_none());
+            assert!(wcurs.verify());
+        }
+        println!("{:?}", wcurs);
+        // On shutdown, check we dropped all as needed.
+        mem::drop(wcurs);
+        check_drop_count();
     }
+
+    // Add transaction-ised versions.
+    #[test]
+    fn test_bptree_cursor_insert_stress_4() {
+        // Insert ascending - we want to ensure the tree is a few levels deep
+        // so we do this to a reasonable number.
+        let mut node = create_leaf_node(0);
+
+        for v in 1..(L_CAPACITY << 4) {
+            let mut wcurs = CursorWrite::new(node);
+            println!("ITER v {}", v);
+            let r = wcurs.insert(v, v);
+            assert!(r.is_none());
+            assert!(wcurs.verify());
+            node = wcurs.finalise();
+        }
+        println!("{:?}", node);
+        // On shutdown, check we dropped all as needed.
+        mem::drop(node);
+        check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_insert_stress_5() {
+        // Insert descending
+        let mut node = create_leaf_node(0);
+
+        for v in (1..(L_CAPACITY << 4)).rev() {
+            let mut wcurs = CursorWrite::new(node);
+            println!("ITER v {}", v);
+            let r = wcurs.insert(v, v);
+            assert!(r.is_none());
+            assert!(wcurs.verify());
+            node = wcurs.finalise();
+        }
+        println!("{:?}", node);
+        // On shutdown, check we dropped all as needed.
+        mem::drop(node);
+        check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_insert_stress_6() {
+        // Insert random
+        let mut rng = rand::thread_rng();
+        let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
+        ins.shuffle(&mut rng);
+
+        let mut node = create_leaf_node(0);
+
+        for v in ins.into_iter() {
+            let mut wcurs = CursorWrite::new(node);
+            let r = wcurs.insert(v, v);
+            assert!(r.is_none());
+            assert!(wcurs.verify());
+            node = wcurs.finalise();
+        }
+        println!("{:?}", node);
+        // On shutdown, check we dropped all as needed.
+        mem::drop(node);
+        check_drop_count();
+    }
+
 }
