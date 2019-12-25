@@ -107,7 +107,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         match &self.inner {
             T::L(leaf) => leaf.len(),
             T::B(branch) => branch.len(),

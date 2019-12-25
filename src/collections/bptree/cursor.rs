@@ -18,6 +18,7 @@ where
     K: Ord + Clone + Debug,
     V: Clone,
 {
+    length: usize,
     root: ABNode<K, V>,
 }
 
@@ -29,11 +30,14 @@ where
 {
     // Need to build a stack as we go - of what, I'm not sure ...
     txid: usize,
+    length: usize,
     root: ABNode<K, V>,
 }
 
 pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
     fn get_root_ref(&self) -> &ABNode<K, V>;
+
+    fn len(&self) -> usize;
 
     fn get_tree_density(&self) -> (usize, usize) {
         // Walk the tree and calculate the packing effeciency.
@@ -56,20 +60,21 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
 }
 
 impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
-    pub(crate) fn new(root: ABNode<K, V>) -> Self {
+    pub(crate) fn new(root: ABNode<K, V>, length: usize) -> Self {
         let txid = root.txid + 1;
         // TODO: Check that txid < usize max.
         assert!(txid < usize::max_value());
 
         CursorWrite {
             txid: txid,
+            length: length,
             root: root,
         }
     }
 
-    pub(crate) fn finalise(self) -> ABNode<K, V> {
+    pub(crate) fn finalise(self) -> (ABNode<K, V>, usize) {
         // Return the new root for replacement into the txn manager.
-        self.root
+        (self.root, self.length)
     }
 
     pub(crate) fn clear(&mut self) {
@@ -80,7 +85,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
 
     // Functions as insert_or_update
     pub(crate) fn insert(&mut self, k: K, v: V) -> Option<V> {
-        match clone_and_insert(&mut self.root, self.txid, k, v) {
+        let r = match clone_and_insert(&mut self.root, self.txid, k, v) {
             CRInsertState::NoClone(res) => res,
             CRInsertState::Clone(res, mut nnode) => {
                 // We have a new root node, swap it in.
@@ -109,7 +114,12 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                 // key to overwrite.
                 None
             }
+        };
+        // If this is none, it means a new slot is now occupied.
+        if r.is_none() {
+            self.length += 1;
         }
+        r
     }
 
     #[cfg(test)]
@@ -160,8 +170,11 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
 }
 
 impl<K: Clone + Ord + Debug, V: Clone> CursorRead<K, V> {
-    pub(crate) fn new(root: ABNode<K, V>) -> Self {
-        CursorRead { root: root }
+    pub(crate) fn new(root: ABNode<K, V>, length: usize) -> Self {
+        CursorRead {
+            root: root,
+            length: length,
+        }
     }
 }
 
@@ -169,11 +182,19 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<K, V> 
     fn get_root_ref(&self) -> &ABNode<K, V> {
         &self.root
     }
+
+    fn len(&self) -> usize {
+        self.length
+    }
 }
 
 impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite<K, V> {
     fn get_root_ref(&self) -> &ABNode<K, V> {
         &self.root
+    }
+
+    fn len(&self) -> usize {
+        self.length
     }
 }
 
@@ -363,7 +384,7 @@ mod tests {
     fn test_bptree_cursor_insert_leaf() {
         // First create the node + cursor
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new(node);
+        let mut wcurs = CursorWrite::new(node, 0);
         let prev_txid = wcurs.root_txid();
 
         // Now insert - the txid should be different.
@@ -398,7 +419,7 @@ mod tests {
         // as leaf needs a clone AND to split to achieve the new root.
 
         let node = create_leaf_node_full(10);
-        let mut wcurs = CursorWrite::new(node);
+        let mut wcurs = CursorWrite::new(node, 0);
         let prev_txid = wcurs.root_txid();
 
         let r = wcurs.insert(1, 1);
@@ -418,7 +439,7 @@ mod tests {
         // leaf needs to be below max to start, and we insert enough in-txn
         // to trigger a clone of leaf AND THEN to cause the split.
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new(node);
+        let mut wcurs = CursorWrite::new(node, 0);
 
         for v in 1..(L_CAPACITY + 1) {
             println!("ITER v {}", v);
@@ -444,7 +465,7 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new(root);
+        let mut wcurs = CursorWrite::new(root, 0);
         assert!(wcurs.verify());
         println!("{:?}", wcurs);
 
@@ -471,7 +492,7 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new(root);
+        let mut wcurs = CursorWrite::new(root, 0);
         assert!(wcurs.verify());
 
         let r = wcurs.insert(29, 29);
@@ -497,7 +518,7 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new(root);
+        let mut wcurs = CursorWrite::new(root, 0);
         assert!(wcurs.verify());
 
         // Now insert to trigger the needed actions.
@@ -529,7 +550,7 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new(root);
+        let mut wcurs = CursorWrite::new(root, 0);
         assert!(wcurs.verify());
 
         // Now insert to trigger the needed actions.
@@ -558,7 +579,7 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new(root);
+        let mut wcurs = CursorWrite::new(root, 0);
         assert!(wcurs.verify());
 
         let r = wcurs.insert(11, 11);
@@ -591,7 +612,7 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new(root);
+        let mut wcurs = CursorWrite::new(root, 0);
         assert!(wcurs.verify());
 
         let r = wcurs.insert(19, 19);
@@ -614,7 +635,7 @@ mod tests {
         // Insert ascending - we want to ensure the tree is a few levels deep
         // so we do this to a reasonable number.
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new(node);
+        let mut wcurs = CursorWrite::new(node, 0);
 
         for v in 1..(L_CAPACITY << 4) {
             println!("ITER v {}", v);
@@ -633,7 +654,7 @@ mod tests {
     fn test_bptree_cursor_insert_stress_2() {
         // Insert descending
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new(node);
+        let mut wcurs = CursorWrite::new(node, 0);
 
         for v in (1..(L_CAPACITY << 4)).rev() {
             println!("ITER v {}", v);
@@ -656,7 +677,7 @@ mod tests {
         ins.shuffle(&mut rng);
 
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new(node);
+        let mut wcurs = CursorWrite::new(node, 0);
 
         for v in ins.into_iter() {
             let r = wcurs.insert(v, v);
@@ -678,12 +699,13 @@ mod tests {
         let mut node = create_leaf_node(0);
 
         for v in 1..(L_CAPACITY << 4) {
-            let mut wcurs = CursorWrite::new(node);
+            let mut wcurs = CursorWrite::new(node, 0);
             println!("ITER v {}", v);
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
-            node = wcurs.finalise();
+            let (n, _) = wcurs.finalise();
+            node = n;
         }
         println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
@@ -697,12 +719,13 @@ mod tests {
         let mut node = create_leaf_node(0);
 
         for v in (1..(L_CAPACITY << 4)).rev() {
-            let mut wcurs = CursorWrite::new(node);
+            let mut wcurs = CursorWrite::new(node, 0);
             println!("ITER v {}", v);
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
-            node = wcurs.finalise();
+            let (n, _) = wcurs.finalise();
+            node = n;
         }
         println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
@@ -720,11 +743,12 @@ mod tests {
         let mut node = create_leaf_node(0);
 
         for v in ins.into_iter() {
-            let mut wcurs = CursorWrite::new(node);
+            let mut wcurs = CursorWrite::new(node, 0);
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
-            node = wcurs.finalise();
+            let (n, _) = wcurs.finalise();
+            node = n;
         }
         println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
@@ -735,7 +759,7 @@ mod tests {
     #[test]
     fn test_bptree_cursor_search_1() {
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new(node);
+        let mut wcurs = CursorWrite::new(node, 0);
 
         for v in 1..(L_CAPACITY << 4) {
             let r = wcurs.insert(v, v);
@@ -751,5 +775,19 @@ mod tests {
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
         check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_length_1() {
+        // Check the length is consistent on operations.
+        let node = create_leaf_node(0);
+        let mut wcurs = CursorWrite::new(node, 1);
+
+        for v in 1..(L_CAPACITY << 4) {
+            let r = wcurs.insert(v, v);
+            assert!(r.is_none());
+        }
+        println!("{} == {}", wcurs.len(), L_CAPACITY << 4);
+        assert!(wcurs.len() == L_CAPACITY << 4);
     }
 }

@@ -24,10 +24,10 @@
 
 mod constants;
 mod cursor;
+pub mod iter;
 mod leaf;
+pub mod map;
 mod node;
 mod states;
-pub mod iter;
-pub mod map;
 
 pub use self::map::BptreeMap;

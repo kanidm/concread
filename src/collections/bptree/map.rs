@@ -29,7 +29,7 @@ where
     V: Clone,
 {
     write: Mutex<()>,
-    active: Mutex<ABNode<K, V>>,
+    active: Mutex<(ABNode<K, V>, usize)>,
 }
 
 /// An active read transaction over a `BptreeMap`. The data in this tree
@@ -63,7 +63,7 @@ impl<K: Clone + Ord + Debug, V: Clone> BptreeMap<K, V> {
     pub fn new() -> Self {
         BptreeMap {
             write: Mutex::new(()),
-            active: Mutex::new(Node::new_ableaf(0)),
+            active: Mutex::new((Node::new_ableaf(0), 0)),
         }
     }
 
@@ -72,7 +72,7 @@ impl<K: Clone + Ord + Debug, V: Clone> BptreeMap<K, V> {
     pub fn read(&self) -> BptreeMapReadTxn<K, V> {
         let rguard = self.active.lock();
         BptreeMapReadTxn {
-            work: CursorRead::new(rguard.clone()),
+            work: CursorRead::new(rguard.0.clone(), rguard.1),
         }
         // rguard is dropped, the ABNode lives on!
     }
@@ -90,9 +90,9 @@ impl<K: Clone + Ord + Debug, V: Clone> BptreeMap<K, V> {
          * node-width worth of atomics, and if the write is dropped without
          * action we've save a lot of cycles.
          */
-        let data: ABNode<K, V> = rguard.clone();
+        let (data, length): (ABNode<K, V>, usize) = rguard.clone();
         /* Setup the cursor that will work on the tree */
-        let cursor = CursorWrite::new(data);
+        let cursor = CursorWrite::new(data, length);
 
         /* Now build the write struct */
         BptreeMapWriteTxn {
@@ -103,7 +103,7 @@ impl<K: Clone + Ord + Debug, V: Clone> BptreeMap<K, V> {
         /* rguard dropped here */
     }
 
-    fn commit(&self, newdata: ABNode<K, V>) {
+    fn commit(&self, newdata: (ABNode<K, V>, usize)) {
         let mut rwguard = self.active.lock();
         *rwguard = newdata;
     }
