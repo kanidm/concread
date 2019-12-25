@@ -123,7 +123,10 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
         self.work.contains_key(k)
     }
 
-    // len
+    /// Returns the current number of k:v pairs in the tree
+    pub fn len(&self) -> usize {
+        self.work.len()
+    }
 
     // is_empty
 
