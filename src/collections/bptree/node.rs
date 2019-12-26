@@ -56,9 +56,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     pub(crate) fn new_leaf(txid: usize) -> Self {
         Node {
             #[cfg(test)]
-            nid: NODE_COUNTER.with(|nc| {
-                nc.fetch_add(1, Ordering::AcqRel)
-            }),
+            nid: NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel)),
             txid: txid,
             inner: T::L(Leaf::new()),
         }
@@ -71,9 +69,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     pub(crate) fn new_branch(txid: usize, l: ABNode<K, V>, r: ABNode<K, V>) -> ABNode<K, V> {
         Arc::new(Box::new(Node {
             #[cfg(test)]
-            nid: NODE_COUNTER.with(|nc| {
-                nc.fetch_add(1, Ordering::AcqRel)
-            }),
+            nid: NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel)),
             txid: txid,
             inner: T::B(Branch::new(l, r)),
         }))
@@ -100,9 +96,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         // Do we need to clone this node before we work on it?
         Arc::new(Box::new(Node {
             #[cfg(test)]
-            nid: NODE_COUNTER.with(|nc| {
-                nc.fetch_add(1, Ordering::AcqRel)
-            }),
+            nid: NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel)),
             txid: txid,
             inner: self.inner_clone(),
         }))
@@ -616,20 +610,14 @@ impl<K: Clone + Ord, V: Clone> Drop for Branch<K, V> {
 #[cfg(test)]
 impl<K: Clone + Ord, V: Clone> Drop for Node<K, V> {
     fn drop(&mut self) {
-        let _ = DROP_COUNTER.with(|dc| {
-            dc.fetch_add(1, Ordering::AcqRel)
-        });
+        let _ = DROP_COUNTER.with(|dc| dc.fetch_add(1, Ordering::AcqRel));
     }
 }
 
 #[cfg(test)]
 pub(crate) fn check_drop_count() {
-    let node = NODE_COUNTER.with(|nc| {
-                nc.load(Ordering::Acquire)
-            });
-    let drop = DROP_COUNTER.with(|dc| {
-            dc.load(Ordering::Acquire)
-        });
+    let node = NODE_COUNTER.with(|nc| nc.load(Ordering::Acquire));
+    let drop = DROP_COUNTER.with(|dc| dc.load(Ordering::Acquire));
     assert!(node == drop);
 }
 

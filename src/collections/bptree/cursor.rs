@@ -778,4 +778,227 @@ mod tests {
         println!("{} == {}", wcurs.len(), L_CAPACITY << 4);
         assert!(wcurs.len() == L_CAPACITY << 4);
     }
+
+    #[test]
+    fn test_bptree_cursor_remove_1() {
+        // Check that a single value can be removed correctly without change.
+        // Check that a missing value is removed as "None".
+        // BOTH of these need new txns to check clone, and then re-use txns.
+
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_2() {
+        // Given the tree:
+        //
+        //      root
+        //     /    \
+        //  leaf    split leaf
+        //
+        // Remove from "split leaf" and merge left. (new txn)
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_3() {
+        // Given the tree:
+        //
+        //      root
+        //     /    \
+        //  leaf    split leaf
+        //
+        // Remove from "leaf" and merge right (really left, but you know ...). (new txn)
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_4() {
+        // Given the tree:
+        //
+        //      root
+        //     /    \
+        //  leaf    split leaf
+        //
+        // Remove from "split leaf" and merge left. (leaf cloned already)
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_5() {
+        // Given the tree:
+        //
+        //      root
+        //     /    \
+        //  leaf    split leaf
+        //
+        // Remove from "leaf" and merge 'right'. (split leaf cloned already)
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_6() {
+        // Given the tree:
+        //
+        //          root
+        //        /      \
+        //   lbranch     rbranch
+        //     /    \     /    \
+        //    l1    l2   r1    r2
+        //
+        //   conditions:
+        //   lbranch - 2node
+        //   rbranch - 2node
+        //   txn     - new
+        //
+        //   when remove from rbranch, mergc left to lbranch.
+        //   should cause tree height reduction.
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_7() {
+        // Given the tree:
+        //
+        //          root
+        //        /      \
+        //   lbranch     rbranch
+        //     /    \     /    \
+        //    l1    l2   r1    r2
+        //
+        //   conditions:
+        //   lbranch - 2node
+        //   rbranch - 2node
+        //   txn     - new
+        //
+        //   when remove from lbranch, merge right to rbranch.
+        //   should cause tree height reduction.
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_8() {
+        // Given the tree:
+        //
+        //          root
+        //        /      \
+        //   lbranch     rbranch
+        //     /    \     /    \
+        //    l1    l2   r1    r2
+        //
+        //   conditions:
+        //   lbranch - full
+        //   rbranch - 2node
+        //   txn     - new
+        //
+        //   when remove from rbranch, borrow from lbranch
+        //   will NOT reduce height
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_9() {
+        // Given the tree:
+        //
+        //          root
+        //        /      \
+        //   lbranch     rbranch
+        //     /    \     /    \
+        //    l1    l2   r1    r2
+        //
+        //   conditions:
+        //   lbranch - 2node
+        //   rbranch - full
+        //   txn     - new
+        //
+        //   when remove from lbranch, borrow from rbranch
+        //   will NOT reduce height
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_10() {
+        // Given the tree:
+        //
+        //          root
+        //        /      \
+        //   lbranch     rbranch
+        //     /    \     /    \
+        //    l1    l2   r1    r2
+        //
+        //   conditions:
+        //   lbranch - 2node
+        //   rbranch - 2node
+        //   txn     - touch lbranch
+        //
+        //   when remove from rbranch, mergc left to lbranch.
+        //   should cause tree height reduction.
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_11() {
+        // Given the tree:
+        //
+        //          root
+        //        /      \
+        //   lbranch     rbranch
+        //     /    \     /    \
+        //    l1    l2   r1    r2
+        //
+        //   conditions:
+        //   lbranch - 2node
+        //   rbranch - 2node
+        //   txn     - touch rbranch
+        //
+        //   when remove from lbranch, merge right to rbranch.
+        //   should cause tree height reduction.
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_12() {
+        // Given the tree:
+        //
+        //          root
+        //        /      \
+        //   lbranch     rbranch
+        //     /    \     /    \
+        //    l1    l2   r1    r2
+        //
+        //   conditions:
+        //   lbranch - full
+        //   rbranch - 2node
+        //   txn     - touch lbranch
+        //
+        //   when remove from rbranch, borrow from lbranch
+        //   will NOT reduce height
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_13() {
+        // Given the tree:
+        //
+        //          root
+        //        /      \
+        //   lbranch     rbranch
+        //     /    \     /    \
+        //    l1    l2   r1    r2
+        //
+        //   conditions:
+        //   lbranch - 2node
+        //   rbranch - full
+        //   txn     - touch rbranch
+        //
+        //   when remove from lbranch, borrow from rbranch
+        //   will NOT reduce height
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_get_mut_ref_1() {
+        // Test that we can clone a path, and then allow get_mut_ref to work.
+        unimplemented!();
+    }
 }
