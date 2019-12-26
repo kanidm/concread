@@ -7,6 +7,7 @@ pub const CAPACITY: usize = 16;
 // *  (8 - 2) / 2 = 3
 // * (16 - 2) / 2 = 7
 pub const L_CAPACITY: usize = (CAPACITY - 2) / 2;
+pub const L_MAX_IDX: usize = L_CAPACITY - 1;
 
 // --> BRANCHES
 // We need one more value than key.

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use super::constants::{BK_CAPACITY, BK_CAPACITY_MIN_N1, BV_CAPACITY};
 use super::leaf::Leaf;
 use super::states::BRInsertState;
+use super::utils::*;
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -616,15 +617,6 @@ pub(crate) fn check_drop_count() {
     let node = NODE_COUNTER.load(Ordering::Acquire);
     let drop = DROP_COUNTER.load(Ordering::Acquire);
     assert!(node == drop);
-}
-
-unsafe fn slice_insert<T>(slice: &mut [T], new: T, idx: usize) {
-    ptr::copy(
-        slice.as_ptr().add(idx),
-        slice.as_mut_ptr().add(idx + 1),
-        slice.len() - idx - 1,
-    );
-    ptr::write(slice.get_unchecked_mut(idx), new);
 }
 
 #[cfg(test)]

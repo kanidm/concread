@@ -1,9 +1,11 @@
 use std::fmt::{self, Debug, Error};
 use std::mem::MaybeUninit;
 use std::ptr;
+use std::slice;
 
-use super::constants::L_CAPACITY;
+use super::constants::{L_CAPACITY, L_MAX_IDX};
 use super::states::{BLInsertState, BLRemoveState};
+use super::utils::*;
 
 pub(crate) struct Leaf<K, V>
 where
@@ -26,46 +28,47 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
 
     pub(crate) fn insert_or_update(&mut self, k: K, v: V) -> BLInsertState<K, V> {
         // Update the node, and split if required.
-
         // There are three possible paths
-        // * some values (but not full) exist, and we need to update the value that does exist
-        for idx in 0..self.count {
-            unsafe {
-                if *self.key[idx].as_ptr() == k {
-                    // Update in place.
-                    let prev = self.value[idx].as_mut_ptr().replace(v);
-                    // v now contains the original value, return it!
-                    return BLInsertState::Ok(Some(prev));
+        let r = {
+            let (left, _) = self.key.split_at(self.count);
+            let inited: &[K] =
+                unsafe { slice::from_raw_parts(left.as_ptr() as *const K, left.len()) };
+            inited.binary_search(&k)
+        };
+        match r {
+            Ok(idx) => {
+                // * some values (but not full) exist, and we need to update the value that does exist
+                let prev = unsafe { self.value[idx].as_mut_ptr().replace(v) };
+                // v now contains the original value, return it!
+                return BLInsertState::Ok(Some(prev));
+            }
+            Err(idx) => {
+                if self.count == L_CAPACITY {
+                    // * The node is full, so we must indicate as such.
+                    if idx >= self.count {
+                        // The requested insert is larger than our max key.
+                        BLInsertState::Split(k, v)
+                    } else {
+                        // The requested insert in within our range, return current
+                        // max.
+                        let pk = unsafe { slice_remove(&mut self.key, L_MAX_IDX).assume_init() };
+                        let pv = unsafe { slice_remove(&mut self.value, L_MAX_IDX).assume_init() };
+                        unsafe {
+                            slice_insert(&mut self.key, MaybeUninit::new(k), idx);
+                            slice_insert(&mut self.value, MaybeUninit::new(v), idx);
+                        }
+                        BLInsertState::Split(pk, pv)
+                    }
+                } else {
+                    // We have space, insert at the correct location after shifting.
+                    unsafe {
+                        slice_insert(&mut self.key, MaybeUninit::new(k), idx);
+                        slice_insert(&mut self.value, MaybeUninit::new(v), idx);
+                    }
+                    self.count += 1;
+                    BLInsertState::Ok(None)
                 }
             }
-        }
-        // If we get here, not found - append or split as needed
-        if self.count == L_CAPACITY {
-            // * The node is full, so we must indicate as such.
-            // Find the largest value of this node
-            let midx = self.max_idx();
-
-            if &k > unsafe { &*self.key[midx].as_ptr() } {
-                // if new value is larger than this nodes max, return k and v.
-                BLInsertState::Split(k, v)
-            } else {
-                // if old value is larger swap new/old, and then return the existing value
-                // to be put to a new neighbor.
-                let pk = unsafe { self.key[midx].as_mut_ptr().replace(k) };
-                let pv = unsafe { self.value[midx].as_mut_ptr().replace(v) };
-                BLInsertState::Split(pk, pv)
-            }
-        } else {
-            // * no values exist yet, so we should simply add the value
-            // * some values (but not full) exist, and we need to add the value that does not exist
-            // Because self.count will be +1 to idx, then we can use it here before we
-            // increment.
-            unsafe {
-                self.key[self.count].as_mut_ptr().write(k);
-                self.value[self.count].as_mut_ptr().write(v);
-            }
-            self.count += 1;
-            BLInsertState::Ok(None)
         }
     }
 
@@ -98,41 +101,13 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         }
     }
 
-    fn min_idx(&self) -> usize {
-        debug_assert!(self.count > 0);
-        let mut idx: usize = 0;
-        let mut tmp_k: &K = unsafe { &*self.key[0].as_ptr() };
-
-        for work_idx in 1..self.count {
-            let k = unsafe { &*self.key[work_idx].as_ptr() };
-            if k < tmp_k {
-                tmp_k = k;
-                idx = work_idx
-            }
-        }
-
-        idx
-    }
-
     fn max_idx(&self) -> usize {
         debug_assert!(self.count > 0);
-        let mut idx: usize = 0;
-        let mut tmp_k: &K = unsafe { &*self.key[0].as_ptr() };
-
-        for work_idx in 1..self.count {
-            let k = unsafe { &*self.key[work_idx].as_ptr() };
-            if k > tmp_k {
-                tmp_k = k;
-                idx = work_idx
-            }
-        }
-
-        idx
+        self.count - 1
     }
 
     pub(crate) fn min(&self) -> &K {
-        let idx = self.min_idx();
-        unsafe { &*self.key[idx].as_ptr() }
+        unsafe { &*self.key[0].as_ptr() }
     }
 
     pub(crate) fn max(&self) -> &K {
@@ -177,8 +152,29 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
     }
 
     #[cfg(test)]
+    fn check_sorted(&self) -> bool {
+        if self.count == 0 {
+            panic!();
+            false
+        } else {
+            let mut lk: &K = unsafe { &*self.key[0].as_ptr() };
+            for work_idx in 1..self.count {
+                let rk: &K = unsafe { &*self.key[work_idx].as_ptr() };
+                if lk >= rk {
+                    println!("{:?}", self);
+                    panic!();
+                    return false;
+                }
+                lk = rk;
+            }
+            println!("Leaf passed sorting");
+            true
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn verify(&self) -> bool {
-        true
+        self.check_sorted()
     }
 
     pub(crate) fn tree_density(&self) -> (usize, usize) {
@@ -238,18 +234,6 @@ impl<K: Ord + Clone + Debug, V: Clone> Debug for Leaf<K, V> {
     }
 }
 
-// From std::collections::btree::node.rs
-unsafe fn slice_remove<T>(slice: &mut [T], idx: usize) -> T {
-    // setup the value to be returned, IE give ownership to ret.
-    let ret = ptr::read(slice.get_unchecked(idx));
-    ptr::copy(
-        slice.as_ptr().add(idx + 1),
-        slice.as_mut_ptr().add(idx),
-        slice.len() - idx - 1,
-    );
-    ret
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::constants::L_CAPACITY;
@@ -270,6 +254,7 @@ mod tests {
             let gr = leaf.get_ref(&kv);
             assert!(gr == Some(&kv));
         }
+        assert!(leaf.verify());
     }
 
     // test insert and update to over-write in order.
@@ -298,6 +283,7 @@ mod tests {
             // Check the new value is incremented.
             assert!(gr == Some(&(kv + 1)));
         }
+        assert!(leaf.verify());
     }
 
     // test insert out of order
@@ -317,6 +303,7 @@ mod tests {
             let gr = leaf.get_ref(&kv);
             assert!(gr == Some(&kv));
         }
+        assert!(leaf.verify());
     }
 
     // test insert and update to over-write out of order.
@@ -336,6 +323,7 @@ mod tests {
             let gr = leaf.get_ref(&kv);
             assert!(gr == Some(&kv));
         }
+        assert!(leaf.verify());
 
         for idx in 0..L_CAPACITY {
             let kv = kvs[idx];
@@ -347,6 +335,7 @@ mod tests {
             let gr = leaf.get_ref(&kv);
             assert!(gr == Some(&(kv + 1)));
         }
+        assert!(leaf.verify());
     }
 
     // assert min-max bounds correctly are found.
@@ -367,6 +356,7 @@ mod tests {
             let gr = leaf.max();
             assert!(*gr == max[idx]);
         }
+        assert!(leaf.verify());
     }
 
     #[test]
@@ -386,6 +376,7 @@ mod tests {
             let gr = leaf.min();
             assert!(*gr == min[idx]);
         }
+        assert!(leaf.verify());
     }
 
     // insert to split.
@@ -465,6 +456,7 @@ mod tests {
         // Remove all but one!
         for kv in (L_CAPACITY / 2)..(L_CAPACITY - 1) {
             let r = leaf.remove(&kv);
+            assert!(leaf.verify());
             match r {
                 BLRemoveState::Ok(_) => {}
                 _ => panic!(),
