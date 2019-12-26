@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 // use super::branch::Branch;
 use super::states::{BLInsertState, BRInsertState, CRInsertState};
+use super::iter::Iter;
 
 #[derive(Debug)]
 pub(crate) struct CursorRead<K, V>
@@ -56,6 +57,10 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
             Some(_) => true,
             None => false,
         }
+    }
+
+    fn kv_iter(&self) -> Iter {
+        Iter::new(self.root, self.length)
     }
 }
 

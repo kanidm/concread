@@ -132,7 +132,10 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
 
     // (adv) range
 
-    // (adv) iter
+    /// Iterator over `(&K, &V)` of the set
+    pub fn iter(&self) -> Iter {
+        self.work.kv_iter();
+    }
 
     // (adv) keys
 
