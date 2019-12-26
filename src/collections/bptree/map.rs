@@ -2,9 +2,11 @@
 
 use super::cursor::CursorReadOps;
 use super::cursor::{CursorRead, CursorWrite};
+use super::iter::Iter;
 use super::node::{ABNode, Node};
 use parking_lot::{Mutex, MutexGuard};
 use std::fmt::Debug;
+use std::iter::FromIterator;
 
 /// A concurrently readable map based on a modified B+Tree structure.
 ///
@@ -109,6 +111,18 @@ impl<K: Clone + Ord + Debug, V: Clone> BptreeMap<K, V> {
     }
 }
 
+impl<K: Clone + Ord + Debug, V: Clone> FromIterator<(K, V)> for BptreeMap<K, V> {
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
+        let mut cursor = CursorWrite::new(Node::new_ableaf(0), 0);
+        cursor.extend(iter);
+
+        BptreeMap {
+            write: Mutex::new(()),
+            active: Mutex::new(cursor.finalise()),
+        }
+    }
+}
+
 impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     // == RO methods
 
@@ -133,8 +147,8 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     // (adv) range
 
     /// Iterator over `(&K, &V)` of the set
-    pub fn iter(&self) -> Iter {
-        self.work.kv_iter();
+    pub fn iter(&self) -> Iter<K, V> {
+        self.work.kv_iter()
     }
 
     // (adv) keys
@@ -197,7 +211,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     pub fn compact(&mut self) {
         let (l, m) = self.work.tree_density();
         if (m / l) > 1 {
-            self.work.compact()
+            self.compact_force();
         }
     }
 
@@ -207,7 +221,21 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     ///
     /// See `compact()` for the logic of why this exists.
     pub fn compact_force(&mut self) {
-        self.work.compact()
+        let mut par_cursor = CursorWrite::new(Node::new_ableaf(0), 0);
+        par_cursor.extend(self.iter().map(|(kr, vr)| (kr.clone(), vr.clone())));
+
+        // Now swap them over.
+        std::mem::swap(&mut self.work, &mut par_cursor);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tree_density(&self) -> (usize, usize) {
+        self.work.tree_density()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn verify(&self) -> bool {
+        self.work.verify()
     }
 
     /// Commit the changes from this write transaction. Readers after this point
@@ -219,9 +247,18 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     }
 }
 
+/*
+impl<'a, K: Clone + Ord + Debug, V: Clone> Extend for BptreeMapWriteTxn<'a, K, V> {
+}
+*/
+
 #[cfg(test)]
 mod tests {
+    use super::super::constants::L_CAPACITY;
     use super::BptreeMap;
+    use rand::prelude::*;
+    use rand::seq::SliceRandom;
+    use std::iter::FromIterator;
 
     #[test]
     fn test_bptree_map_basic_write() {
@@ -246,5 +283,32 @@ mod tests {
             assert!(bpwrite.get(&0) == Some(&0));
             assert!(bpwrite.get(&1) == Some(&1));
         }
+    }
+
+    #[test]
+    fn test_bptree_map_from_iter_1() {
+        let mut rng = rand::thread_rng();
+        let mut ins: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
+
+        let map = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
+
+        let w = map.write();
+        assert!(w.verify());
+        assert!(w.tree_density() == ((L_CAPACITY << 4), (L_CAPACITY << 4)));
+    }
+
+    #[test]
+    fn test_bptree_map_from_iter_2() {
+        let mut rng = rand::thread_rng();
+        let mut ins: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
+        ins.shuffle(&mut rng);
+
+        let map = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
+
+        let mut w = map.write();
+        assert!(w.verify());
+        w.compact_force();
+        assert!(w.verify());
+        assert!(w.tree_density() == ((L_CAPACITY << 4), (L_CAPACITY << 4)));
     }
 }
