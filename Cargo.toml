@@ -21,6 +21,7 @@ num = "0.2.0"
 
 [dev-dependencies]
 time = "0.1"
+rand = "0.7"
 
 [[bin]]
 name = "unsound"

@@ -9,8 +9,6 @@
 //! but has better behaviour with very long running read operations, and more
 //! accurate memory reclaim behaviour.
 
-extern crate parking_lot;
-
 use parking_lot::{Mutex, MutexGuard};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;

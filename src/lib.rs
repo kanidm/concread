@@ -23,15 +23,22 @@
 //! In the future, a concurrent BTree and HashTree will be added, that can be used inplace
 //! of a `RwLock<BTreeMap>` or `RwLock<HashMap>`. Stay tuned!
 
+// #![deny(warnings)]
+#![warn(unused_extern_crates)]
 #![warn(missing_docs)]
 
 extern crate crossbeam_epoch;
-extern crate crossbeam_utils;
 extern crate parking_lot;
 
-mod collections;
+#[cfg(test)]
+extern crate rand;
+
+pub mod collections;
 pub mod cowcell;
 pub mod ebrcell;
+#[cfg(test)]
+extern crate crossbeam_utils;
+#[cfg(test)]
 mod lincowcell;
 
 pub use cowcell::CowCell;

@@ -1,4 +1,3 @@
-use super::leaf::Leaf;
 use super::node::{ABNode, Node};
 
 #[derive(Debug)]
@@ -43,4 +42,23 @@ where
     // Not needed
     Ok,
     Clone(Box<Node<K, V>>),
+}
+
+#[derive(Debug)]
+pub(crate) enum CRInsertState<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
+    // We did not need to clone, here is the result.
+    NoClone(Option<V>),
+    // We had to clone the referenced node provided.
+    Clone(Option<V>, ABNode<K, V>),
+    // We had to split, but did not need a clone.
+    // REMEMBER: In all split cases it means the key MUST NOT have
+    // previously existed, so it implies return none to the
+    // caller.
+    Split(ABNode<K, V>),
+    // We had to clone and split.
+    CloneSplit(ABNode<K, V>, ABNode<K, V>),
 }

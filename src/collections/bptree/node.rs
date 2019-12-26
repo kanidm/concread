@@ -6,11 +6,15 @@ use std::sync::Arc;
 
 use super::constants::{BK_CAPACITY, BK_CAPACITY_MIN_N1, BV_CAPACITY};
 use super::leaf::Leaf;
-use super::states::{BLInsertState, BLRemoveState, BNClone, BRInsertState};
+use super::states::BRInsertState;
+use super::utils::*;
 
+#[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 static NODE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static DROP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) struct Branch<K, V>
 where
@@ -40,14 +44,14 @@ where
 {
     #[cfg(test)]
     pub nid: usize,
-    txid: usize,
+    pub txid: usize,
     inner: T<K, V>,
 }
 
 pub(crate) type ABNode<K, V> = Arc<Box<Node<K, V>>>;
 
 impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
-    fn new_leaf(txid: usize) -> Self {
+    pub(crate) fn new_leaf(txid: usize) -> Self {
         Node {
             #[cfg(test)]
             nid: NODE_COUNTER.fetch_add(1, Ordering::AcqRel),
@@ -56,31 +60,55 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
-    fn req_clone(&self, txid: usize) -> BNClone<K, V> {
-        // Do we need to clone this node before we work on it?
-        if txid == self.txid {
-            BNClone::Ok
-        } else {
-            BNClone::Clone(Box::new(Node {
-                #[cfg(test)]
-                nid: NODE_COUNTER.fetch_add(1, Ordering::AcqRel),
-                txid: txid,
-                inner: match &self.inner {
-                    T::L(leaf) => T::L(leaf.clone()),
-                    T::B(branch) => T::B(branch.clone()),
-                },
-            }))
+    pub(crate) fn new_ableaf(txid: usize) -> ABNode<K, V> {
+        Arc::new(Box::new(Self::new_leaf(txid)))
+    }
+
+    pub(crate) fn new_branch(txid: usize, l: ABNode<K, V>, r: ABNode<K, V>) -> ABNode<K, V> {
+        Arc::new(Box::new(Node {
+            #[cfg(test)]
+            nid: NODE_COUNTER.fetch_add(1, Ordering::AcqRel),
+            txid: txid,
+            inner: T::B(Branch::new(l, r)),
+        }))
+    }
+
+    pub(crate) fn new_leaf_ins(txid: usize, k: K, v: V) -> ABNode<K, V> {
+        let mut node = Arc::new(Box::new(Node::new_leaf(txid)));
+        {
+            let nmut = Arc::get_mut(&mut node).unwrap().as_mut().as_mut_leaf();
+            nmut.insert_or_update(k, v);
+        }
+        node
+    }
+
+    pub(crate) fn inner_clone(&self) -> T<K, V> {
+        match &self.inner {
+            T::L(leaf) => T::L(leaf.clone()),
+            T::B(branch) => T::B(branch.clone()),
         }
     }
 
-    fn verify(&self) -> bool {
+    pub(crate) fn req_clone(&self, txid: usize) -> ABNode<K, V> {
+        debug_assert!(txid != self.txid);
+        // Do we need to clone this node before we work on it?
+        Arc::new(Box::new(Node {
+            #[cfg(test)]
+            nid: NODE_COUNTER.fetch_add(1, Ordering::AcqRel),
+            txid: txid,
+            inner: self.inner_clone(),
+        }))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn verify(&self) -> bool {
         match &self.inner {
             T::L(leaf) => leaf.verify(),
             T::B(branch) => branch.verify(),
         }
     }
 
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         match &self.inner {
             T::L(leaf) => leaf.len(),
             T::B(branch) => branch.len(),
@@ -101,10 +129,65 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
-    fn as_mut_leaf(&mut self) -> &mut Leaf<K, V> {
+    pub(crate) fn get_ref(&self, k: &K) -> Option<&V> {
+        match &self.inner {
+            T::L(leaf) => {
+                println!("leaf -> {:?}", leaf);
+                leaf.get_ref(k)
+            }
+            T::B(branch) => {
+                println!("branch -> {:?}", branch);
+                branch.get_ref(k)
+            }
+        }
+    }
+
+    pub(crate) fn is_leaf(&self) -> bool {
+        match &self.inner {
+            T::L(_leaf) => true,
+            T::B(_branch) => false,
+        }
+    }
+
+    pub(crate) fn as_mut_leaf(&mut self) -> &mut Leaf<K, V> {
         match &mut self.inner {
             T::L(ref mut leaf) => leaf,
             T::B(_) => panic!(),
+        }
+    }
+
+    pub(crate) fn as_leaf(&self) -> &Leaf<K, V> {
+        match &self.inner {
+            T::L(ref leaf) => leaf,
+            T::B(_) => panic!(),
+        }
+    }
+
+    pub(crate) fn as_mut_branch(&mut self) -> &mut Branch<K, V> {
+        match &mut self.inner {
+            T::L(_) => panic!(),
+            T::B(ref mut branch) => branch,
+        }
+    }
+
+    pub(crate) fn as_branch(&self) -> &Branch<K, V> {
+        match &self.inner {
+            T::L(_) => panic!(),
+            T::B(ref branch) => branch,
+        }
+    }
+
+    pub(crate) fn tree_density(&self) -> (usize, usize) {
+        match &self.inner {
+            T::L(leaf) => leaf.tree_density(),
+            T::B(branch) => branch.tree_density(),
+        }
+    }
+
+    pub(crate) fn leaf_count(&self) -> usize {
+        match &self.inner {
+            T::L(leaf) => 1,
+            T::B(branch) => branch.leaf_count(),
         }
     }
 }
@@ -127,7 +210,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
 
     // Add a new pivot + node.
     pub(crate) fn add_node(&mut self, node: ABNode<K, V>) -> BRInsertState<K, V> {
-        println!("pre ins -> {:?}", self);
         // Do we have space?
         if self.count == BK_CAPACITY {
             // if no space ->
@@ -147,12 +229,10 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                     unsafe { slice::from_raw_parts(left.as_ptr() as *const K, left.len()) };
                 inited.binary_search(kr)
             };
-            println!("bst result {:?}", r);
             let ins_idx = r.unwrap_err();
             let res = match ins_idx {
                 // Case 2
                 BK_CAPACITY => {
-                    println!("Case 2");
                     // Greater than all current values, so we'll just return max and node.
                     let max = unsafe {
                         ptr::read(self.node.get_unchecked(BV_CAPACITY - 1)).assume_init()
@@ -165,7 +245,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 }
                 // Case 3
                 BK_CAPACITY_MIN_N1 => {
-                    println!("Case 3");
                     // Greater than all but max, so we return max and node in the correct order.
                     let max = unsafe {
                         ptr::read(self.node.get_unchecked(BV_CAPACITY - 1)).assume_init()
@@ -178,7 +257,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 }
                 // Case 1
                 ins_idx => {
-                    println!("Case 1");
                     // Get the max - 1 and max nodes out.
                     let maxn1 = unsafe {
                         ptr::read(self.node.get_unchecked(BV_CAPACITY - 2)).assume_init()
@@ -210,7 +288,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
 
             // Adjust the count, because we always remove at least 1 from the keys.
             self.count -= 1;
-            println!("post ins -> {:?}", self);
             res
         } else {
             // if space ->
@@ -243,7 +320,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             // Now we insert 5, and 7, splits. 5 would remain in the tree and we'd split 7 to the right
             //
             // As a result, any "Ok(idx)" must represent a corruption of the tree.
-            println!("bst result {:?}", r);
             // debug_assert!(r.is_err());
             let ins_idx = r.unwrap_err();
             let leaf_ins_idx = ins_idx + 1;
@@ -298,32 +374,104 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             }
             // finally update the count
             self.count += 1;
-            println!("post ins -> {:?}", self);
             // Return that we are okay to go!
             BRInsertState::Ok
         }
     }
 
+    // get a node containing some K - need to return our related idx.
+    pub(crate) fn locate_node(&self, k: &K) -> usize {
+        let r = {
+            let (left, _) = self.key.split_at(self.count);
+            let inited: &[K] =
+                unsafe { slice::from_raw_parts(left.as_ptr() as *const K, left.len()) };
+            inited.binary_search(&k)
+        };
+
+        // If the value is Ok(idx), then that means
+        // we were located to the right node. This is because we
+        // exactly hit and located on the key.
+        //
+        // If the value is Err(idx), then we have the exact index already.
+        // as branches is one more.
+        match r {
+            Ok(v) => v + 1,
+            Err(v) => v,
+        }
+    }
+
     // remove a node by idx.
-    pub(crate) fn remove_by_idx(idx: usize) -> () {
+    pub(crate) fn remove_by_idx(&mut self, idx: usize) -> () {
+        debug_assert!(idx <= self.count);
         // remove by idx.
         unimplemented!();
     }
 
-    // get a node containing some K - need to return our related idx.
+    pub(crate) fn replace_by_idx(&mut self, idx: usize, mut node: ABNode<K, V>) -> () {
+        debug_assert!(idx <= self.count);
+        // We have to swap the value at idx with this node, then ensure that the
+        // prev is droped.
+        unsafe {
+            ptr::swap(self.node[idx].as_mut_ptr(), &mut node as *mut ABNode<K, V>);
+        }
+    }
+
+    pub(crate) fn get_mut_idx(&mut self, idx: usize) -> &mut ABNode<K, V> {
+        debug_assert!(idx <= self.count);
+        unsafe { &mut *self.node[idx].as_mut_ptr() }
+    }
+
+    pub(crate) fn get_idx(&self, idx: usize) -> &ABNode<K, V> {
+        debug_assert!(idx <= self.count);
+        unsafe { &*self.node[idx].as_ptr() }
+    }
+
+    pub(crate) fn get_idx_checked(&self, idx: usize) -> Option<&ABNode<K, V>> {
+        if idx <= self.count {
+            Some(unsafe { &*self.node[idx].as_ptr() })
+        } else {
+            None
+        }
+    }
 
     pub(crate) fn min(&self) -> &K {
-        unsafe { &*self.key[0].as_ptr() }
+        unsafe { (*self.node[0].as_ptr()).min() }
     }
 
     pub(crate) fn max(&self) -> &K {
-        unsafe { &*self.key[self.count - 1].as_ptr() }
+        unsafe { (*self.node[self.count].as_ptr()).max() }
     }
 
     pub(crate) fn len(&self) -> usize {
         self.count
     }
 
+    pub(crate) fn get_ref(&self, k: &K) -> Option<&V> {
+        // Which node should hold this value?
+        let idx = self.locate_node(k);
+        unsafe { (*self.node[idx].as_ptr()).get_ref(k) }
+    }
+
+    pub(crate) fn tree_density(&self) -> (usize, usize) {
+        let mut lcount = 0; // leaf populated
+        let mut mcount = 0; // leaf max possible
+        for idx in 0..(self.count + 1) {
+            let (l, m) = unsafe { (*self.node[idx].as_ptr()).tree_density() };
+            lcount += l;
+            mcount += m;
+        }
+        (lcount, mcount)
+    }
+
+    pub(crate) fn leaf_count(&self) -> usize {
+        let mut lcount = 0;
+        for idx in 0..(self.count + 1) {
+            lcount += unsafe { (*self.node[idx].as_ptr()).leaf_count() };
+        }
+        lcount
+    }
+
+    #[cfg(test)]
     fn check_sorted(&self) -> bool {
         // check the pivots are sorted.
         if self.count == 0 {
@@ -342,6 +490,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         }
     }
 
+    #[cfg(test)]
     fn check_descendents_valid(&self) -> bool {
         for work_idx in 0..self.count {
             // get left max and right min
@@ -360,6 +509,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         true
     }
 
+    #[cfg(test)]
     fn verify_children(&self) -> bool {
         // For each child node call verify on it.
         for work_idx in 0..self.count {
@@ -373,6 +523,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn verify(&self) -> bool {
         self.check_sorted() && self.check_descendents_valid() && self.verify_children()
     }
@@ -380,33 +531,57 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
 
 impl<K: Clone + Ord, V: Clone> Clone for Branch<K, V> {
     fn clone(&self) -> Self {
-        unimplemented!();
+        let mut nkey: [MaybeUninit<K>; BK_CAPACITY] =
+            unsafe { MaybeUninit::uninit().assume_init() };
+        let mut nnode: [MaybeUninit<Arc<Box<Node<K, V>>>>; BV_CAPACITY] =
+            unsafe { MaybeUninit::uninit().assume_init() };
+        for idx in 0..self.count {
+            unsafe {
+                let lkey = (*self.key[idx].as_ptr()).clone();
+                nkey[idx].as_mut_ptr().write(lkey);
+            }
+            unsafe {
+                let lnode = (*self.node[idx].as_ptr()).clone();
+                nnode[idx].as_mut_ptr().write(lnode);
+            }
+        }
+        // clone the last node.
+        unsafe {
+            let lnode = (*self.node[self.count].as_ptr()).clone();
+            nnode[self.count].as_mut_ptr().write(lnode);
+        }
+
+        Branch {
+            count: self.count,
+            key: nkey,
+            node: nnode,
+        }
     }
 }
 
 impl<K: Clone + Ord + Debug, V: Clone> Debug for Branch<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), Error> {
-        write!(f, "Branch -> {}\n", self.count);
-        write!(f, "  \\-> [  |");
+        write!(f, "Branch -> {}\n", self.count)?;
+        write!(f, "  \\-> [  |")?;
         for idx in 0..self.count {
-            write!(f, "{:^6?}|", unsafe { &*self.key[idx].as_ptr() });
+            write!(f, "{:^6?}|", unsafe { &*self.key[idx].as_ptr() })?;
         }
         #[cfg(test)]
         {
-            write!(f, " ]\n");
-            write!(f, " nids [{:^6?}", unsafe { (*self.node[0].as_ptr()).nid });
+            write!(f, " ]\n")?;
+            write!(f, " nids [{:^6?}", unsafe { (*self.node[0].as_ptr()).nid })?;
             for idx in 0..self.count {
-                write!(f, "{:^7?}", unsafe { (*self.node[idx + 1].as_ptr()).nid });
+                write!(f, "{:^7?}", unsafe { (*self.node[idx + 1].as_ptr()).nid })?;
             }
-            write!(f, " ]\n");
+            write!(f, " ]\n")?;
             write!(f, " mins [{:^6?}", unsafe {
                 (*self.node[0].as_ptr()).min()
-            });
+            })?;
             for idx in 0..self.count {
-                write!(f, "{:^7?}", unsafe { (*self.node[idx + 1].as_ptr()).min() });
+                write!(f, "{:^7?}", unsafe { (*self.node[idx + 1].as_ptr()).min() })?;
             }
         }
-        write!(f, " ]")
+        write!(f, " ]\n")
     }
 }
 
@@ -426,17 +601,22 @@ impl<K: Clone + Ord, V: Clone> Drop for Branch<K, V> {
                 ptr::drop_in_place(self.node[idx].as_mut_ptr());
             }
         }
-        println!("branch dropped {} + 1", self.count);
+        println!("branch dropped k:{}, v:{}", self.count, self.count + 1);
     }
 }
 
-unsafe fn slice_insert<T>(slice: &mut [T], new: T, idx: usize) {
-    ptr::copy(
-        slice.as_ptr().add(idx),
-        slice.as_mut_ptr().add(idx + 1),
-        slice.len() - idx - 1,
-    );
-    ptr::write(slice.get_unchecked_mut(idx), new);
+#[cfg(test)]
+impl<K: Clone + Ord, V: Clone> Drop for Node<K, V> {
+    fn drop(&mut self) {
+        DROP_COUNTER.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn check_drop_count() {
+    let node = NODE_COUNTER.load(Ordering::Acquire);
+    let drop = DROP_COUNTER.load(Ordering::Acquire);
+    assert!(node == drop);
 }
 
 #[cfg(test)]
@@ -445,26 +625,6 @@ mod tests {
     use super::super::states::{BNClone, BRInsertState};
     use super::{ABNode, Branch, Node};
     use std::sync::Arc;
-
-    // check clone txid behaviour
-    #[test]
-    fn test_bptree_node_req_clone() {
-        // Make a new node.
-        let nroot: Node<usize, usize> = Node::new_leaf(0);
-        // Req to clone it.
-        match nroot.req_clone(0) {
-            BNClone::Ok => {}
-            BNClone::Clone(_) => panic!(),
-        };
-        // Now do one where we do clone.
-        let nnode = match nroot.req_clone(1) {
-            BNClone::Ok => panic!(),
-            BNClone::Clone(nnode) => nnode,
-        };
-
-        assert!(nnode.txid == 1);
-        assert!(nnode.len() == nroot.len());
-    }
 
     #[test]
     fn test_bptree_node_new() {
