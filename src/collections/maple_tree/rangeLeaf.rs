@@ -1,9 +1,9 @@
+use super::constants::{CAPACITY, R_CAPACITY};
 use super::states::RangeInsertState;
-use super::constants::{R_CAPACITY, CAPACITY};
 use super::utils::M;
-use std::usize::MAX;
-use std::mem;
 use std::fmt::{self, Debug};
+use std::mem;
+use std::usize::MAX;
 
 extern crate num;
 
@@ -1099,11 +1099,11 @@ impl InternalPivots {
 }
 
 #[cfg(test)]
-mod test{
-    use super::RangeLeaf;
+mod test {
     use super::InternalPivots;
+    use super::RangeLeaf;
+    use crate::collections::maple_tree::constants::{CAPACITY, R_CAPACITY};
     use crate::collections::maple_tree::states::RangeInsertState;
-    use crate::collections::maple_tree::constants::{R_CAPACITY, CAPACITY};
     use crate::collections::maple_tree::utils::M;
     use std::usize::MAX;
 
@@ -1173,7 +1173,7 @@ mod test{
         assert!(ip.upper == R_CAPACITY - 1);
         assert!(ip.upper_is_max == false);
     }
-    
+
     #[test]
     fn test_range_node_internal_insert() {
         let mut rn: RangeLeaf<usize, usize> = RangeLeaf::new();

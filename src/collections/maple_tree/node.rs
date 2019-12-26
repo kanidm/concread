@@ -1,10 +1,9 @@
-use std::fmt::Debug;
-use super::rangeLeaf::RangeLeaf;
-use super::denseLeaf::DenseLeaf;
-use super::sparseLeaf::SparseLeaf;
-use super::rangeBranch::RangeBranch;
 use super::constants::{CAPACITY, R_CAPACITY};
-
+use super::denseLeaf::DenseLeaf;
+use super::rangeBranch::RangeBranch;
+use super::rangeLeaf::RangeLeaf;
+use super::sparseLeaf::SparseLeaf;
+use std::fmt::Debug;
 
 #[derive(Debug)]
 enum NodeTag<K, V> {

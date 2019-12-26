@@ -1,8 +1,8 @@
+use super::constants::{CAPACITY, R_CAPACITY};
+use super::node::Node;
 use super::utils::M;
 use std::fmt::Debug;
 use std::mem;
-use super::constants::{CAPACITY, R_CAPACITY};
-use super::node::Node; 
 
 #[derive(Debug)]
 pub struct RangeBranch<K, V> {

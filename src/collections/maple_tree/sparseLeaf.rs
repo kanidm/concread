@@ -1,5 +1,5 @@
-use super::utils::M;
 use super::constants::CAPACITY;
+use super::utils::M;
 use std::fmt::Debug;
 use std::mem;
 
@@ -279,13 +279,11 @@ where
     }
 }
 
-
 #[cfg(test)]
-mod tests{
+mod tests {
     use super::SparseLeaf;
-    use collections::maple_tree::utils::M;
     use collections::maple_tree::constants::CAPACITY;
-
+    use collections::maple_tree::utils::M;
 
     #[test]
     fn test_sparse_leaf_get_max() {
@@ -497,5 +495,4 @@ mod tests{
             assert!(sl.key[i] == M::Some(sorted_test_vals[i]));
         }
     }
-
 }
