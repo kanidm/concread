@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 // use super::branch::Branch;
 use super::iter::Iter;
-use super::states::{BLInsertState, BRInsertState, CRInsertState, CRCloneState, CRRemoveState, BLRemoveState};
+use super::states::{
+    BLInsertState, BLRemoveState, BRInsertState, CRCloneState, CRInsertState, CRRemoveState,
+};
 use std::iter::Extend;
 
 #[derive(Debug)]
@@ -398,7 +400,7 @@ fn path_clone<'a, K: Clone + Ord + Debug, V: Clone>(
             // No clone, just return.
             CRCloneState::NoClone
         } else {
-            let cnode =  node.req_clone(txid);
+            let cnode = node.req_clone(txid);
             CRCloneState::Clone(cnode)
         }
     } else {
@@ -440,23 +442,15 @@ fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
         if node.txid == txid {
             let mref = Arc::get_mut(node).unwrap();
             match mref.as_mut_leaf().remove(k) {
-                BLRemoveState::Ok(res) => {
-                    CRRemoveState::NoClone(res)
-                }
-                BLRemoveState::Shrink(res) => {
-                    CRRemoveState::Shrink(res)
-                }
+                BLRemoveState::Ok(res) => CRRemoveState::NoClone(res),
+                BLRemoveState::Shrink(res) => CRRemoveState::Shrink(res),
             }
         } else {
             let mut cnode = node.req_clone(txid);
             let mref = Arc::get_mut(&mut cnode).unwrap();
             match mref.as_mut_leaf().remove(k) {
-                BLRemoveState::Ok(res) => {
-                    CRRemoveState::Clone(res, cnode)
-                }
-                BLRemoveState::Shrink(res) => {
-                    CRRemoveState::CloneShrink(res, cnode)
-                }
+                BLRemoveState::Ok(res) => CRRemoveState::Clone(res, cnode),
+                BLRemoveState::Shrink(res) => CRRemoveState::CloneShrink(res, cnode),
             }
         }
     } else {
@@ -931,7 +925,7 @@ mod tests {
         // Check that emptying the root is ok.
         // BOTH of these need new txns to check clone, and then re-use txns.
         //
-        // 
+        //
         let lnode = create_leaf_node_full(0);
         let mut wcurs = CursorWrite::new(lnode, L_CAPACITY);
         println!("{:?}", wcurs);
@@ -956,8 +950,8 @@ mod tests {
         let node = create_leaf_node(0);
         let mut wcurs = CursorWrite::new(node, 1);
 
-            let _ = wcurs.remove(&0);
-            println!("{:?}", wcurs);
+        let _ = wcurs.remove(&0);
+        println!("{:?}", wcurs);
 
         mem::drop(wcurs);
         check_drop_count();
@@ -977,7 +971,10 @@ mod tests {
         let znode = create_leaf_node(0);
         let mut root = Node::new_branch(0, znode, lnode);
         // Prevent the tree shrinking.
-        Arc::get_mut(&mut root).unwrap().as_mut_branch().add_node(rnode);
+        Arc::get_mut(&mut root)
+            .unwrap()
+            .as_mut_branch()
+            .add_node(rnode);
         let mut wcurs = CursorWrite::new(root, 3);
         println!("{:?}", wcurs);
         assert!(wcurs.verify());
@@ -1002,7 +999,10 @@ mod tests {
         let znode = create_leaf_node(30);
         let mut root = Node::new_branch(0, lnode, rnode);
         // Prevent the tree shrinking.
-        Arc::get_mut(&mut root).unwrap().as_mut_branch().add_node(znode);
+        Arc::get_mut(&mut root)
+            .unwrap()
+            .as_mut_branch()
+            .add_node(znode);
         let mut wcurs = CursorWrite::new(root, 3);
         assert!(wcurs.verify());
 
@@ -1026,7 +1026,10 @@ mod tests {
         let znode = create_leaf_node(0);
         let mut root = Node::new_branch(0, znode, lnode);
         // Prevent the tree shrinking.
-        Arc::get_mut(&mut root).unwrap().as_mut_branch().add_node(rnode);
+        Arc::get_mut(&mut root)
+            .unwrap()
+            .as_mut_branch()
+            .add_node(rnode);
         let mut wcurs = CursorWrite::new(root, 3);
         assert!(wcurs.verify());
 
@@ -1053,7 +1056,10 @@ mod tests {
         let znode = create_leaf_node(30);
         let mut root = Node::new_branch(0, lnode, rnode);
         // Prevent the tree shrinking.
-        Arc::get_mut(&mut root).unwrap().as_mut_branch().add_node(znode);
+        Arc::get_mut(&mut root)
+            .unwrap()
+            .as_mut_branch()
+            .add_node(znode);
         let mut wcurs = CursorWrite::new(root, 3);
         assert!(wcurs.verify());
 
@@ -1155,7 +1161,10 @@ mod tests {
         let l2 = create_leaf_node(10);
         let l3 = create_leaf_node(20);
         let mut lbranch = Node::new_branch(0, l1, l2);
-        Arc::get_mut(&mut lbranch).unwrap().as_mut_branch().add_node(l3);
+        Arc::get_mut(&mut lbranch)
+            .unwrap()
+            .as_mut_branch()
+            .add_node(l3);
 
         let r1 = create_leaf_node(80);
         let r2 = create_leaf_node(90);
@@ -1197,7 +1206,10 @@ mod tests {
         let r2 = create_leaf_node(80);
         let r3 = create_leaf_node(90);
         let mut rbranch = Node::new_branch(0, r1, r2);
-        Arc::get_mut(&mut rbranch).unwrap().as_mut_branch().add_node(r3);
+        Arc::get_mut(&mut rbranch)
+            .unwrap()
+            .as_mut_branch()
+            .add_node(r3);
 
         let mut root = Node::new_branch(0, lbranch, rbranch);
         let mut wcurs = CursorWrite::new(root, 5);
@@ -1305,7 +1317,10 @@ mod tests {
         let l2 = create_leaf_node(10);
         let l3 = create_leaf_node(20);
         let mut lbranch = Node::new_branch(0, l1, l2);
-        Arc::get_mut(&mut lbranch).unwrap().as_mut_branch().add_node(l3);
+        Arc::get_mut(&mut lbranch)
+            .unwrap()
+            .as_mut_branch()
+            .add_node(l3);
 
         let r1 = create_leaf_node(80);
         let r2 = create_leaf_node(90);
@@ -1351,7 +1366,10 @@ mod tests {
         let r2 = create_leaf_node(80);
         let r3 = create_leaf_node(90);
         let mut rbranch = Node::new_branch(0, r1, r2);
-        Arc::get_mut(&mut rbranch).unwrap().as_mut_branch().add_node(r3);
+        Arc::get_mut(&mut rbranch)
+            .unwrap()
+            .as_mut_branch()
+            .add_node(r3);
 
         let mut root = Node::new_branch(0, lbranch, rbranch);
         let mut wcurs = CursorWrite::new(root, 5);
@@ -1366,7 +1384,148 @@ mod tests {
         assert!(wcurs.verify());
         mem::drop(wcurs);
         check_drop_count();
+    }
 
+    fn tree_create_rand() -> ABNode<usize, usize> {
+        let mut rng = rand::thread_rng();
+        let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
+        ins.shuffle(&mut rng);
+
+        let node = create_leaf_node(0);
+        let mut wcurs = CursorWrite::new(node, 0);
+
+        for v in ins.into_iter() {
+            let r = wcurs.insert(v, v);
+            assert!(r.is_none());
+            assert!(wcurs.verify());
+        }
+        let (r, _) = wcurs.finalise();
+        r
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_stress_1() {
+        // Insert ascending - we want to ensure the tree is a few levels deep
+        // so we do this to a reasonable number.
+        let node = tree_create_rand();
+        let mut wcurs = CursorWrite::new(node, L_CAPACITY << 4);
+
+        for v in 1..(L_CAPACITY << 4) {
+            println!("ITER v {}", v);
+            let r = wcurs.remove(&v);
+            assert!(r == Some(v));
+            assert!(wcurs.verify());
+        }
+        println!("{:?}", wcurs);
+        // On shutdown, check we dropped all as needed.
+        mem::drop(wcurs);
+        check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_stress_2() {
+        // Insert descending
+        let node = tree_create_rand();
+        let mut wcurs = CursorWrite::new(node, L_CAPACITY << 4);
+
+        for v in (1..(L_CAPACITY << 4)).rev() {
+            println!("ITER v {}", v);
+            let r = wcurs.remove(&v);
+            assert!(r == Some(v));
+            assert!(wcurs.verify());
+        }
+        println!("{:?}", wcurs);
+        println!("DENSITY -> {:?}", wcurs.get_tree_density());
+        // On shutdown, check we dropped all as needed.
+        mem::drop(wcurs);
+        check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_stress_3() {
+        // Insert random
+        let mut rng = rand::thread_rng();
+        let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
+        ins.shuffle(&mut rng);
+
+        let node = tree_create_rand();
+        let mut wcurs = CursorWrite::new(node, L_CAPACITY << 4);
+
+        for v in ins.into_iter() {
+            let r = wcurs.remove(&v);
+            assert!(r == Some(v));
+            assert!(wcurs.verify());
+        }
+        println!("{:?}", wcurs);
+        println!("DENSITY -> {:?}", wcurs.get_tree_density());
+        // On shutdown, check we dropped all as needed.
+        mem::drop(wcurs);
+        check_drop_count();
+    }
+
+    // Add transaction-ised versions.
+    #[test]
+    fn test_bptree_cursor_remove_stress_4() {
+        // Insert ascending - we want to ensure the tree is a few levels deep
+        // so we do this to a reasonable number.
+        let mut node = tree_create_rand();
+
+        for v in 1..(L_CAPACITY << 4) {
+            let mut wcurs = CursorWrite::new(node, 0);
+            println!("ITER v {}", v);
+            let r = wcurs.remove(&v);
+            assert!(r == Some(v));
+            assert!(wcurs.verify());
+            let (n, _) = wcurs.finalise();
+            node = n;
+        }
+        println!("{:?}", node);
+        // On shutdown, check we dropped all as needed.
+        mem::drop(node);
+        check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_stress_5() {
+        // Insert descending
+        let mut node = tree_create_rand();
+
+        for v in (1..(L_CAPACITY << 4)).rev() {
+            let mut wcurs = CursorWrite::new(node, 0);
+            println!("ITER v {}", v);
+            let r = wcurs.remove(&v);
+            assert!(r == Some(v));
+            assert!(wcurs.verify());
+            let (n, _) = wcurs.finalise();
+            node = n;
+        }
+        println!("{:?}", node);
+        // On shutdown, check we dropped all as needed.
+        mem::drop(node);
+        check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_stress_6() {
+        // Insert random
+        let mut rng = rand::thread_rng();
+        let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
+        ins.shuffle(&mut rng);
+
+        let mut node = tree_create_rand();
+
+        for v in ins.into_iter() {
+            let mut wcurs = CursorWrite::new(node, 0);
+            let r = wcurs.remove(&v);
+            assert!(r == Some(v));
+            assert!(wcurs.verify());
+            let (n, _) = wcurs.finalise();
+            node = n;
+        }
+        println!("{:?}", node);
+        // On shutdown, check we dropped all as needed.
+        mem::drop(node);
+        check_drop_count();
     }
 
     /*
@@ -1386,4 +1545,5 @@ mod tests {
         std::mem::drop(r1);
     }
     */
+
 }

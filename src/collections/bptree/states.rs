@@ -83,8 +83,8 @@ where
     NoClone(Option<V>),
     // We had to clone the referenced node provided.
     Clone(Option<V>, ABNode<K, V>),
-    // 
+    //
     Shrink(Option<V>),
-    // 
+    //
     CloneShrink(Option<V>, ABNode<K, V>),
 }
