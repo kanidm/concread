@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 // use super::branch::Branch;
 use super::iter::Iter;
-use super::states::{BLInsertState, BRInsertState, CRInsertState};
+use super::states::{BLInsertState, BRInsertState, CRInsertState, CRCloneState, CRRemoveState, BLRemoveState};
 use std::iter::Extend;
 
 #[derive(Debug)]
@@ -127,6 +127,59 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         }
         r
     }
+
+    pub(crate) fn remove(&mut self, k: &K) -> Option<V> {
+        match clone_and_remove(&mut self.root, self.txid, k) {
+            CRRemoveState::NoClone(res) => res,
+            CRRemoveState::Clone(res, mut nnode) => {
+                mem::swap(&mut self.root, &mut nnode);
+                res
+            }
+            CRRemoveState::Shrink(res) => {
+                if self.root.is_leaf() {
+                    // No action - we have an empty tree.
+                    res
+                } else {
+                    // It's a branch, we need to do some more work then ...
+                    unimplemented!();
+                }
+            }
+            CRRemoveState::CloneShrink(res, mut nnode) => {
+                if nnode.is_leaf() {
+                    // The tree is empty, but we cloned the root to get here.
+                    mem::swap(&mut self.root, &mut nnode);
+                    res
+                } else {
+                    // It's a branch, we need to do some more work then ...
+                    unimplemented!();
+                }
+            }
+        }
+    }
+
+    pub(crate) fn path_clone(&mut self, k: &K) {
+        match path_clone(&mut self.root, self.txid, k) {
+            CRCloneState::Clone(mut nroot) => {
+                // We cloned the root, so swap it.
+                mem::swap(&mut self.root, &mut nroot);
+            }
+            CRCloneState::NoClone => {}
+        };
+    }
+
+    /*
+    pub(crate) fn get_mut_ref(&mut self, k: &K) -> Option<&mut V> {
+        match path_clone(&mut self.root, self.txid, k) {
+            CRCloneState::Clone(mut nroot) => {
+                // We cloned the root, so swap it.
+                mem::swap(&mut self.root, &mut nroot);
+            }
+            CRCloneState::NoClone => {}
+        };
+        // Now get the ref.
+        path_get_mut_ref(&mut self.root, k)
+    }
+    */
 
     #[cfg(test)]
     pub(crate) fn root_txid(&self) -> usize {
@@ -334,6 +387,98 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
         }
     }
 }
+
+fn path_clone<'a, K: Clone + Ord + Debug, V: Clone>(
+    node: &'a mut ABNode<K, V>,
+    txid: usize,
+    k: &K,
+) -> CRCloneState<K, V> {
+    if node.is_leaf() {
+        if txid == node.txid {
+            // No clone, just return.
+            CRCloneState::NoClone
+        } else {
+            let cnode =  node.req_clone(txid);
+            CRCloneState::Clone(cnode)
+        }
+    } else {
+        // We are in a branch, so locate our descendent and prepare
+        // to clone if needed.
+        let node_txid = node.txid;
+        let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
+        let anode_idx = nmref.locate_node(&k);
+        let mut anode = nmref.get_mut_idx(anode_idx);
+        match path_clone(&mut anode, txid, k) {
+            CRCloneState::Clone(mut cnode) => {
+                // Do we need to clone?
+                if txid == node_txid {
+                    // Nope, just insert and unwind.
+                    nmref.replace_by_idx(anode_idx, cnode);
+                    CRCloneState::NoClone
+                } else {
+                    // We require to be cloned.
+                    let mut acnode = node.req_clone(txid);
+                    let nmref = Arc::get_mut(&mut acnode).unwrap().as_mut_branch();
+                    nmref.replace_by_idx(anode_idx, cnode);
+                    CRCloneState::Clone(acnode)
+                }
+            }
+            CRCloneState::NoClone => {
+                // Did not clone, move on.
+                CRCloneState::NoClone
+            }
+        }
+    }
+}
+
+fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
+    node: &'a mut ABNode<K, V>,
+    txid: usize,
+    k: &K,
+) -> CRRemoveState<K, V> {
+    if node.is_leaf() {
+        if node.txid == txid {
+            let mref = Arc::get_mut(node).unwrap();
+            match mref.as_mut_leaf().remove(k) {
+                BLRemoveState::Ok(res) => {
+                    CRRemoveState::NoClone(res)
+                }
+                BLRemoveState::Shrink(res) => {
+                    CRRemoveState::Shrink(res)
+                }
+            }
+        } else {
+            let mut cnode = node.req_clone(txid);
+            let mref = Arc::get_mut(&mut cnode).unwrap();
+            match mref.as_mut_leaf().remove(k) {
+                BLRemoveState::Ok(res) => {
+                    CRRemoveState::Clone(res, cnode)
+                }
+                BLRemoveState::Shrink(res) => {
+                    CRRemoveState::CloneShrink(res, cnode)
+                }
+            }
+        }
+    } else {
+        unimplemented!();
+    }
+}
+
+/*
+fn path_get_mut_ref<'a, K: Clone + Ord + Debug, V: Clone>(
+    mut node: &'a mut ABNode<K, V>,
+    k: &K,
+) -> Option<&'a mut V> {
+    if node.is_leaf()  {
+        Arc::get_mut(node).unwrap().as_mut_leaf().get_mut_ref(k)
+    } else {
+        let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
+        let anode_idx = nmref.locate_node(&k);
+        let mut anode = nmref.get_mut_idx(anode_idx);
+        path_get_mut_ref(&mut anode, k)
+    }
+}
+*/
 
 #[cfg(test)]
 mod tests {
@@ -780,16 +925,46 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree_cursor_remove_1() {
+    fn test_bptree_cursor_remove_01_p0() {
         // Check that a single value can be removed correctly without change.
         // Check that a missing value is removed as "None".
+        // Check that emptying the root is ok.
         // BOTH of these need new txns to check clone, and then re-use txns.
+        //
+        // 
+        let lnode = create_leaf_node_full(0);
+        let mut wcurs = CursorWrite::new(lnode, L_CAPACITY);
+        println!("{:?}", wcurs);
 
-        unimplemented!();
+        for v in 0..L_CAPACITY {
+            let x = wcurs.remove(&v);
+            println!("{:?}", wcurs);
+            assert!(x == Some(v));
+        }
+
+        for v in 0..L_CAPACITY {
+            let x = wcurs.remove(&v);
+            assert!(x == None);
+        }
+
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree_cursor_remove_2() {
+    fn test_bptree_cursor_remove_01_p1() {
+        let node = create_leaf_node(0);
+        let mut wcurs = CursorWrite::new(node, 1);
+
+            let _ = wcurs.remove(&0);
+            println!("{:?}", wcurs);
+
+        mem::drop(wcurs);
+        check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_02() {
         // Given the tree:
         //
         //      root
@@ -797,7 +972,20 @@ mod tests {
         //  leaf    split leaf
         //
         // Remove from "split leaf" and merge left. (new txn)
-        unimplemented!();
+        let lnode = create_leaf_node(10);
+        let rnode = create_leaf_node(20);
+        let znode = create_leaf_node(0);
+        let mut root = Node::new_branch(0, znode, lnode);
+        // Prevent the tree shrinking.
+        Arc::get_mut(&mut root).unwrap().as_mut_branch().add_node(rnode);
+        let mut wcurs = CursorWrite::new(root, 3);
+        println!("{:?}", wcurs);
+        assert!(wcurs.verify());
+
+        wcurs.remove(&20);
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -809,7 +997,19 @@ mod tests {
         //  leaf    split leaf
         //
         // Remove from "leaf" and merge right (really left, but you know ...). (new txn)
-        unimplemented!();
+        let lnode = create_leaf_node(10);
+        let rnode = create_leaf_node(20);
+        let znode = create_leaf_node(30);
+        let mut root = Node::new_branch(0, lnode, rnode);
+        // Prevent the tree shrinking.
+        Arc::get_mut(&mut root).unwrap().as_mut_branch().add_node(znode);
+        let mut wcurs = CursorWrite::new(root, 3);
+        assert!(wcurs.verify());
+
+        wcurs.remove(&10);
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -821,7 +1021,22 @@ mod tests {
         //  leaf    split leaf
         //
         // Remove from "split leaf" and merge left. (leaf cloned already)
-        unimplemented!();
+        let lnode = create_leaf_node(10);
+        let rnode = create_leaf_node(20);
+        let znode = create_leaf_node(0);
+        let mut root = Node::new_branch(0, znode, lnode);
+        // Prevent the tree shrinking.
+        Arc::get_mut(&mut root).unwrap().as_mut_branch().add_node(rnode);
+        let mut wcurs = CursorWrite::new(root, 3);
+        assert!(wcurs.verify());
+
+        // Setup leaf to already be cloned.
+        wcurs.path_clone(&10);
+
+        wcurs.remove(&20);
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -833,7 +1048,22 @@ mod tests {
         //  leaf    split leaf
         //
         // Remove from "leaf" and merge 'right'. (split leaf cloned already)
-        unimplemented!();
+        let lnode = create_leaf_node(10);
+        let rnode = create_leaf_node(20);
+        let znode = create_leaf_node(30);
+        let mut root = Node::new_branch(0, lnode, rnode);
+        // Prevent the tree shrinking.
+        Arc::get_mut(&mut root).unwrap().as_mut_branch().add_node(znode);
+        let mut wcurs = CursorWrite::new(root, 3);
+        assert!(wcurs.verify());
+
+        // Setup leaf to already be cloned.
+        wcurs.path_clone(&20);
+
+        wcurs.remove(&10);
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -853,7 +1083,21 @@ mod tests {
         //
         //   when remove from rbranch, mergc left to lbranch.
         //   should cause tree height reduction.
-        unimplemented!();
+        let l1 = create_leaf_node(0);
+        let l2 = create_leaf_node(10);
+        let r1 = create_leaf_node(20);
+        let r2 = create_leaf_node(30);
+        let lbranch = Node::new_branch(0, l1, l2);
+        let rbranch = Node::new_branch(0, r1, r2);
+        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let mut wcurs = CursorWrite::new(root, 4);
+        assert!(wcurs.verify());
+
+        wcurs.remove(&30);
+
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -873,7 +1117,21 @@ mod tests {
         //
         //   when remove from lbranch, merge right to rbranch.
         //   should cause tree height reduction.
-        unimplemented!();
+        let l1 = create_leaf_node(0);
+        let l2 = create_leaf_node(10);
+        let r1 = create_leaf_node(20);
+        let r2 = create_leaf_node(30);
+        let lbranch = Node::new_branch(0, l1, l2);
+        let rbranch = Node::new_branch(0, r1, r2);
+        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let mut wcurs = CursorWrite::new(root, 4);
+        assert!(wcurs.verify());
+
+        wcurs.remove(&10);
+
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -893,7 +1151,25 @@ mod tests {
         //
         //   when remove from rbranch, borrow from lbranch
         //   will NOT reduce height
-        unimplemented!();
+        let l1 = create_leaf_node(0);
+        let l2 = create_leaf_node(10);
+        let l3 = create_leaf_node(20);
+        let mut lbranch = Node::new_branch(0, l1, l2);
+        Arc::get_mut(&mut lbranch).unwrap().as_mut_branch().add_node(l3);
+
+        let r1 = create_leaf_node(80);
+        let r2 = create_leaf_node(90);
+        let rbranch = Node::new_branch(0, r1, r2);
+
+        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let mut wcurs = CursorWrite::new(root, 5);
+        assert!(wcurs.verify());
+
+        wcurs.remove(&80);
+
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -913,7 +1189,25 @@ mod tests {
         //
         //   when remove from lbranch, borrow from rbranch
         //   will NOT reduce height
-        unimplemented!();
+        let l1 = create_leaf_node(0);
+        let l2 = create_leaf_node(10);
+        let lbranch = Node::new_branch(0, l1, l2);
+
+        let r1 = create_leaf_node(70);
+        let r2 = create_leaf_node(80);
+        let r3 = create_leaf_node(90);
+        let mut rbranch = Node::new_branch(0, r1, r2);
+        Arc::get_mut(&mut rbranch).unwrap().as_mut_branch().add_node(r3);
+
+        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let mut wcurs = CursorWrite::new(root, 5);
+        assert!(wcurs.verify());
+
+        wcurs.remove(&10);
+
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -933,7 +1227,24 @@ mod tests {
         //
         //   when remove from rbranch, mergc left to lbranch.
         //   should cause tree height reduction.
-        unimplemented!();
+        let l1 = create_leaf_node(0);
+        let l2 = create_leaf_node(10);
+        let r1 = create_leaf_node(20);
+        let r2 = create_leaf_node(30);
+        let lbranch = Node::new_branch(0, l1, l2);
+        let rbranch = Node::new_branch(0, r1, r2);
+        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let mut wcurs = CursorWrite::new(root, 4);
+        assert!(wcurs.verify());
+
+        wcurs.path_clone(&0);
+        wcurs.path_clone(&10);
+
+        wcurs.remove(&30);
+
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -953,7 +1264,24 @@ mod tests {
         //
         //   when remove from lbranch, merge right to rbranch.
         //   should cause tree height reduction.
-        unimplemented!();
+        let l1 = create_leaf_node(0);
+        let l2 = create_leaf_node(10);
+        let r1 = create_leaf_node(20);
+        let r2 = create_leaf_node(30);
+        let lbranch = Node::new_branch(0, l1, l2);
+        let rbranch = Node::new_branch(0, r1, r2);
+        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let mut wcurs = CursorWrite::new(root, 4);
+        assert!(wcurs.verify());
+
+        wcurs.path_clone(&20);
+        wcurs.path_clone(&30);
+
+        wcurs.remove(&0);
+
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -973,7 +1301,29 @@ mod tests {
         //
         //   when remove from rbranch, borrow from lbranch
         //   will NOT reduce height
-        unimplemented!();
+        let l1 = create_leaf_node(0);
+        let l2 = create_leaf_node(10);
+        let l3 = create_leaf_node(20);
+        let mut lbranch = Node::new_branch(0, l1, l2);
+        Arc::get_mut(&mut lbranch).unwrap().as_mut_branch().add_node(l3);
+
+        let r1 = create_leaf_node(80);
+        let r2 = create_leaf_node(90);
+        let rbranch = Node::new_branch(0, r1, r2);
+
+        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let mut wcurs = CursorWrite::new(root, 5);
+        assert!(wcurs.verify());
+
+        wcurs.path_clone(&0);
+        wcurs.path_clone(&10);
+        wcurs.path_clone(&20);
+
+        wcurs.remove(&90);
+
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
@@ -993,12 +1343,47 @@ mod tests {
         //
         //   when remove from lbranch, borrow from rbranch
         //   will NOT reduce height
-        unimplemented!();
+        let l1 = create_leaf_node(0);
+        let l2 = create_leaf_node(10);
+        let lbranch = Node::new_branch(0, l1, l2);
+
+        let r1 = create_leaf_node(70);
+        let r2 = create_leaf_node(80);
+        let r3 = create_leaf_node(90);
+        let mut rbranch = Node::new_branch(0, r1, r2);
+        Arc::get_mut(&mut rbranch).unwrap().as_mut_branch().add_node(r3);
+
+        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let mut wcurs = CursorWrite::new(root, 5);
+        assert!(wcurs.verify());
+
+        wcurs.path_clone(&70);
+        wcurs.path_clone(&80);
+        wcurs.path_clone(&90);
+
+        wcurs.remove(&10);
+
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
+
     }
 
+    /*
     #[test]
     fn test_bptree_cursor_get_mut_ref_1() {
-        // Test that we can clone a path, and then allow get_mut_ref to work.
-        unimplemented!();
+        // Test that we can clone a path (new txn)
+        // Test that we don't re-clone.
+        let lnode = create_leaf_node_full(10);
+        let rnode = create_leaf_node_full(20);
+        let root = Node::new_branch(0, lnode, rnode);
+        let mut wcurs = CursorWrite::new(root, 0);
+        assert!(wcurs.verify());
+
+        let r1 = wcurs.get_mut_ref(&10);
+        std::mem::drop(r1);
+        let r1 = wcurs.get_mut_ref(&10);
+        std::mem::drop(r1);
     }
+    */
 }

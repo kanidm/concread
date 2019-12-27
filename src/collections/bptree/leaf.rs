@@ -72,7 +72,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         }
     }
 
-    fn remove(&mut self, k: &K) -> BLRemoveState<V> {
+    pub(crate) fn remove(&mut self, k: &K) -> BLRemoveState<V> {
         // We already were empty - should never occur, but let's be paranoid.
         if self.count == 0 {
             return BLRemoveState::Shrink(None);
@@ -115,16 +115,16 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         unsafe { &*self.key[idx].as_ptr() }
     }
 
-    fn get_idx(&self, k: &K) -> Option<usize> {
-        for idx in 0..self.count {
-            unsafe {
-                if &*self.key[idx].as_ptr() == k {
-                    // Shortcut return.
-                    return Some(idx);
-                }
-            }
+    pub(crate) fn get_idx(&self, k: &K) -> Option<usize> {
+        match {
+            let (left, _) = self.key.split_at(self.count);
+            let inited: &[K] =
+                unsafe { slice::from_raw_parts(left.as_ptr() as *const K, left.len()) };
+            inited.binary_search(&k)
+        } {
+            Ok(idx) => Some(idx),
+            Err(_) => None,
         }
-        None
     }
 
     pub(crate) fn get_ref(&self, k: &K) -> Option<&V> {
@@ -132,7 +132,11 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
             .map(|idx| unsafe { &*self.value[idx].as_ptr() })
     }
 
-    fn get_mut_ref(&mut self, k: &K) -> Option<&mut V> {
+    pub(crate) fn get_mut_ref_idx(&mut self, idx: usize) -> &mut V {
+        unsafe { &mut *self.value[idx].as_mut_ptr() }
+    }
+
+    pub(crate) fn get_mut_ref(&mut self, k: &K) -> Option<&mut V> {
         self.get_idx(k)
             .map(|idx| unsafe { &mut *self.value[idx].as_mut_ptr() })
     }

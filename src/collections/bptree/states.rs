@@ -62,3 +62,29 @@ where
     // We had to clone and split.
     CloneSplit(ABNode<K, V>, ABNode<K, V>),
 }
+
+#[derive(Debug)]
+pub(crate) enum CRCloneState<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
+    Clone(ABNode<K, V>),
+    NoClone,
+}
+
+#[derive(Debug)]
+pub(crate) enum CRRemoveState<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
+    // We did not need to clone, here is the result.
+    NoClone(Option<V>),
+    // We had to clone the referenced node provided.
+    Clone(Option<V>, ABNode<K, V>),
+    // 
+    Shrink(Option<V>),
+    // 
+    CloneShrink(Option<V>, ABNode<K, V>),
+}
