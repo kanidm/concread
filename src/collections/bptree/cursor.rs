@@ -1516,6 +1516,8 @@ mod tests {
 
         for v in ins.into_iter() {
             let mut wcurs = CursorWrite::new(node, 0);
+            let r = wcurs.insert(v, v);
+            assert!(r.is_none());
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
