@@ -34,8 +34,7 @@ where
 }
 
 #[derive(Debug)]
-pub(crate) enum BRShrinkState
-{
+pub(crate) enum BRShrinkState {
     Balanced,
     Merge,
     Shrink,

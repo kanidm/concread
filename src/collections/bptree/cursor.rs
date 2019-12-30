@@ -12,8 +12,8 @@ use std::sync::Arc;
 // use super::branch::Branch;
 use super::iter::Iter;
 use super::states::{
-    BLInsertState, BLRemoveState, BRInsertState, CRCloneState, CRInsertState, CRRemoveState,
-    BRShrinkState,
+    BLInsertState, BLRemoveState, BRInsertState, BRShrinkState, CRCloneState, CRInsertState,
+    CRRemoveState,
 };
 use std::iter::Extend;
 
@@ -497,7 +497,6 @@ fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
                 if txid == node_txid {
                     // We don't need to clone.
                     unimplemented!();
-
                 } else {
                     // We do need to clone
                     let mut cnode = node.req_clone(txid);

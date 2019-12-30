@@ -492,18 +492,16 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
 
     fn clone_idx(&mut self, txid: usize, idx: usize) {
         unsafe {
-            let prev = unsafe {
-                ptr::read(self.node.get_unchecked(idx)).assume_init()
-            };
+            let prev = unsafe { ptr::read(self.node.get_unchecked(idx)).assume_init() };
             let cnode = prev.req_clone(txid);
             debug_assert!(Arc::strong_count(&cnode) == 1);
-            unsafe {
-                ptr::write(self.node.get_unchecked_mut(idx), MaybeUninit::new(cnode))
-            };
-            debug_assert!({
-                let r = unsafe {&mut *self.node[idx].as_mut_ptr()};
-                Arc::strong_count(&r)
-            } == 1)
+            unsafe { ptr::write(self.node.get_unchecked_mut(idx), MaybeUninit::new(cnode)) };
+            debug_assert!(
+                {
+                    let r = unsafe { &mut *self.node[idx].as_mut_ptr() };
+                    Arc::strong_count(&r)
+                } == 1
+            )
         }
     }
 
