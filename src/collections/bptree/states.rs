@@ -34,6 +34,14 @@ where
 }
 
 #[derive(Debug)]
+pub(crate) enum BRShrinkState
+{
+    Balanced,
+    Merge,
+    Shrink,
+}
+
+#[derive(Debug)]
 pub(crate) enum BNClone<K, V>
 where
     K: Ord + Clone,

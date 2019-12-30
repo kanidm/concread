@@ -5,9 +5,9 @@ use std::slice;
 use std::sync::Arc;
 use std::thread;
 
-use super::constants::{BK_CAPACITY, BK_CAPACITY_MIN_N1, BV_CAPACITY};
+use super::constants::{BK_CAPACITY, BK_CAPACITY_MIN_N1, BV_CAPACITY, L_CAPACITY};
 use super::leaf::Leaf;
-use super::states::BRInsertState;
+use super::states::{BRInsertState, BRShrinkState};
 use super::utils::*;
 
 #[cfg(test)]
@@ -381,6 +381,132 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         }
     }
 
+    pub(crate) fn shrink_decision(&mut self, ridx: usize) -> BRShrinkState {
+        // Given two nodes, we need to decide what to do with them!
+        //
+        // Remember, this isn't happening in a vacuum. This is really a manipulation of
+        // the following structure:
+        //
+        //      parent (self)
+        //     /     \
+        //   left    right
+        //
+        //   We also need to consider the following situation too:
+        //
+        //          root
+        //         /    \
+        //    lbranch   rbranch
+        //    /    \    /     \
+        //   l1    l2  r1     r2
+        //
+        //  Imagine we have exhausted r2, so we need to merge:
+        //
+        //          root
+        //         /    \
+        //    lbranch   rbranch
+        //    /    \    /     \
+        //   l1    l2  r1 <<-- r2
+        //
+        // This leaves us with a partial state of
+        //
+        //          root
+        //         /    \
+        //    lbranch   rbranch (invalid!)
+        //    /    \    /
+        //   l1    l2  r1
+        //
+        // This means rbranch issues a cloneshrink to root. clone shrink must contain the remainer
+        // so that it can be reparented:
+        //
+        //          root
+        //         /
+        //    lbranch --
+        //    /    \    \
+        //   l1    l2   r1
+        //
+        // Now root has to shrink too.
+        //
+        //     root  --
+        //    /    \    \
+        //   l1    l2   r1
+        //
+        // So, we have to analyse the situation.
+        //  * Have left or right been emptied? (how to handle when branches
+        //  *
+        //  * Is left or right belowe a reasonable threshold?
+        //  * Does the opposite have capacity to remain valid?
+        //  *
+        //
+
+        println!("{:?}", self);
+        println!("{:?}", ridx);
+        let (left, right) = self.get_mut_pair(ridx);
+
+        if left.is_leaf() {
+            debug_assert!(right.is_leaf());
+            debug_assert!(Arc::strong_count(left) == 1);
+            debug_assert!(Arc::strong_count(right) == 1);
+            let lmut = Arc::get_mut(left).unwrap().as_mut_leaf();
+            debug_assert!(Arc::strong_count(right) == 1);
+            let rmut = Arc::get_mut(right).unwrap().as_mut_leaf();
+
+            if lmut.len() + rmut.len() <= L_CAPACITY {
+                // merge
+                unimplemented!();
+            } else {
+                if lmut.len() > rmut.len() {
+                    // shift from left to right
+                    unimplemented!();
+                } else {
+                    // shift from right to left.
+                    unimplemented!();
+                }
+            }
+        } else {
+            debug_assert!(!right.is_leaf());
+            let lmut = Arc::get_mut(left).unwrap().as_mut_branch();
+            let rmut = Arc::get_mut(right).unwrap().as_mut_branch();
+            unimplemented!();
+        }
+    }
+
+    pub(crate) fn clone_sibling_idx(&mut self, txid: usize, idx: usize) -> usize {
+        // This clones and sets up for a subsequent
+        // merge.
+        if idx == 0 {
+            println!("Doing idx 0 inverse clone");
+            // If we are zero, we clone our right sibling.
+            // Clone idx 1
+            self.clone_idx(txid, 1);
+            // And increment the idx to 1
+            1
+        } else {
+            println!("Doing idx {} clone", idx - 1);
+            // Otherwise we clone to the left
+            self.clone_idx(txid, idx - 1);
+            // And return as is.
+
+            idx
+        }
+    }
+
+    fn clone_idx(&mut self, txid: usize, idx: usize) {
+        unsafe {
+            let prev = unsafe {
+                ptr::read(self.node.get_unchecked(idx)).assume_init()
+            };
+            let cnode = prev.req_clone(txid);
+            debug_assert!(Arc::strong_count(&cnode) == 1);
+            unsafe {
+                ptr::write(self.node.get_unchecked_mut(idx), MaybeUninit::new(cnode))
+            };
+            debug_assert!({
+                let r = unsafe {&mut *self.node[idx].as_mut_ptr()};
+                Arc::strong_count(&r)
+            } == 1)
+        }
+    }
+
     // get a node containing some K - need to return our related idx.
     pub(crate) fn locate_node(&self, k: &K) -> usize {
         let r = {
@@ -420,7 +546,19 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
 
     pub(crate) fn get_mut_idx(&mut self, idx: usize) -> &mut ABNode<K, V> {
         debug_assert!(idx <= self.count);
-        unsafe { &mut *self.node[idx].as_mut_ptr() }
+        let v = unsafe { &mut *self.node[idx].as_mut_ptr() };
+        debug_assert!(Arc::strong_count(&v) == 1);
+        v
+    }
+
+    pub(crate) fn get_mut_pair(&mut self, idx: usize) -> (&mut ABNode<K, V>, &mut ABNode<K, V>) {
+        debug_assert!(idx <= self.count);
+        let l = unsafe { &mut *self.node[idx - 1].as_mut_ptr() };
+        let r = unsafe { &mut *self.node[idx].as_mut_ptr() };
+        debug_assert!(Arc::ptr_eq(&l, &r) == false);
+        debug_assert!(Arc::strong_count(&l) == 1);
+        debug_assert!(Arc::strong_count(&r) == 1);
+        (l, r)
     }
 
     pub(crate) fn get_idx(&self, idx: usize) -> &ABNode<K, V> {

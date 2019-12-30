@@ -13,6 +13,7 @@ use std::sync::Arc;
 use super::iter::Iter;
 use super::states::{
     BLInsertState, BLRemoveState, BRInsertState, CRCloneState, CRInsertState, CRRemoveState,
+    BRShrinkState,
 };
 use std::iter::Extend;
 
@@ -454,7 +455,81 @@ fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
             }
         }
     } else {
-        unimplemented!();
+        // Locate the node we need to work on and then react if it
+        // requests a shrink.
+        let node_txid = node.txid;
+        let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
+        let anode_idx = nmref.locate_node(&k);
+        let mut anode = nmref.get_mut_idx(anode_idx);
+        match clone_and_remove(&mut anode, txid, k) {
+            CRRemoveState::NoClone(res) => {
+                // No action needed, keep unwinding.
+                debug_assert!(txid == node.txid);
+                CRRemoveState::NoClone(res)
+            }
+            CRRemoveState::Clone(res, lnode) => {
+                // Clone the path
+                // Do we need to be cloned?
+                if txid == node_txid {
+                    // No, just replace.
+                    nmref.replace_by_idx(anode_idx, lnode);
+                    CRRemoveState::NoClone(res)
+                } else {
+                    let mut cnode = node.req_clone(txid);
+                    let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
+                    nmref.replace_by_idx(anode_idx, lnode);
+                    CRRemoveState::Clone(res, cnode)
+                }
+            }
+            CRRemoveState::Shrink(res) => {
+                // The node is already in transaction (so
+                // we should be too).
+                if txid == node_txid {
+                    unimplemented!();
+                } else {
+                    unreachable!("This represents a corrupt tree state");
+                }
+            }
+            CRRemoveState::CloneShrink(res, nnode) => {
+                // The node was cloned to be removed, and has hit the shrink
+                // decision.
+
+                if txid == node_txid {
+                    // We don't need to clone.
+                    unimplemented!();
+
+                } else {
+                    // We do need to clone
+                    let mut cnode = node.req_clone(txid);
+                    debug_assert!(Arc::strong_count(&cnode) == 1);
+                    let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
+
+                    // Put our cloned child into the tree at the correct location, don't worry,
+                    // the shrink_decision will deal with it.
+                    nmref.replace_by_idx(anode_idx, nnode);
+
+                    // Now setup the sibling, to the left *or* right.
+                    let right_idx = nmref.clone_sibling_idx(txid, anode_idx);
+
+                    // Okay, now work out what we need to do.
+                    match nmref.shrink_decision(right_idx) {
+                        BRShrinkState::Balanced | BRShrinkState::Merge => {
+                            // K:V were distributed through left and right,
+                            // so no further action needed.
+                            // -- OR --
+                            // Right was merged to left, and we remain
+                            // valid
+                            CRRemoveState::Clone(res, cnode)
+                        }
+                        BRShrinkState::Shrink => {
+                            // Right was merged to left, but we have now falled under the needed
+                            // amount of values.
+                            CRRemoveState::CloneShrink(res, cnode)
+                        }
+                    }
+                }
+            } // end cloneshrink
+        }
     }
 }
 
