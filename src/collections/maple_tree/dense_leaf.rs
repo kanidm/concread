@@ -1,7 +1,6 @@
 use super::constants::D_CAPACITY;
 use super::utils::M;
 use std::fmt::Debug;
-use std::mem;
 
 #[derive(Debug)]
 pub struct DenseLeaf<V> {
