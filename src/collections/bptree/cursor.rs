@@ -561,9 +561,9 @@ mod tests {
     use std::sync::Arc;
 
     fn create_leaf_node(v: usize) -> ABNode<usize, usize> {
-        let mut node = Arc::new(Box::new(Node::new_leaf(0)));
+        let mut node = Arc::new(Node::new_leaf(0));
         {
-            let nmut = Arc::get_mut(&mut node).unwrap().as_mut().as_mut_leaf();
+            let nmut = Arc::get_mut(&mut node).unwrap().as_mut_leaf();
             nmut.insert_or_update(v, v);
         }
         node
@@ -571,9 +571,9 @@ mod tests {
 
     fn create_leaf_node_full(vbase: usize) -> ABNode<usize, usize> {
         assert!(vbase % 10 == 0);
-        let mut node = Arc::new(Box::new(Node::new_leaf(0)));
+        let mut node = Arc::new(Node::new_leaf(0));
         {
-            let nmut = Arc::get_mut(&mut node).unwrap().as_mut().as_mut_leaf();
+            let nmut = Arc::get_mut(&mut node).unwrap().as_mut_leaf();
             for idx in 0..L_CAPACITY {
                 let v = vbase + idx;
                 nmut.insert_or_update(v, v);

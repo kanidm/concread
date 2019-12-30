@@ -25,7 +25,7 @@ where
 {
     count: usize,
     key: [MaybeUninit<K>; BK_CAPACITY],
-    node: [MaybeUninit<Arc<Box<Node<K, V>>>>; BV_CAPACITY],
+    node: [MaybeUninit<Arc<Node<K, V>>>; BV_CAPACITY],
 }
 
 #[derive(Debug)]
@@ -50,7 +50,7 @@ where
     inner: T<K, V>,
 }
 
-pub(crate) type ABNode<K, V> = Arc<Box<Node<K, V>>>;
+pub(crate) type ABNode<K, V> = Arc<Node<K, V>>;
 
 impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     pub(crate) fn new_leaf(txid: usize) -> Self {
@@ -63,22 +63,22 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     }
 
     pub(crate) fn new_ableaf(txid: usize) -> ABNode<K, V> {
-        Arc::new(Box::new(Self::new_leaf(txid)))
+        Arc::new(Self::new_leaf(txid))
     }
 
     pub(crate) fn new_branch(txid: usize, l: ABNode<K, V>, r: ABNode<K, V>) -> ABNode<K, V> {
-        Arc::new(Box::new(Node {
+        Arc::new(Node {
             #[cfg(test)]
             nid: NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel)),
             txid: txid,
             inner: T::B(Branch::new(l, r)),
-        }))
+        })
     }
 
     pub(crate) fn new_leaf_ins(txid: usize, k: K, v: V) -> ABNode<K, V> {
-        let mut node = Arc::new(Box::new(Node::new_leaf(txid)));
+        let mut node = Arc::new(Node::new_leaf(txid));
         {
-            let nmut = Arc::get_mut(&mut node).unwrap().as_mut().as_mut_leaf();
+            let nmut = Arc::get_mut(&mut node).unwrap().as_mut_leaf();
             nmut.insert_or_update(k, v);
         }
         node
@@ -94,12 +94,12 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     pub(crate) fn req_clone(&self, txid: usize) -> ABNode<K, V> {
         debug_assert!(txid != self.txid);
         // Do we need to clone this node before we work on it?
-        Arc::new(Box::new(Node {
+        Arc::new(Node {
             #[cfg(test)]
             nid: NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel)),
             txid: txid,
             inner: self.inner_clone(),
-        }))
+        })
     }
 
     #[cfg(test)]
@@ -673,7 +673,7 @@ impl<K: Clone + Ord, V: Clone> Clone for Branch<K, V> {
     fn clone(&self) -> Self {
         let mut nkey: [MaybeUninit<K>; BK_CAPACITY] =
             unsafe { MaybeUninit::uninit().assume_init() };
-        let mut nnode: [MaybeUninit<Arc<Box<Node<K, V>>>>; BV_CAPACITY] =
+        let mut nnode: [MaybeUninit<Arc<Node<K, V>>>; BV_CAPACITY] =
             unsafe { MaybeUninit::uninit().assume_init() };
         for idx in 0..self.count {
             unsafe {
@@ -768,17 +768,17 @@ mod tests {
 
     #[test]
     fn test_bptree_node_new() {
-        let mut left = Arc::new(Box::new(Node::new_leaf(0)));
-        let mut right = Arc::new(Box::new(Node::new_leaf(0)));
+        let mut left = Arc::new(Node::new_leaf(0));
+        let mut right = Arc::new(Node::new_leaf(0));
 
         // add some k, vs to each.
         {
-            let lmut = Arc::get_mut(&mut left).unwrap().as_mut().as_mut_leaf();
+            let lmut = Arc::get_mut(&mut left).unwrap().as_mut_leaf();
             lmut.insert_or_update(0, 0);
             lmut.insert_or_update(1, 1);
         }
         {
-            let rmut = Arc::get_mut(&mut right).unwrap().as_mut().as_mut_leaf();
+            let rmut = Arc::get_mut(&mut right).unwrap().as_mut_leaf();
             rmut.insert_or_update(5, 5);
             rmut.insert_or_update(6, 6);
         }
@@ -789,12 +789,12 @@ mod tests {
     }
 
     fn create_branch_one_three() -> Branch<usize, usize> {
-        let mut left = Arc::new(Box::new(Node::new_leaf(0)));
-        let mut right = Arc::new(Box::new(Node::new_leaf(0)));
+        let mut left = Arc::new(Node::new_leaf(0));
+        let mut right = Arc::new(Node::new_leaf(0));
         {
-            let lmut = Arc::get_mut(&mut left).unwrap().as_mut().as_mut_leaf();
+            let lmut = Arc::get_mut(&mut left).unwrap().as_mut_leaf();
             lmut.insert_or_update(1, 1);
-            let rmut = Arc::get_mut(&mut right).unwrap().as_mut().as_mut_leaf();
+            let rmut = Arc::get_mut(&mut right).unwrap().as_mut_leaf();
             rmut.insert_or_update(3, 3);
         }
         Branch::new(left, right)
@@ -815,9 +815,9 @@ mod tests {
     }
 
     fn create_node(v: usize) -> ABNode<usize, usize> {
-        let mut node = Arc::new(Box::new(Node::new_leaf(0)));
+        let mut node = Arc::new(Node::new_leaf(0));
         {
-            let nmut = Arc::get_mut(&mut node).unwrap().as_mut().as_mut_leaf();
+            let nmut = Arc::get_mut(&mut node).unwrap().as_mut_leaf();
             nmut.insert_or_update(v, v);
         }
         node
