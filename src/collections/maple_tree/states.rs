@@ -1,4 +1,4 @@
-use super::rangeLeaf::InternalPivots;
+use super::range_leaf::InternalPivots;
 use super::utils::M;
 use std::fmt::Debug;
 

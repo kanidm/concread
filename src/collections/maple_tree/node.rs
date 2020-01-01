@@ -1,8 +1,8 @@
 use super::constants::{CAPACITY, R_CAPACITY};
-use super::denseLeaf::DenseLeaf;
-use super::rangeBranch::RangeBranch;
-use super::rangeLeaf::RangeLeaf;
-use super::sparseLeaf::SparseLeaf;
+use super::dense_leaf::DenseLeaf;
+use super::range_branch::RangeBranch;
+use super::range_leaf::RangeLeaf;
+use super::sparse_leaf::SparseLeaf;
 use std::fmt::Debug;
 
 #[derive(Debug)]

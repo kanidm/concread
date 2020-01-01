@@ -1,9 +1,9 @@
 mod constants;
 mod cursor;
-mod denseLeaf;
+mod dense_leaf;
 mod node;
-mod rangeBranch;
-mod rangeLeaf;
-mod sparseLeaf;
+mod range_branch;
+mod range_leaf;
+mod sparse_leaf;
 mod states;
 mod utils;
