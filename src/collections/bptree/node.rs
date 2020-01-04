@@ -439,7 +439,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         //
 
         println!("{:?}", self);
-        println!("{:?}", ridx);
+        println!("ridx -> {:?}", ridx);
         let (left, right) = self.get_mut_pair(ridx);
 
         if left.is_leaf() {
@@ -452,15 +452,34 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
 
             if lmut.len() + rmut.len() <= L_CAPACITY {
                 // merge
-                unimplemented!();
+                lmut.merge(rmut);
+                // drop our references
+                // mem::drop(lmut)
+                // mem::drop(rmut)
+                // remove the right node from parent
+                let _ = self.remove_by_idx(ridx);
+                // What is our capacity?
+                if self.count == 0 {
+                    // We now need to be merged across
+                    unimplemented!();
+                } else {
+                    println!("--> {:?}", self.count);
+                    BRShrinkState::Merge
+                    // We are complete!
+                }
             } else {
                 if lmut.len() > rmut.len() {
                     // shift from left to right
-                    unimplemented!();
+                    rmut.take_from(lmut);
                 } else {
                     // shift from right to left.
-                    unimplemented!();
+                    lmut.take_from(rmut);
                 }
+                // mem::drop(lmut)
+                // mem::drop(rmut)
+                self.rekey_by_idx(ridx);
+                // What's our next step?
+                unimplemented!();
             }
         } else {
             debug_assert!(!right.is_leaf());
@@ -485,13 +504,23 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             // Otherwise we clone to the left
             self.clone_idx(txid, idx - 1);
             // And return as is.
-
             idx
         }
     }
 
     fn clone_idx(&mut self, txid: usize, idx: usize) {
+        // Do we actually need to clone?
         unsafe {
+            let prev_ptr = self.get_idx(idx);
+            // Do we really need to clone?
+            if prev_ptr.txid == txid {
+                println!("clone_idx -> no need to clone");
+                // No, we already cloned this txn
+                debug_assert!(Arc::strong_count(prev_ptr) == 1);
+                return;
+            }
+            // Now do the clone
+            println!("clone_idx -> clone required");
             let prev = unsafe { ptr::read(self.node.get_unchecked(idx)).assume_init() };
             let cnode = prev.req_clone(txid);
             debug_assert!(Arc::strong_count(&cnode) == 1);
@@ -527,10 +556,14 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
     }
 
     // remove a node by idx.
-    pub(crate) fn remove_by_idx(&mut self, idx: usize) -> () {
+    pub(crate) fn remove_by_idx(&mut self, idx: usize) -> ABNode<K, V> {
         debug_assert!(idx <= self.count);
+        debug_assert!(idx > 0);
         // remove by idx.
-        unimplemented!();
+        let _pk = unsafe { slice_remove(&mut self.key, idx - 1).assume_init() };
+        let pn = unsafe { slice_remove(&mut self.node, idx).assume_init() };
+        self.count -= 1;
+        pn
     }
 
     pub(crate) fn replace_by_idx(&mut self, idx: usize, mut node: ABNode<K, V>) -> () {
@@ -540,6 +573,12 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         unsafe {
             ptr::swap(self.node[idx].as_mut_ptr(), &mut node as *mut ABNode<K, V>);
         }
+    }
+
+    pub(crate) fn rekey_by_idx(&mut self, idx: usize) {
+        debug_assert!(idx <= self.count);
+        // For the node listed, rekey it.
+        unimplemented!();
     }
 
     pub(crate) fn get_mut_idx(&mut self, idx: usize) -> &mut ABNode<K, V> {

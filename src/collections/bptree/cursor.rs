@@ -439,25 +439,40 @@ fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
     txid: usize,
     k: &K,
 ) -> CRRemoveState<K, V> {
+    #[cfg(test)]
+    println!("--> nid {:?}", node.nid);
     if node.is_leaf() {
         if node.txid == txid {
             let mref = Arc::get_mut(node).unwrap();
             match mref.as_mut_leaf().remove(k) {
-                BLRemoveState::Ok(res) => CRRemoveState::NoClone(res),
-                BLRemoveState::Shrink(res) => CRRemoveState::Shrink(res),
+                BLRemoveState::Ok(res) => {
+                    println!("l nc");
+                    CRRemoveState::NoClone(res)
+                }
+                BLRemoveState::Shrink(res) => {
+                    println!("l s");
+                    CRRemoveState::Shrink(res)
+                }
             }
         } else {
             let mut cnode = node.req_clone(txid);
             let mref = Arc::get_mut(&mut cnode).unwrap();
             match mref.as_mut_leaf().remove(k) {
-                BLRemoveState::Ok(res) => CRRemoveState::Clone(res, cnode),
-                BLRemoveState::Shrink(res) => CRRemoveState::CloneShrink(res, cnode),
+                BLRemoveState::Ok(res) => {
+                    println!("l c");
+                    CRRemoveState::Clone(res, cnode)
+                }
+                BLRemoveState::Shrink(res) => {
+                    println!("l cs");
+                    CRRemoveState::CloneShrink(res, cnode)
+                }
             }
         }
     } else {
         // Locate the node we need to work on and then react if it
         // requests a shrink.
         let node_txid = node.txid;
+        debug_assert!(Arc::strong_count(&node) == 1);
         let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
         let anode_idx = nmref.locate_node(&k);
         let mut anode = nmref.get_mut_idx(anode_idx);
@@ -482,21 +497,56 @@ fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
                 }
             }
             CRRemoveState::Shrink(res) => {
-                // The node is already in transaction (so
-                // we should be too).
+                println!("crremove s");
+                // This node is already in transaction (so we should be too).
                 if txid == node_txid {
-                    unimplemented!();
+                    // Setup the sibling if needed.
+                    let right_idx = nmref.clone_sibling_idx(txid, anode_idx);
+                    match nmref.shrink_decision(right_idx) {
+                        BRShrinkState::Balanced | BRShrinkState::Merge => {
+                            // K:V were distributed through left and right,
+                            // so no further action needed.
+                            // -- OR --
+                            // Right was merged to left, and we remain
+                            // valid
+                            CRRemoveState::NoClone(res)
+                        }
+                        BRShrinkState::Shrink => {
+                            // Right was merged to left, but we have now falled under the needed
+                            // amount of values, so we begin to shrink up.
+                            CRRemoveState::Shrink(res)
+                        }
+                    }
                 } else {
                     unreachable!("This represents a corrupt tree state");
                 }
             }
             CRRemoveState::CloneShrink(res, nnode) => {
+                println!("crremove cs");
                 // The node was cloned to be removed, and has hit the shrink
                 // decision.
-
                 if txid == node_txid {
-                    // We don't need to clone.
-                    unimplemented!();
+                    // We don't need to clone, just work on the nmref we have.
+                    //
+                    // Swap in the cloned node to the correct location.
+                    nmref.replace_by_idx(anode_idx, nnode);
+                    // Now setup the sibling, to the left *or* right.
+                    let right_idx = nmref.clone_sibling_idx(txid, anode_idx);
+                    match nmref.shrink_decision(right_idx) {
+                        BRShrinkState::Balanced | BRShrinkState::Merge => {
+                            // K:V were distributed through left and right,
+                            // so no further action needed.
+                            // -- OR --
+                            // Right was merged to left, and we remain
+                            // valid
+                            CRRemoveState::NoClone(res)
+                        }
+                        BRShrinkState::Shrink => {
+                            // Right was merged to left, but we have now falled under the needed
+                            // amount of values.
+                            CRRemoveState::Shrink(res)
+                        }
+                    }
                 } else {
                     // We do need to clone
                     let mut cnode = node.req_clone(txid);
@@ -1060,7 +1110,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree_cursor_remove_3() {
+    fn test_bptree_cursor_remove_03() {
         // Given the tree:
         //
         //      root
@@ -1087,7 +1137,42 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree_cursor_remove_4() {
+    fn test_bptree_cursor_remove_04p0() {
+        // Given the tree:
+        //
+        //      root
+        //     /    \
+        //  leaf    split leaf
+        //
+        // Remove from "split leaf" and merge left. (leaf cloned already)
+        let lnode = create_leaf_node(10);
+        let rnode = create_leaf_node(20);
+        let znode = create_leaf_node(0);
+        let mut root = Node::new_branch(0, znode, lnode);
+        // Prevent the tree shrinking.
+        Arc::get_mut(&mut root)
+            .unwrap()
+            .as_mut_branch()
+            .add_node(rnode);
+        let mut wcurs = CursorWrite::new(root, 3);
+        assert!(wcurs.verify());
+        println!("== 1");
+
+        // Setup sibling leaf to already be cloned.
+        wcurs.path_clone(&10);
+        assert!(wcurs.verify());
+        println!("{:?}",wcurs);
+        println!("== 2");
+
+        wcurs.remove(&20);
+        assert!(wcurs.verify());
+        println!("== 3");
+        mem::drop(wcurs);
+        check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_04p1() {
         // Given the tree:
         //
         //      root
@@ -1108,7 +1193,8 @@ mod tests {
         assert!(wcurs.verify());
 
         // Setup leaf to already be cloned.
-        wcurs.path_clone(&10);
+        wcurs.path_clone(&20);
+        assert!(wcurs.verify());
 
         wcurs.remove(&20);
         assert!(wcurs.verify());
@@ -1117,7 +1203,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree_cursor_remove_5() {
+    fn test_bptree_cursor_remove_05() {
         // Given the tree:
         //
         //      root
@@ -1147,7 +1233,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree_cursor_remove_6() {
+    fn test_bptree_cursor_remove_06() {
         // Given the tree:
         //
         //          root
@@ -1181,7 +1267,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree_cursor_remove_7() {
+    fn test_bptree_cursor_remove_07() {
         // Given the tree:
         //
         //          root
@@ -1215,7 +1301,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree_cursor_remove_8() {
+    fn test_bptree_cursor_remove_08() {
         // Given the tree:
         //
         //          root
@@ -1256,7 +1342,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree_cursor_remove_9() {
+    fn test_bptree_cursor_remove_09() {
         // Given the tree:
         //
         //          root

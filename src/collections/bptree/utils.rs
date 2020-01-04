@@ -20,3 +20,17 @@ pub(crate) unsafe fn slice_remove<T>(slice: &mut [T], idx: usize) -> T {
     );
     ret
 }
+
+pub(crate) unsafe fn slice_merge<T>(
+    left: &mut [T],
+    lmax: usize,
+    right: &mut [T],
+    rcount: usize,
+) {
+    let dst_ptr = left.as_mut_ptr().offset(lmax as isize);
+    let src_ptr = right.as_ptr();
+
+    ptr::copy_nonoverlapping(
+        src_ptr, dst_ptr, rcount
+    );
+}

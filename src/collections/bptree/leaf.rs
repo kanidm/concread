@@ -101,6 +101,19 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         }
     }
 
+    pub(crate) fn merge(&mut self, right: &mut Self) {
+        unsafe {
+            slice_merge(&mut self.key, self.count, &mut right.key, right.count);
+            slice_merge(&mut self.value, self.count, &mut right.value, right.count);
+        }
+        self.count = self.count + right.count;
+        right.count = 0;
+    }
+
+    pub(crate) fn take_from(&mut self, other: &mut Self) {
+        unimplemented!();
+    }
+
     fn max_idx(&self) -> usize {
         debug_assert!(self.count > 0);
         self.count - 1
