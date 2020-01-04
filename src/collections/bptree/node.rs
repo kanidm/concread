@@ -447,7 +447,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             debug_assert!(Arc::strong_count(left) == 1);
             debug_assert!(Arc::strong_count(right) == 1);
             let lmut = Arc::get_mut(left).unwrap().as_mut_leaf();
-            debug_assert!(Arc::strong_count(right) == 1);
             let rmut = Arc::get_mut(right).unwrap().as_mut_leaf();
 
             if lmut.len() + rmut.len() <= L_CAPACITY {
@@ -460,8 +459,9 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 let _ = self.remove_by_idx(ridx);
                 // What is our capacity?
                 if self.count == 0 {
-                    // We now need to be merged across
-                    unimplemented!();
+                    // We now need to be merged across as we only contain a single
+                    // value now.
+                    BRShrinkState::Shrink
                 } else {
                     println!("--> {:?}", self.count);
                     BRShrinkState::Merge
@@ -475,17 +475,43 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                     // shift from right to left.
                     lmut.take_from(rmut);
                 }
-                // mem::drop(lmut)
-                // mem::drop(rmut)
                 self.rekey_by_idx(ridx);
-                // What's our next step?
-                unimplemented!();
+                // Done, indicate we rebalanced
+                BRShrinkState::Balanced
             }
         } else {
+            // right or left is now in a "corrupt" state with a single value that we need to relocate
+            // to left - or we need to borrow from left and fix it!
             debug_assert!(!right.is_leaf());
+            debug_assert!(Arc::strong_count(left) == 1);
+            debug_assert!(Arc::strong_count(right) == 1);
             let lmut = Arc::get_mut(left).unwrap().as_mut_branch();
             let rmut = Arc::get_mut(right).unwrap().as_mut_branch();
-            unimplemented!();
+            debug_assert!(rmut.len() == 0 || lmut.len() == 0);
+            if lmut.len() == BK_CAPACITY {
+                // Borrow
+                if lmut.len() > rmut.len() {
+                    rmut.take_from(lmut);
+                } else {
+                    lmut.take_from(rmut);
+                }
+                self.rekey_by_idx(ridx);
+                // Done, indicate we rebalanced.
+                BRShrinkState::Balanced
+            } else {
+                // merge the right to tail of left.
+                lmut.merge(rmut);
+                // Reduce our count
+                let _ = self.remove_by_idx(ridx);
+                if self.count == 0 {
+                    // We now need to be merged across as we also only contain a single
+                    // value now.
+                    BRShrinkState::Shrink
+                } else {
+                    BRShrinkState::Merge
+                    // We are complete!
+                }
+            }
         }
     }
 
@@ -553,6 +579,52 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             Ok(v) => v + 1,
             Err(v) => v,
         }
+    }
+
+    pub(crate) fn extract_last_node(&mut self) -> ABNode<K, V> {
+        println!("{:?}", self.count);
+        debug_assert!(self.count == 0);
+        unsafe {
+            // We could just use get_unchecked instead.
+            slice_remove(&mut self.node, 0).assume_init()
+        }
+    }
+
+    pub(crate) fn merge(&mut self, right: &mut Self) {
+        if right.len() == 0 {
+            let node = right.extract_last_node();
+            let k: K = node.min().clone();
+            let ins_idx = self.count;
+            let leaf_ins_idx = ins_idx + 1;
+            unsafe {
+                slice_insert(&mut self.key, MaybeUninit::new(k), ins_idx);
+                slice_insert(&mut self.node, MaybeUninit::new(node), leaf_ins_idx);
+            }
+            self.count += 1;
+        } else {
+            debug_assert!(self.len() == 0);
+            unsafe {
+                // Move all the nodes from right.
+                slice_merge(&mut self.node, 1, &mut right.node, right.count + 1);
+                // Move the related keys.
+                slice_merge(&mut self.key, 1, &mut right.key, right.count);
+            }
+            // Set our count correctly.
+            self.count = right.count + 1;
+            // Set rightt len to 0
+            right.count = 0;
+            // rekey the lowest pointer.
+            unsafe {
+                let nptr = &*self.node[1].as_ptr();
+                let rekey = (*nptr.min()).clone();
+                self.key[0].as_mut_ptr().write(rekey);
+            }
+            // done!
+        }
+    }
+
+    pub(crate) fn take_from(&mut self, other: &mut Self) {
+        unimplemented!();
     }
 
     // remove a node by idx.
@@ -765,17 +837,19 @@ impl<K: Clone + Ord + Debug, V: Clone> Debug for Branch<K, V> {
 impl<K: Clone + Ord, V: Clone> Drop for Branch<K, V> {
     fn drop(&mut self) {
         // Due to the use of maybe uninit we have to drop any contained values.
-        for idx in 0..self.count {
-            unsafe {
-                ptr::drop_in_place(self.key[idx].as_mut_ptr());
+        if self.count > 0 {
+            for idx in 0..self.count {
+                unsafe {
+                    ptr::drop_in_place(self.key[idx].as_mut_ptr());
+                }
             }
-        }
-        // Remember, a branch ALWAYS has two nodes per key, which means
-        // it's N+1,so we have to increase this to ensure we drop them
-        // all.
-        for idx in 0..(self.count + 1) {
-            unsafe {
-                ptr::drop_in_place(self.node[idx].as_mut_ptr());
+            // Remember, a branch ALWAYS has two nodes per key, which means
+            // it's N+1,so we have to increase this to ensure we drop them
+            // all.
+            for idx in 0..(self.count + 1) {
+                unsafe {
+                    ptr::drop_in_place(self.node[idx].as_mut_ptr());
+                }
             }
         }
         println!("branch dropped k:{}, v:{}", self.count, self.count + 1);

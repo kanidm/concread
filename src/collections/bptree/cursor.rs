@@ -143,8 +143,12 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                     // No action - we have an empty tree.
                     res
                 } else {
-                    // It's a branch, we need to do some more work then ...
-                    unimplemented!();
+                    // Root is being demoted, get the last branch and
+                    // promote it to the root.
+                    let rmut = Arc::get_mut(&mut self.root).unwrap().as_mut_branch();
+                    let mut pnode = rmut.extract_last_node();
+                    mem::swap(&mut self.root, &mut pnode);
+                    res
                 }
             }
             CRRemoveState::CloneShrink(res, mut nnode) => {
@@ -153,8 +157,12 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                     mem::swap(&mut self.root, &mut nnode);
                     res
                 } else {
-                    // It's a branch, we need to do some more work then ...
-                    unimplemented!();
+                    // Our root is getting demoted here, get the remaining branch
+                    let rmut = Arc::get_mut(&mut nnode).unwrap().as_mut_branch();
+                    let mut pnode = rmut.extract_last_node();
+                    // Promote it to the new root
+                    mem::swap(&mut self.root, &mut pnode);
+                    res
                 }
             }
         }
@@ -600,9 +608,10 @@ fn path_get_mut_ref<'a, K: Clone + Ord + Debug, V: Clone>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::constants::L_CAPACITY;
+    use super::super::constants::{L_CAPACITY, BV_CAPACITY, BK_CAPACITY};
     use super::super::leaf::Leaf;
     use super::super::node::{check_drop_count, ABNode, Node};
+    use super::super::states::BRInsertState;
     use super::{CursorReadOps, CursorWrite};
     use rand::prelude::*;
     use rand::seq::SliceRandom;
@@ -629,6 +638,25 @@ mod tests {
             }
         }
         node
+    }
+
+    fn create_branch_node_full(vbase: usize) -> ABNode<usize, usize> {
+        let l1 = create_leaf_node(vbase);
+        let l2 = create_leaf_node(vbase + 10);
+        let mut lbranch = Node::new_branch(0, l1, l2);
+        let mut bref = Arc::get_mut(&mut lbranch)
+            .unwrap()
+            .as_mut_branch();
+        for i in 2..BV_CAPACITY {
+            let l = create_leaf_node(vbase + (10 * i));
+            let r = bref.add_node(l);
+            match r {
+                BRInsertState::Ok => {},
+                _ => panic!(),
+            }
+        }
+        assert!(bref.len() == BK_CAPACITY);
+        lbranch
     }
 
     #[test]
@@ -1259,7 +1287,11 @@ mod tests {
         let mut wcurs = CursorWrite::new(root, 4);
         assert!(wcurs.verify());
 
+        println!("before {:?}", wcurs);
+
         wcurs.remove(&30);
+
+        println!("after {:?}", wcurs);
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
@@ -1317,14 +1349,7 @@ mod tests {
         //
         //   when remove from rbranch, borrow from lbranch
         //   will NOT reduce height
-        let l1 = create_leaf_node(0);
-        let l2 = create_leaf_node(10);
-        let l3 = create_leaf_node(20);
-        let mut lbranch = Node::new_branch(0, l1, l2);
-        Arc::get_mut(&mut lbranch)
-            .unwrap()
-            .as_mut_branch()
-            .add_node(l3);
+        let lbranch = create_branch_node_full(0);
 
         let r1 = create_leaf_node(80);
         let r2 = create_leaf_node(90);
@@ -1362,14 +1387,7 @@ mod tests {
         let l2 = create_leaf_node(10);
         let lbranch = Node::new_branch(0, l1, l2);
 
-        let r1 = create_leaf_node(70);
-        let r2 = create_leaf_node(80);
-        let r3 = create_leaf_node(90);
-        let mut rbranch = Node::new_branch(0, r1, r2);
-        Arc::get_mut(&mut rbranch)
-            .unwrap()
-            .as_mut_branch()
-            .add_node(r3);
+        let rbranch = create_branch_node_full(100);
 
         let mut root = Node::new_branch(0, lbranch, rbranch);
         let mut wcurs = CursorWrite::new(root, 5);
@@ -1473,14 +1491,7 @@ mod tests {
         //
         //   when remove from rbranch, borrow from lbranch
         //   will NOT reduce height
-        let l1 = create_leaf_node(0);
-        let l2 = create_leaf_node(10);
-        let l3 = create_leaf_node(20);
-        let mut lbranch = Node::new_branch(0, l1, l2);
-        Arc::get_mut(&mut lbranch)
-            .unwrap()
-            .as_mut_branch()
-            .add_node(l3);
+        let lbranch = create_branch_node_full(0);
 
         let r1 = create_leaf_node(80);
         let r2 = create_leaf_node(90);
@@ -1522,28 +1533,30 @@ mod tests {
         let l2 = create_leaf_node(10);
         let lbranch = Node::new_branch(0, l1, l2);
 
-        let r1 = create_leaf_node(70);
-        let r2 = create_leaf_node(80);
-        let r3 = create_leaf_node(90);
-        let mut rbranch = Node::new_branch(0, r1, r2);
-        Arc::get_mut(&mut rbranch)
-            .unwrap()
-            .as_mut_branch()
-            .add_node(r3);
+        let rbranch = create_branch_node_full(100);
 
         let mut root = Node::new_branch(0, lbranch, rbranch);
         let mut wcurs = CursorWrite::new(root, 5);
         assert!(wcurs.verify());
 
-        wcurs.path_clone(&70);
-        wcurs.path_clone(&80);
-        wcurs.path_clone(&90);
+        for i in 0..BV_CAPACITY {
+            let k = 100 + (10 * i);
+            wcurs.path_clone(&k);
+        }
+        assert!(wcurs.verify());
 
         wcurs.remove(&10);
 
         assert!(wcurs.verify());
+        unimplemented!();
         mem::drop(wcurs);
         check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_14() {
+        // Test leaf borrow left, right.
+        unimplemented!();
     }
 
     fn tree_create_rand() -> ABNode<usize, usize> {
