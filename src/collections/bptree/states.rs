@@ -1,9 +1,10 @@
 use super::node::{ABNode, Node};
+use std::fmt::Debug;
 
 #[derive(Debug)]
 pub(crate) enum BLInsertState<K, V>
 where
-    K: Ord + Clone,
+    K: Ord + Clone + Debug,
     V: Clone,
 {
     Ok(Option<V>),
@@ -25,7 +26,7 @@ where
 #[derive(Debug)]
 pub(crate) enum BRInsertState<K, V>
 where
-    K: Ord + Clone,
+    K: Ord + Clone + Debug,
     V: Clone,
 {
     Ok,
@@ -43,7 +44,7 @@ pub(crate) enum BRShrinkState {
 #[derive(Debug)]
 pub(crate) enum BNClone<K, V>
 where
-    K: Ord + Clone,
+    K: Ord + Clone + Debug,
     V: Clone,
 {
     // Not needed
@@ -54,7 +55,7 @@ where
 #[derive(Debug)]
 pub(crate) enum CRInsertState<K, V>
 where
-    K: Ord + Clone,
+    K: Ord + Clone + Debug,
     V: Clone,
 {
     // We did not need to clone, here is the result.
@@ -73,7 +74,7 @@ where
 #[derive(Debug)]
 pub(crate) enum CRCloneState<K, V>
 where
-    K: Ord + Clone,
+    K: Ord + Clone + Debug,
     V: Clone,
 {
     Clone(ABNode<K, V>),
@@ -83,7 +84,7 @@ where
 #[derive(Debug)]
 pub(crate) enum CRRemoveState<K, V>
 where
-    K: Ord + Clone,
+    K: Ord + Clone + Debug,
     V: Clone,
 {
     // We did not need to clone, here is the result.

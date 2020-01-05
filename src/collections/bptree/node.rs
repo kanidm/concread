@@ -20,7 +20,7 @@ thread_local!(static DROP_COUNTER: AtomicUsize = AtomicUsize::new(0));
 
 pub(crate) struct Branch<K, V>
 where
-    K: Ord + Clone,
+    K: Ord + Clone + Debug,
     V: Clone,
 {
     count: usize,
@@ -31,17 +31,16 @@ where
 #[derive(Debug)]
 pub(crate) enum T<K, V>
 where
-    K: Ord + Clone,
+    K: Ord + Clone + Debug,
     V: Clone,
 {
     B(Branch<K, V>),
     L(Leaf<K, V>),
 }
 
-#[derive(Debug)]
 pub(crate) struct Node<K, V>
 where
-    K: Ord + Clone,
+    K: Ord + Clone + Debug,
     V: Clone,
 {
     #[cfg(test)]
@@ -190,6 +189,15 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         match &self.inner {
             T::L(leaf) => 1,
             T::B(branch) => branch.leaf_count(),
+        }
+    }
+}
+
+impl<K: Clone + Ord + Debug, V: Clone> Debug for Node<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), Error> {
+        match &self.inner {
+            T::L(leaf) => leaf.fmt(f),
+            T::B(branch) => branch.fmt(f),
         }
     }
 }
@@ -489,14 +497,12 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             let rmut = Arc::get_mut(right).unwrap().as_mut_branch();
             debug_assert!(rmut.len() == 0 || lmut.len() == 0);
             if lmut.len() == BK_CAPACITY {
-                // Borrow
-                if lmut.len() > rmut.len() {
-                    rmut.take_from(lmut);
-                } else {
-                    lmut.take_from(rmut);
-                }
+                lmut.take_from_l_to_r(rmut);
                 self.rekey_by_idx(ridx);
-                // Done, indicate we rebalanced.
+                BRShrinkState::Balanced
+            } else if rmut.len() == BK_CAPACITY {
+                lmut.take_from_r_to_l(rmut);
+                self.rekey_by_idx(ridx);
                 BRShrinkState::Balanced
             } else {
                 // merge the right to tail of left.
@@ -623,7 +629,71 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         }
     }
 
-    pub(crate) fn take_from(&mut self, other: &mut Self) {
+    pub(crate) fn take_from_l_to_r(&mut self, right: &mut Self) {
+        debug_assert!(self.len() > right.len());
+        // Starting index of where we move from. We work normally from a branch
+        // with only zero (but the base) branch item, but we do the math anyway
+        // to be sure incase we change later.
+        //
+        // So, self.len must be larger, so let's give a few examples here.
+        //  4 = 7 - (7 + 0) / 2 (will move 4, 5, 6)
+        //  3 = 6 - (6 + 0) / 2 (will move 3, 4, 5)
+        //  3 = 5 - (5 + 0) / 2 (will move 3, 4)
+        //  2 = 4 ....          (will move 2, 3)
+        //
+        let count = ((self.len() + right.len()) / 2);
+        let start_idx = self.len() - count;
+        // Move the remaining element from r to the correct location.
+
+        unsafe {
+            ptr::swap(
+                right.node.get_unchecked_mut(0),
+                right.node.get_unchecked_mut(count)
+            )
+        }
+
+        // Move our values.
+        unsafe {
+            slice_move(&mut right.node, 0, &mut self.node, start_idx + 1, count);
+        }
+        // Remove the keys from left.
+        //
+        // If we have:
+        //    [   k1, k2, k3, k4, k5, k6   ]
+        //    [ v1, v2, v3, v4, v5, v6, v7 ] -> [ v8, ------- ]
+        //
+        // We would move 3 now to:
+        //
+        //    [   k1, k2, k3, k4, k5, k6   ]    [   --, --, --, --, ...
+        //    [ v1, v2, v3, v4, --, --, -- ] -> [ v5, v6, v7, v8, --, ...
+        //
+        // So we need to remove the corresponding keys. so that we get.
+        //
+        //    [   k1, k2, k3, --, --, --   ]    [   --, --, --, --, ...
+        //    [ v1, v2, v3, v4, --, --, -- ] -> [ v5, v6, v7, v8, --, ...
+        //
+        // This means it's start_idx - 1 up to BK cap
+
+        for kidx in (start_idx - 1)..BK_CAPACITY {
+            let _pk = unsafe {
+                ptr::read(self.key.get_unchecked(kidx)).assume_init()
+            };
+            // They are dropped now.
+        }
+        // Adjust both counts - we do this before rekey to ensure that the safety
+        // checks hold in debugging.
+        right.count = count;
+        self.count = start_idx;
+        // Rekey right
+        for kidx in 1..(count + 1) {
+            right.rekey_by_idx(kidx);
+        }
+        // Done!
+    }
+
+    pub(crate) fn take_from_r_to_l(&mut self, right: &mut Self) {
+        debug_assert!(right.len() >= self.len());
+        // let count = (self.len() + right.len()) / 2;
         unimplemented!();
     }
 
@@ -649,8 +719,13 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
 
     pub(crate) fn rekey_by_idx(&mut self, idx: usize) {
         debug_assert!(idx <= self.count);
+        debug_assert!(idx > 0);
         // For the node listed, rekey it.
-        unimplemented!();
+        let nref = self.get_idx(idx);
+        let nkey = (*nref.min()).clone();
+        unsafe {
+            self.key[idx - 1].as_mut_ptr().write(nkey);
+        }
     }
 
     pub(crate) fn get_mut_idx(&mut self, idx: usize) -> &mut ABNode<K, V> {
@@ -745,12 +820,16 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             // get left max and right min
             let lnode = unsafe { &*self.node[work_idx].as_ptr() };
             let rnode = unsafe { &*self.node[work_idx + 1].as_ptr() };
+            println!("++++++");
+            println!("{:?}", lnode);
+            println!("{:?}", rnode);
+            println!("{:?}", self);
 
             let pkey = unsafe { &*self.key[work_idx].as_ptr() };
             let lkey = lnode.max();
             let rkey = rnode.min();
             if lkey >= pkey || pkey > rkey {
-                println!("out of order key found");
+                println!("out of order key found {}", work_idx);
                 return false;
             }
         }
@@ -778,7 +857,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
     }
 }
 
-impl<K: Clone + Ord, V: Clone> Clone for Branch<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> Clone for Branch<K, V> {
     fn clone(&self) -> Self {
         let mut nkey: [MaybeUninit<K>; BK_CAPACITY] =
             unsafe { MaybeUninit::uninit().assume_init() };
@@ -834,7 +913,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Debug for Branch<K, V> {
     }
 }
 
-impl<K: Clone + Ord, V: Clone> Drop for Branch<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> Drop for Branch<K, V> {
     fn drop(&mut self) {
         // Due to the use of maybe uninit we have to drop any contained values.
         if self.count > 0 {
@@ -857,7 +936,7 @@ impl<K: Clone + Ord, V: Clone> Drop for Branch<K, V> {
 }
 
 #[cfg(test)]
-impl<K: Clone + Ord, V: Clone> Drop for Node<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> Drop for Node<K, V> {
     fn drop(&mut self) {
         let _ = DROP_COUNTER.with(|dc| dc.fetch_add(1, Ordering::AcqRel));
     }
