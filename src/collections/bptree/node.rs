@@ -457,7 +457,15 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             let lmut = Arc::get_mut(left).unwrap().as_mut_leaf();
             let rmut = Arc::get_mut(right).unwrap().as_mut_leaf();
 
-            if lmut.len() + rmut.len() <= L_CAPACITY {
+            if lmut.len() == L_CAPACITY {
+                lmut.take_from_l_to_r(rmut);
+                self.rekey_by_idx(ridx);
+                BRShrinkState::Balanced
+            } else if rmut.len() == L_CAPACITY {
+                lmut.take_from_r_to_l(rmut);
+                self.rekey_by_idx(ridx);
+                BRShrinkState::Balanced
+            } else {
                 // merge
                 lmut.merge(rmut);
                 // drop our references
@@ -475,17 +483,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                     BRShrinkState::Merge
                     // We are complete!
                 }
-            } else {
-                if lmut.len() > rmut.len() {
-                    // shift from left to right
-                    rmut.take_from(lmut);
-                } else {
-                    // shift from right to left.
-                    lmut.take_from(rmut);
-                }
-                self.rekey_by_idx(ridx);
-                // Done, indicate we rebalanced
-                BRShrinkState::Balanced
             }
         } else {
             // right or left is now in a "corrupt" state with a single value that we need to relocate
@@ -648,7 +645,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         unsafe {
             ptr::swap(
                 right.node.get_unchecked_mut(0),
-                right.node.get_unchecked_mut(count)
+                right.node.get_unchecked_mut(count),
             )
         }
 
@@ -675,9 +672,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         // This means it's start_idx - 1 up to BK cap
 
         for kidx in (start_idx - 1)..BK_CAPACITY {
-            let _pk = unsafe {
-                ptr::read(self.key.get_unchecked(kidx)).assume_init()
-            };
+            let _pk = unsafe { ptr::read(self.key.get_unchecked(kidx)).assume_init() };
             // They are dropped now.
         }
         // Adjust both counts - we do this before rekey to ensure that the safety
@@ -710,9 +705,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         // We moved 3 values from right, leaving 4. That means we need to remove
         // keys 0, 1, 2. The remaining keys are moved down.
         for kidx in 0..count {
-            let _pk = unsafe {
-                ptr::read(right.key.get_unchecked(kidx)).assume_init()
-            };
+            let _pk = unsafe { ptr::read(right.key.get_unchecked(kidx)).assume_init() };
             // They are dropped now.
         }
 
@@ -721,7 +714,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             ptr::copy(
                 right.key.as_ptr().add(count),
                 right.key.as_mut_ptr(),
-                start_idx
+                start_idx,
             );
         }
         // move nodes down in right
@@ -729,7 +722,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             ptr::copy(
                 right.node.as_ptr().add(count),
                 right.node.as_mut_ptr(),
-                start_idx + 1
+                start_idx + 1,
             );
         }
 

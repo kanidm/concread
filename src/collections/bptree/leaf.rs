@@ -110,8 +110,49 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         right.count = 0;
     }
 
-    pub(crate) fn take_from(&mut self, other: &mut Self) {
-        unimplemented!();
+    pub(crate) fn take_from_l_to_r(&mut self, right: &mut Self) {
+        debug_assert!(right.len() == 0);
+        let count = self.len() / 2;
+        let start_idx = self.len() - count;
+
+        //move key and values
+        unsafe {
+            slice_move(&mut right.key, 0, &mut self.key, start_idx, count);
+            slice_move(&mut right.value, 0, &mut self.value, start_idx, count);
+        }
+
+        // update the counts
+        self.count = start_idx;
+        right.count = count;
+    }
+
+    pub(crate) fn take_from_r_to_l(&mut self, right: &mut Self) {
+        debug_assert!(self.len() == 0);
+        let count = right.len() / 2;
+        let start_idx = right.len() - count;
+
+        // Move values from right to left.
+        unsafe {
+            slice_move(&mut self.key, 0, &mut right.key, 0, count);
+            slice_move(&mut self.value, 0, &mut right.value, 0, count);
+        }
+        // Shift the values in right down.
+        unsafe {
+            ptr::copy(
+                right.key.as_ptr().add(count),
+                right.key.as_mut_ptr(),
+                start_idx,
+            );
+            ptr::copy(
+                right.value.as_ptr().add(count),
+                right.value.as_mut_ptr(),
+                start_idx,
+            );
+        }
+
+        // Fix the counts.
+        self.count = count;
+        right.count = start_idx;
     }
 
     fn max_idx(&self) -> usize {

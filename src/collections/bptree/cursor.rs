@@ -608,7 +608,7 @@ fn path_get_mut_ref<'a, K: Clone + Ord + Debug, V: Clone>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::constants::{L_CAPACITY, BV_CAPACITY, BK_CAPACITY};
+    use super::super::constants::{BK_CAPACITY, BV_CAPACITY, L_CAPACITY};
     use super::super::leaf::Leaf;
     use super::super::node::{check_drop_count, ABNode, Node};
     use super::super::states::BRInsertState;
@@ -644,14 +644,12 @@ mod tests {
         let l1 = create_leaf_node(vbase);
         let l2 = create_leaf_node(vbase + 10);
         let mut lbranch = Node::new_branch(0, l1, l2);
-        let mut bref = Arc::get_mut(&mut lbranch)
-            .unwrap()
-            .as_mut_branch();
+        let mut bref = Arc::get_mut(&mut lbranch).unwrap().as_mut_branch();
         for i in 2..BV_CAPACITY {
             let l = create_leaf_node(vbase + (10 * i));
             let r = bref.add_node(l);
             match r {
-                BRInsertState::Ok => {},
+                BRInsertState::Ok => {}
                 _ => panic!(),
             }
         }
@@ -1189,7 +1187,7 @@ mod tests {
         // Setup sibling leaf to already be cloned.
         wcurs.path_clone(&10);
         assert!(wcurs.verify());
-        println!("{:?}",wcurs);
+        println!("{:?}", wcurs);
         println!("== 2");
 
         wcurs.remove(&20);
@@ -1548,15 +1546,40 @@ mod tests {
         wcurs.remove(&10);
 
         assert!(wcurs.verify());
-        unimplemented!();
         mem::drop(wcurs);
         check_drop_count();
     }
 
     #[test]
     fn test_bptree_cursor_remove_14() {
-        // Test leaf borrow left, right.
-        unimplemented!();
+        // Test leaf borrow left
+        let lnode = create_leaf_node_full(10);
+        let rnode = create_leaf_node(20);
+        let root = Node::new_branch(0, lnode, rnode);
+        let mut wcurs = CursorWrite::new(root, 0);
+        assert!(wcurs.verify());
+
+        wcurs.remove(&20);
+
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_remove_15() {
+        // Test leaf borrow right.
+        let lnode = create_leaf_node(10);
+        let rnode = create_leaf_node_full(20);
+        let root = Node::new_branch(0, lnode, rnode);
+        let mut wcurs = CursorWrite::new(root, 0);
+        assert!(wcurs.verify());
+
+        wcurs.remove(&10);
+
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     fn tree_create_rand() -> ABNode<usize, usize> {
@@ -1683,14 +1706,13 @@ mod tests {
         // Insert random
         let mut rng = rand::thread_rng();
         let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
+        println!("{:?}", ins);
         ins.shuffle(&mut rng);
 
         let mut node = tree_create_rand();
 
         for v in ins.into_iter() {
             let mut wcurs = CursorWrite::new(node, 0);
-            let r = wcurs.insert(v, v);
-            assert!(r.is_none());
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
