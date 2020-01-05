@@ -132,14 +132,8 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
 
     pub(crate) fn get_ref(&self, k: &K) -> Option<&V> {
         match &self.inner {
-            T::L(leaf) => {
-                println!("leaf -> {:?}", leaf);
-                leaf.get_ref(k)
-            }
-            T::B(branch) => {
-                println!("branch -> {:?}", branch);
-                branch.get_ref(k)
-            }
+            T::L(leaf) => leaf.get_ref(k),
+            T::B(branch) => branch.get_ref(k),
         }
     }
 
@@ -280,10 +274,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                     // Drop the key before us that we are about to replace.
                     let _kdrop =
                         unsafe { ptr::read(self.key.get_unchecked(BK_CAPACITY - 2)).assume_init() };
-                    #[cfg(test)]
-                    {
-                        println!("Removing -> {:?}, {:?}", maxn1.nid, max.nid);
-                    }
                     // Add node and it's key to the correct location.
                     let k: K = kr.clone();
                     let leaf_ins_idx = ins_idx + 1;
@@ -446,8 +436,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         //  *
         //
 
-        println!("{:?}", self);
-        println!("ridx -> {:?}", ridx);
         let (left, right) = self.get_mut_pair(ridx);
 
         if left.is_leaf() {
@@ -479,7 +467,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                     // value now.
                     BRShrinkState::Shrink
                 } else {
-                    println!("--> {:?}", self.count);
                     BRShrinkState::Merge
                     // We are complete!
                 }
@@ -522,14 +509,12 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         // This clones and sets up for a subsequent
         // merge.
         if idx == 0 {
-            println!("Doing idx 0 inverse clone");
             // If we are zero, we clone our right sibling.
             // Clone idx 1
             self.clone_idx(txid, 1);
             // And increment the idx to 1
             1
         } else {
-            println!("Doing idx {} clone", idx - 1);
             // Otherwise we clone to the left
             self.clone_idx(txid, idx - 1);
             // And return as is.
@@ -543,13 +528,11 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             let prev_ptr = self.get_idx(idx);
             // Do we really need to clone?
             if prev_ptr.txid == txid {
-                println!("clone_idx -> no need to clone");
                 // No, we already cloned this txn
                 debug_assert!(Arc::strong_count(prev_ptr) == 1);
                 return;
             }
             // Now do the clone
-            println!("clone_idx -> clone required");
             let prev = unsafe { ptr::read(self.node.get_unchecked(idx)).assume_init() };
             let cnode = prev.req_clone(txid);
             debug_assert!(Arc::strong_count(&cnode) == 1);
@@ -585,7 +568,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
     }
 
     pub(crate) fn extract_last_node(&mut self) -> ABNode<K, V> {
-        println!("{:?}", self.count);
         debug_assert!(self.count == 0);
         unsafe {
             // We could just use get_unchecked instead.
@@ -848,7 +830,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 }
                 lk = rk;
             }
-            println!("Passed sorting");
+            // println!("Passed sorting");
             true
         }
     }
@@ -859,20 +841,20 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             // get left max and right min
             let lnode = unsafe { &*self.node[work_idx].as_ptr() };
             let rnode = unsafe { &*self.node[work_idx + 1].as_ptr() };
-            println!("++++++");
-            println!("{:?}", lnode);
-            println!("{:?}", rnode);
-            println!("{:?}", self);
 
             let pkey = unsafe { &*self.key[work_idx].as_ptr() };
             let lkey = lnode.max();
             let rkey = rnode.min();
             if lkey >= pkey || pkey > rkey {
+                println!("++++++");
                 println!("out of order key found {}", work_idx);
+                println!("{:?}", lnode);
+                println!("{:?}", rnode);
+                println!("{:?}", self);
                 return false;
             }
         }
-        println!("Passed descendants");
+        // println!("Passed descendants");
         true
     }
 
@@ -886,7 +868,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 return false;
             }
         }
-        println!("Passed children");
+        // println!("Passed children");
         true
     }
 
@@ -970,7 +952,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Drop for Branch<K, V> {
                 }
             }
         }
-        println!("branch dropped k:{}, v:{}", self.count, self.count + 1);
     }
 }
 

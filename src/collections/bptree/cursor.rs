@@ -243,7 +243,6 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite<K, V>
     fn len(&self) -> usize {
         if cfg!(test) {
             let (l, _) = self.tree_density();
-            println!("{}, {}", l, self.length);
             assert!(l == self.length);
         }
         self.length
@@ -447,33 +446,19 @@ fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
     txid: usize,
     k: &K,
 ) -> CRRemoveState<K, V> {
-    #[cfg(test)]
-    println!("--> nid {:?}", node.nid);
     if node.is_leaf() {
         if node.txid == txid {
             let mref = Arc::get_mut(node).unwrap();
             match mref.as_mut_leaf().remove(k) {
-                BLRemoveState::Ok(res) => {
-                    println!("l nc");
-                    CRRemoveState::NoClone(res)
-                }
-                BLRemoveState::Shrink(res) => {
-                    println!("l s");
-                    CRRemoveState::Shrink(res)
-                }
+                BLRemoveState::Ok(res) => CRRemoveState::NoClone(res),
+                BLRemoveState::Shrink(res) => CRRemoveState::Shrink(res),
             }
         } else {
             let mut cnode = node.req_clone(txid);
             let mref = Arc::get_mut(&mut cnode).unwrap();
             match mref.as_mut_leaf().remove(k) {
-                BLRemoveState::Ok(res) => {
-                    println!("l c");
-                    CRRemoveState::Clone(res, cnode)
-                }
-                BLRemoveState::Shrink(res) => {
-                    println!("l cs");
-                    CRRemoveState::CloneShrink(res, cnode)
-                }
+                BLRemoveState::Ok(res) => CRRemoveState::Clone(res, cnode),
+                BLRemoveState::Shrink(res) => CRRemoveState::CloneShrink(res, cnode),
             }
         }
     } else {
@@ -505,7 +490,6 @@ fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
                 }
             }
             CRRemoveState::Shrink(res) => {
-                println!("crremove s");
                 // This node is already in transaction (so we should be too).
                 if txid == node_txid {
                     // Setup the sibling if needed.
@@ -530,7 +514,6 @@ fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
                 }
             }
             CRRemoveState::CloneShrink(res, nnode) => {
-                println!("crremove cs");
                 // The node was cloned to be removed, and has hit the shrink
                 // decision.
                 if txid == node_txid {
@@ -704,7 +687,7 @@ mod tests {
         let r1_txid = wcurs.root_txid();
         assert!(r1_txid == prev_txid + 1);
         assert!(wcurs.verify());
-        println!("{:?}", wcurs);
+        // println!("{:?}", wcurs);
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
         check_drop_count();
@@ -719,12 +702,12 @@ mod tests {
         let mut wcurs = CursorWrite::new(node, 0);
 
         for v in 1..(L_CAPACITY + 1) {
-            println!("ITER v {}", v);
+            // println!("ITER v {}", v);
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
         }
-        println!("{:?}", wcurs);
+        // println!("{:?}", wcurs);
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
         check_drop_count();
@@ -744,12 +727,12 @@ mod tests {
         let root = Node::new_branch(0, lnode, rnode);
         let mut wcurs = CursorWrite::new(root, 0);
         assert!(wcurs.verify());
-        println!("{:?}", wcurs);
+        // println!("{:?}", wcurs);
 
         let r = wcurs.insert(19, 19);
         assert!(r.is_none());
         assert!(wcurs.verify());
-        println!("{:?}", wcurs);
+        // println!("{:?}", wcurs);
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
@@ -775,7 +758,7 @@ mod tests {
         let r = wcurs.insert(29, 29);
         assert!(r.is_none());
         assert!(wcurs.verify());
-        println!("{:?}", wcurs);
+        // println!("{:?}", wcurs);
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
@@ -807,7 +790,7 @@ mod tests {
             assert!(r.is_none());
             assert!(wcurs.verify());
         }
-        println!("{:?}", wcurs);
+        // println!("{:?}", wcurs);
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
@@ -839,7 +822,7 @@ mod tests {
             assert!(r.is_none());
             assert!(wcurs.verify());
         }
-        println!("{:?}", wcurs);
+        // println!("{:?}", wcurs);
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
@@ -867,7 +850,7 @@ mod tests {
         assert!(r.is_none());
         assert!(wcurs.verify());
 
-        println!("{:?}", wcurs);
+        // println!("{:?}", wcurs);
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
@@ -900,7 +883,7 @@ mod tests {
         assert!(r.is_none());
         assert!(wcurs.verify());
 
-        println!("{:?}", wcurs);
+        // println!("{:?}", wcurs);
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
@@ -915,13 +898,13 @@ mod tests {
         let mut wcurs = CursorWrite::new(node, 0);
 
         for v in 1..(L_CAPACITY << 4) {
-            println!("ITER v {}", v);
+            // println!("ITER v {}", v);
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
         }
-        println!("{:?}", wcurs);
-        println!("DENSITY -> {:?}", wcurs.get_tree_density());
+        // println!("{:?}", wcurs);
+        // println!("DENSITY -> {:?}", wcurs.get_tree_density());
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
         check_drop_count();
@@ -934,13 +917,13 @@ mod tests {
         let mut wcurs = CursorWrite::new(node, 0);
 
         for v in (1..(L_CAPACITY << 4)).rev() {
-            println!("ITER v {}", v);
+            // println!("ITER v {}", v);
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
         }
-        println!("{:?}", wcurs);
-        println!("DENSITY -> {:?}", wcurs.get_tree_density());
+        // println!("{:?}", wcurs);
+        // println!("DENSITY -> {:?}", wcurs.get_tree_density());
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
         check_drop_count();
@@ -961,8 +944,8 @@ mod tests {
             assert!(r.is_none());
             assert!(wcurs.verify());
         }
-        println!("{:?}", wcurs);
-        println!("DENSITY -> {:?}", wcurs.get_tree_density());
+        // println!("{:?}", wcurs);
+        // println!("DENSITY -> {:?}", wcurs.get_tree_density());
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
         check_drop_count();
@@ -977,14 +960,14 @@ mod tests {
 
         for v in 1..(L_CAPACITY << 4) {
             let mut wcurs = CursorWrite::new(node, 0);
-            println!("ITER v {}", v);
+            // println!("ITER v {}", v);
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
             let (n, _) = wcurs.finalise();
             node = n;
         }
-        println!("{:?}", node);
+        // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
         mem::drop(node);
         check_drop_count();
@@ -997,14 +980,14 @@ mod tests {
 
         for v in (1..(L_CAPACITY << 4)).rev() {
             let mut wcurs = CursorWrite::new(node, 0);
-            println!("ITER v {}", v);
+            // println!("ITER v {}", v);
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
             let (n, _) = wcurs.finalise();
             node = n;
         }
-        println!("{:?}", node);
+        // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
         mem::drop(node);
         check_drop_count();
@@ -1027,7 +1010,7 @@ mod tests {
             let (n, _) = wcurs.finalise();
             node = n;
         }
-        println!("{:?}", node);
+        // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
         mem::drop(node);
         check_drop_count();
@@ -1064,7 +1047,7 @@ mod tests {
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
         }
-        println!("{} == {}", wcurs.len(), L_CAPACITY << 4);
+        // println!("{} == {}", wcurs.len(), L_CAPACITY << 4);
         assert!(wcurs.len() == L_CAPACITY << 4);
     }
 
@@ -1078,11 +1061,11 @@ mod tests {
         //
         let lnode = create_leaf_node_full(0);
         let mut wcurs = CursorWrite::new(lnode, L_CAPACITY);
-        println!("{:?}", wcurs);
+        // println!("{:?}", wcurs);
 
         for v in 0..L_CAPACITY {
             let x = wcurs.remove(&v);
-            println!("{:?}", wcurs);
+            // println!("{:?}", wcurs);
             assert!(x == Some(v));
         }
 
@@ -1101,7 +1084,7 @@ mod tests {
         let mut wcurs = CursorWrite::new(node, 1);
 
         let _ = wcurs.remove(&0);
-        println!("{:?}", wcurs);
+        // println!("{:?}", wcurs);
 
         mem::drop(wcurs);
         check_drop_count();
@@ -1126,7 +1109,7 @@ mod tests {
             .as_mut_branch()
             .add_node(rnode);
         let mut wcurs = CursorWrite::new(root, 3);
-        println!("{:?}", wcurs);
+        // println!("{:?}", wcurs);
         assert!(wcurs.verify());
 
         wcurs.remove(&20);
@@ -1182,17 +1165,13 @@ mod tests {
             .add_node(rnode);
         let mut wcurs = CursorWrite::new(root, 3);
         assert!(wcurs.verify());
-        println!("== 1");
 
         // Setup sibling leaf to already be cloned.
         wcurs.path_clone(&10);
         assert!(wcurs.verify());
-        println!("{:?}", wcurs);
-        println!("== 2");
 
         wcurs.remove(&20);
         assert!(wcurs.verify());
-        println!("== 3");
         mem::drop(wcurs);
         check_drop_count();
     }
@@ -1285,11 +1264,7 @@ mod tests {
         let mut wcurs = CursorWrite::new(root, 4);
         assert!(wcurs.verify());
 
-        println!("before {:?}", wcurs);
-
         wcurs.remove(&30);
-
-        println!("after {:?}", wcurs);
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
@@ -1607,12 +1582,12 @@ mod tests {
         let mut wcurs = CursorWrite::new(node, L_CAPACITY << 4);
 
         for v in 1..(L_CAPACITY << 4) {
-            println!("ITER v {}", v);
+            // println!("ITER v {}", v);
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
         }
-        println!("{:?}", wcurs);
+        // println!("{:?}", wcurs);
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
         check_drop_count();
@@ -1625,13 +1600,13 @@ mod tests {
         let mut wcurs = CursorWrite::new(node, L_CAPACITY << 4);
 
         for v in (1..(L_CAPACITY << 4)).rev() {
-            println!("ITER v {}", v);
+            // println!("ITER v {}", v);
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
         }
-        println!("{:?}", wcurs);
-        println!("DENSITY -> {:?}", wcurs.get_tree_density());
+        // println!("{:?}", wcurs);
+        // println!("DENSITY -> {:?}", wcurs.get_tree_density());
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
         check_drop_count();
@@ -1652,8 +1627,8 @@ mod tests {
             assert!(r == Some(v));
             assert!(wcurs.verify());
         }
-        println!("{:?}", wcurs);
-        println!("DENSITY -> {:?}", wcurs.get_tree_density());
+        // println!("{:?}", wcurs);
+        // println!("DENSITY -> {:?}", wcurs.get_tree_density());
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
         check_drop_count();
@@ -1668,14 +1643,14 @@ mod tests {
 
         for v in 1..(L_CAPACITY << 4) {
             let mut wcurs = CursorWrite::new(node, 0);
-            println!("ITER v {}", v);
+            // println!("ITER v {}", v);
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
             let (n, _) = wcurs.finalise();
             node = n;
         }
-        println!("{:?}", node);
+        // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
         mem::drop(node);
         check_drop_count();
@@ -1688,14 +1663,14 @@ mod tests {
 
         for v in (1..(L_CAPACITY << 4)).rev() {
             let mut wcurs = CursorWrite::new(node, 0);
-            println!("ITER v {}", v);
+            // println!("ITER v {}", v);
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
             let (n, _) = wcurs.finalise();
             node = n;
         }
-        println!("{:?}", node);
+        // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
         mem::drop(node);
         check_drop_count();
@@ -1706,7 +1681,6 @@ mod tests {
         // Insert random
         let mut rng = rand::thread_rng();
         let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
-        println!("{:?}", ins);
         ins.shuffle(&mut rng);
 
         let mut node = tree_create_rand();
@@ -1719,7 +1693,7 @@ mod tests {
             let (n, _) = wcurs.finalise();
             node = n;
         }
-        println!("{:?}", node);
+        // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
         mem::drop(node);
         check_drop_count();

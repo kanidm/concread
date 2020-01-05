@@ -225,7 +225,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
                 }
                 lk = rk;
             }
-            println!("Leaf passed sorting");
+            // println!("Leaf passed sorting");
             true
         }
     }
@@ -277,7 +277,6 @@ impl<K: Ord + Clone, V: Clone> Drop for Leaf<K, V> {
                 ptr::drop_in_place(self.value[idx].as_mut_ptr());
             }
         }
-        println!("leaf dropped {}", self.count);
     }
 }
 
