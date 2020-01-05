@@ -693,8 +693,54 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
 
     pub(crate) fn take_from_r_to_l(&mut self, right: &mut Self) {
         debug_assert!(right.len() >= self.len());
-        // let count = (self.len() + right.len()) / 2;
-        unimplemented!();
+
+        let count = ((self.len() + right.len()) / 2);
+        let start_idx = right.len() - count;
+
+        // We move count from right to left.
+        unsafe {
+            slice_move(&mut self.node, 1, &mut right.node, 0, count);
+        }
+
+        // Pop the excess keys in right
+        // So say we had 6/7 in right, and 0/1 in left.
+        //
+        // We have a start_idx of 4, and count of 3.
+        //
+        // We moved 3 values from right, leaving 4. That means we need to remove
+        // keys 0, 1, 2. The remaining keys are moved down.
+        for kidx in 0..count {
+            let _pk = unsafe {
+                ptr::read(right.key.get_unchecked(kidx)).assume_init()
+            };
+            // They are dropped now.
+        }
+
+        // move keys down in right
+        unsafe {
+            ptr::copy(
+                right.key.as_ptr().add(count),
+                right.key.as_mut_ptr(),
+                start_idx
+            );
+        }
+        // move nodes down in right
+        unsafe {
+            ptr::copy(
+                right.node.as_ptr().add(count),
+                right.node.as_mut_ptr(),
+                start_idx + 1
+            );
+        }
+
+        // update counts
+        right.count = start_idx;
+        self.count = count;
+        // Rekey left
+        for kidx in 1..(count + 1) {
+            self.rekey_by_idx(kidx);
+        }
+        // Done!
     }
 
     // remove a node by idx.
