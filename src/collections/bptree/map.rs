@@ -171,7 +171,11 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
         self.work.insert(k, v)
     }
 
-    // remove
+    /// Remove a key if it exists in the tree. If the value exists, we return it as `Some(V)`,
+    /// and if it did not exist, we return `None`
+    pub fn remove(&mut self, k: &K) -> Option<V> {
+        self.work.remove(k)
+    }
 
     // split_off
 
@@ -252,6 +256,37 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Extend for BptreeMapWriteTxn<'a, K, V
 }
 */
 
+impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapReadTxn<K, V> {
+    /// Retrieve a value from the tree. If the value exists, a reference is returned
+    /// as `Some(&V)`, otherwise if not present `None` is returned.
+    pub fn get(&'a self, k: &'a K) -> Option<&'a V> {
+        self.work.search(k)
+    }
+
+    /// Assert if a key exists in the tree.
+    pub fn contains_key(&self, k: &K) -> bool {
+        self.work.contains_key(k)
+    }
+
+    /// Returns the current number of k:v pairs in the tree
+    pub fn len(&self) -> usize {
+        self.work.len()
+    }
+
+    // is_empty
+
+    // (adv) range
+
+    /// Iterator over `(&K, &V)` of the set
+    pub fn iter(&self) -> Iter<K, V> {
+        self.work.kv_iter()
+    }
+
+    // (adv) keys
+
+    // (adv) values
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::constants::L_CAPACITY;
@@ -311,4 +346,20 @@ mod tests {
         assert!(w.verify());
         assert!(w.tree_density() == ((L_CAPACITY << 4), (L_CAPACITY << 4)));
     }
+
+    #[test]
+    fn test_bptree_map_basic_read() {
+        // Create a map
+
+        // add values
+
+        // commit
+
+        // read
+
+        // Can we see things?
+    }
+
+    #[test]
+    fn test_bptree_map_basic_concurrency() {}
 }

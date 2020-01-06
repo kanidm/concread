@@ -155,6 +155,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         right.count = start_idx;
     }
 
+    #[cfg(test)]
     fn max_idx(&self) -> usize {
         debug_assert!(self.count > 0);
         self.count - 1
@@ -164,6 +165,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         unsafe { &*self.key[0].as_ptr() }
     }
 
+    #[cfg(test)]
     pub(crate) fn max(&self) -> &K {
         let idx = self.max_idx();
         unsafe { &*self.key[idx].as_ptr() }
@@ -186,6 +188,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
             .map(|idx| unsafe { &*self.value[idx].as_ptr() })
     }
 
+    /*
     pub(crate) fn get_mut_ref_idx(&mut self, idx: usize) -> &mut V {
         unsafe { &mut *self.value[idx].as_mut_ptr() }
     }
@@ -194,6 +197,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         self.get_idx(k)
             .map(|idx| unsafe { &mut *self.value[idx].as_mut_ptr() })
     }
+    */
 
     pub(crate) fn get_kv_idx_checked(&self, idx: usize) -> Option<(&K, &V)> {
         if idx < self.count {

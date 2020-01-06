@@ -3,7 +3,6 @@ use std::mem::MaybeUninit;
 use std::ptr;
 use std::slice;
 use std::sync::Arc;
-use std::thread;
 
 use super::constants::{BK_CAPACITY, BK_CAPACITY_MIN_N1, BV_CAPACITY, L_CAPACITY};
 use super::leaf::Leaf;
@@ -12,6 +11,8 @@ use super::utils::*;
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
+use std::thread;
 
 #[cfg(test)]
 thread_local!(static NODE_COUNTER: AtomicUsize = AtomicUsize::new(0));
@@ -109,6 +110,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
+    #[cfg(tesst)]
     pub(crate) fn len(&self) -> usize {
         match &self.inner {
             T::L(leaf) => leaf.len(),
@@ -123,6 +125,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
+    #[cfg(test)]
     fn max(&self) -> &K {
         match &self.inner {
             T::L(leaf) => leaf.max(),
@@ -181,7 +184,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
 
     pub(crate) fn leaf_count(&self) -> usize {
         match &self.inner {
-            T::L(leaf) => 1,
+            T::L(_leaf) => 1,
             T::B(branch) => branch.leaf_count(),
         }
     }
@@ -524,26 +527,24 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
 
     fn clone_idx(&mut self, txid: usize, idx: usize) {
         // Do we actually need to clone?
-        unsafe {
-            let prev_ptr = self.get_idx(idx);
-            // Do we really need to clone?
-            if prev_ptr.txid == txid {
-                // No, we already cloned this txn
-                debug_assert!(Arc::strong_count(prev_ptr) == 1);
-                return;
-            }
-            // Now do the clone
-            let prev = unsafe { ptr::read(self.node.get_unchecked(idx)).assume_init() };
-            let cnode = prev.req_clone(txid);
-            debug_assert!(Arc::strong_count(&cnode) == 1);
-            unsafe { ptr::write(self.node.get_unchecked_mut(idx), MaybeUninit::new(cnode)) };
-            debug_assert!(
-                {
-                    let r = unsafe { &mut *self.node[idx].as_mut_ptr() };
-                    Arc::strong_count(&r)
-                } == 1
-            )
+        let prev_ptr = self.get_idx(idx);
+        // Do we really need to clone?
+        if prev_ptr.txid == txid {
+            // No, we already cloned this txn
+            debug_assert!(Arc::strong_count(prev_ptr) == 1);
+            return;
         }
+        // Now do the clone
+        let prev = unsafe { ptr::read(self.node.get_unchecked(idx)).assume_init() };
+        let cnode = prev.req_clone(txid);
+        debug_assert!(Arc::strong_count(&cnode) == 1);
+        unsafe { ptr::write(self.node.get_unchecked_mut(idx), MaybeUninit::new(cnode)) };
+        debug_assert!(
+            {
+                let r = unsafe { &mut *self.node[idx].as_mut_ptr() };
+                Arc::strong_count(&r)
+            } == 1
+        )
     }
 
     // get a node containing some K - need to return our related idx.
@@ -620,7 +621,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         //  3 = 5 - (5 + 0) / 2 (will move 3, 4)
         //  2 = 4 ....          (will move 2, 3)
         //
-        let count = ((self.len() + right.len()) / 2);
+        let count = (self.len() + right.len()) / 2;
         let start_idx = self.len() - count;
         // Move the remaining element from r to the correct location.
 
@@ -671,7 +672,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
     pub(crate) fn take_from_r_to_l(&mut self, right: &mut Self) {
         debug_assert!(right.len() >= self.len());
 
-        let count = ((self.len() + right.len()) / 2);
+        let count = (self.len() + right.len()) / 2;
         let start_idx = right.len() - count;
 
         // We move count from right to left.
@@ -783,6 +784,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         unsafe { (*self.node[0].as_ptr()).min() }
     }
 
+    #[cfg(test)]
     pub(crate) fn max(&self) -> &K {
         unsafe { (*self.node[self.count].as_ptr()).max() }
     }
@@ -972,7 +974,7 @@ pub(crate) fn check_drop_count() {
 #[cfg(test)]
 mod tests {
     use super::super::constants::BV_CAPACITY;
-    use super::super::states::{BNClone, BRInsertState};
+    use super::super::states::BRInsertState;
     use super::{ABNode, Branch, Node};
     use std::sync::Arc;
 

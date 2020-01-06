@@ -11,9 +11,10 @@ use std::sync::Arc;
 
 // use super::branch::Branch;
 use super::iter::Iter;
+#[cfg(test)]
+use super::states::CRCloneState;
 use super::states::{
-    BLInsertState, BLRemoveState, BRInsertState, BRShrinkState, CRCloneState, CRInsertState,
-    CRRemoveState,
+    BLInsertState, BLRemoveState, BRInsertState, BRShrinkState, CRInsertState, CRRemoveState,
 };
 use std::iter::Extend;
 
@@ -168,6 +169,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn path_clone(&mut self, k: &K) {
         match path_clone(&mut self.root, self.txid, k) {
             CRCloneState::Clone(mut nroot) => {
@@ -398,6 +400,7 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
     }
 }
 
+#[cfg(test)]
 fn path_clone<'a, K: Clone + Ord + Debug, V: Clone>(
     node: &'a mut ABNode<K, V>,
     txid: usize,
@@ -419,7 +422,7 @@ fn path_clone<'a, K: Clone + Ord + Debug, V: Clone>(
         let anode_idx = nmref.locate_node(&k);
         let mut anode = nmref.get_mut_idx(anode_idx);
         match path_clone(&mut anode, txid, k) {
-            CRCloneState::Clone(mut cnode) => {
+            CRCloneState::Clone(cnode) => {
                 // Do we need to clone?
                 if txid == node_txid {
                     // Nope, just insert and unwind.

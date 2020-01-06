@@ -1,6 +1,8 @@
+//! Iterators for the map.
+
 // Iterators for the bptree
 use super::leaf::Leaf;
-use super::node::{ABNode, Node};
+use super::node::ABNode;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 
@@ -10,7 +12,7 @@ where
     V: Clone,
 {
     length: Option<usize>,
-    idx: usize,
+    // idx: usize,
     stack: VecDeque<(&'a ABNode<K, V>, usize)>,
 }
 
@@ -37,7 +39,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> LeafIter<'a, K, V> {
 
         LeafIter {
             length: length,
-            idx: 0,
+            // idx: 0,
             stack: stack,
         }
     }
@@ -46,7 +48,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> LeafIter<'a, K, V> {
     pub(crate) fn new_base() -> Self {
         LeafIter {
             length: None,
-            idx: 0,
+            // idx: 0,
             stack: VecDeque::new(),
         }
     }
@@ -82,10 +84,12 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> LeafIter<'a, K, V> {
         }
     }
 
+    /*
     fn peek(&'a mut self) -> Option<&'a Leaf<K, V>> {
         // I have no idea how peekable works, yolo.
         self.stack.back().map(|t| t.0.as_leaf())
     }
+    */
 }
 
 impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for LeafIter<'a, K, V> {
@@ -115,6 +119,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for LeafIter<'a, K, V> {
     }
 }
 
+/// Iterater over references to Key Value pairs stored in the map.
 pub struct Iter<'a, K, V>
 where
     K: Ord + Clone + Debug,
@@ -143,6 +148,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iter<'a, K, V> {
 impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for Iter<'a, K, V> {
     type Item = (&'a K, &'a V);
 
+    /// Yield the next key value reference, or `None` if exhausted.
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(leaf) = self.curleaf {
             if let Some(r) = leaf.get_kv_idx_checked(self.idx) {
@@ -156,27 +162,9 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for Iter<'a, K, V> {
         } else {
             None
         }
-
-        /*
-        // Do we have more in the current leaf?
-        if let Some(leafref) = self.leafiter.peek() {
-            if let Some(r) = leafref.get_kv_idx_checked(self.idx) {
-                self.idx += 1;
-                return Some(r);
-            } else {
-                // Advance the leaf, and get the next value.
-                self.idx = 0;
-                let _ = self.leafiter.next();
-                // recurse now that we have re-positioned.
-                self.next()
-            }
-        } else {
-            // No more, move on.
-            None
-        }
-        */
     }
 
+    /// Provide a hint as to the number of items this iterator will yield.
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.length, Some(self.length))
     }
