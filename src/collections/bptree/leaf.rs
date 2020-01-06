@@ -72,7 +72,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         }
     }
 
-    fn remove(&mut self, k: &K) -> BLRemoveState<V> {
+    pub(crate) fn remove(&mut self, k: &K) -> BLRemoveState<V> {
         // We already were empty - should never occur, but let's be paranoid.
         if self.count == 0 {
             return BLRemoveState::Shrink(None);
@@ -101,6 +101,60 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         }
     }
 
+    pub(crate) fn merge(&mut self, right: &mut Self) {
+        unsafe {
+            slice_merge(&mut self.key, self.count, &mut right.key, right.count);
+            slice_merge(&mut self.value, self.count, &mut right.value, right.count);
+        }
+        self.count = self.count + right.count;
+        right.count = 0;
+    }
+
+    pub(crate) fn take_from_l_to_r(&mut self, right: &mut Self) {
+        debug_assert!(right.len() == 0);
+        let count = self.len() / 2;
+        let start_idx = self.len() - count;
+
+        //move key and values
+        unsafe {
+            slice_move(&mut right.key, 0, &mut self.key, start_idx, count);
+            slice_move(&mut right.value, 0, &mut self.value, start_idx, count);
+        }
+
+        // update the counts
+        self.count = start_idx;
+        right.count = count;
+    }
+
+    pub(crate) fn take_from_r_to_l(&mut self, right: &mut Self) {
+        debug_assert!(self.len() == 0);
+        let count = right.len() / 2;
+        let start_idx = right.len() - count;
+
+        // Move values from right to left.
+        unsafe {
+            slice_move(&mut self.key, 0, &mut right.key, 0, count);
+            slice_move(&mut self.value, 0, &mut right.value, 0, count);
+        }
+        // Shift the values in right down.
+        unsafe {
+            ptr::copy(
+                right.key.as_ptr().add(count),
+                right.key.as_mut_ptr(),
+                start_idx,
+            );
+            ptr::copy(
+                right.value.as_ptr().add(count),
+                right.value.as_mut_ptr(),
+                start_idx,
+            );
+        }
+
+        // Fix the counts.
+        self.count = count;
+        right.count = start_idx;
+    }
+
     fn max_idx(&self) -> usize {
         debug_assert!(self.count > 0);
         self.count - 1
@@ -115,16 +169,16 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         unsafe { &*self.key[idx].as_ptr() }
     }
 
-    fn get_idx(&self, k: &K) -> Option<usize> {
-        for idx in 0..self.count {
-            unsafe {
-                if &*self.key[idx].as_ptr() == k {
-                    // Shortcut return.
-                    return Some(idx);
-                }
-            }
+    pub(crate) fn get_idx(&self, k: &K) -> Option<usize> {
+        match {
+            let (left, _) = self.key.split_at(self.count);
+            let inited: &[K] =
+                unsafe { slice::from_raw_parts(left.as_ptr() as *const K, left.len()) };
+            inited.binary_search(&k)
+        } {
+            Ok(idx) => Some(idx),
+            Err(_) => None,
         }
-        None
     }
 
     pub(crate) fn get_ref(&self, k: &K) -> Option<&V> {
@@ -132,7 +186,11 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
             .map(|idx| unsafe { &*self.value[idx].as_ptr() })
     }
 
-    fn get_mut_ref(&mut self, k: &K) -> Option<&mut V> {
+    pub(crate) fn get_mut_ref_idx(&mut self, idx: usize) -> &mut V {
+        unsafe { &mut *self.value[idx].as_mut_ptr() }
+    }
+
+    pub(crate) fn get_mut_ref(&mut self, k: &K) -> Option<&mut V> {
         self.get_idx(k)
             .map(|idx| unsafe { &mut *self.value[idx].as_mut_ptr() })
     }
@@ -167,7 +225,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
                 }
                 lk = rk;
             }
-            println!("Leaf passed sorting");
+            // println!("Leaf passed sorting");
             true
         }
     }
@@ -219,7 +277,6 @@ impl<K: Ord + Clone, V: Clone> Drop for Leaf<K, V> {
                 ptr::drop_in_place(self.value[idx].as_mut_ptr());
             }
         }
-        println!("leaf dropped {}", self.count);
     }
 }
 

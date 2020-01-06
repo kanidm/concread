@@ -3,43 +3,44 @@ use std::mem::MaybeUninit;
 use std::ptr;
 use std::slice;
 use std::sync::Arc;
+use std::thread;
 
-use super::constants::{BK_CAPACITY, BK_CAPACITY_MIN_N1, BV_CAPACITY};
+use super::constants::{BK_CAPACITY, BK_CAPACITY_MIN_N1, BV_CAPACITY, L_CAPACITY};
 use super::leaf::Leaf;
-use super::states::BRInsertState;
+use super::states::{BRInsertState, BRShrinkState};
 use super::utils::*;
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+
 #[cfg(test)]
-static NODE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+thread_local!(static NODE_COUNTER: AtomicUsize = AtomicUsize::new(0));
 #[cfg(test)]
-static DROP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+thread_local!(static DROP_COUNTER: AtomicUsize = AtomicUsize::new(0));
 
 pub(crate) struct Branch<K, V>
 where
-    K: Ord + Clone,
+    K: Ord + Clone + Debug,
     V: Clone,
 {
     count: usize,
     key: [MaybeUninit<K>; BK_CAPACITY],
-    node: [MaybeUninit<Arc<Box<Node<K, V>>>>; BV_CAPACITY],
+    node: [MaybeUninit<Arc<Node<K, V>>>; BV_CAPACITY],
 }
 
 #[derive(Debug)]
 pub(crate) enum T<K, V>
 where
-    K: Ord + Clone,
+    K: Ord + Clone + Debug,
     V: Clone,
 {
     B(Branch<K, V>),
     L(Leaf<K, V>),
 }
 
-#[derive(Debug)]
 pub(crate) struct Node<K, V>
 where
-    K: Ord + Clone,
+    K: Ord + Clone + Debug,
     V: Clone,
 {
     #[cfg(test)]
@@ -48,35 +49,35 @@ where
     inner: T<K, V>,
 }
 
-pub(crate) type ABNode<K, V> = Arc<Box<Node<K, V>>>;
+pub(crate) type ABNode<K, V> = Arc<Node<K, V>>;
 
 impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     pub(crate) fn new_leaf(txid: usize) -> Self {
         Node {
             #[cfg(test)]
-            nid: NODE_COUNTER.fetch_add(1, Ordering::AcqRel),
+            nid: NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel)),
             txid: txid,
             inner: T::L(Leaf::new()),
         }
     }
 
     pub(crate) fn new_ableaf(txid: usize) -> ABNode<K, V> {
-        Arc::new(Box::new(Self::new_leaf(txid)))
+        Arc::new(Self::new_leaf(txid))
     }
 
     pub(crate) fn new_branch(txid: usize, l: ABNode<K, V>, r: ABNode<K, V>) -> ABNode<K, V> {
-        Arc::new(Box::new(Node {
+        Arc::new(Node {
             #[cfg(test)]
-            nid: NODE_COUNTER.fetch_add(1, Ordering::AcqRel),
+            nid: NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel)),
             txid: txid,
             inner: T::B(Branch::new(l, r)),
-        }))
+        })
     }
 
     pub(crate) fn new_leaf_ins(txid: usize, k: K, v: V) -> ABNode<K, V> {
-        let mut node = Arc::new(Box::new(Node::new_leaf(txid)));
+        let mut node = Arc::new(Node::new_leaf(txid));
         {
-            let nmut = Arc::get_mut(&mut node).unwrap().as_mut().as_mut_leaf();
+            let nmut = Arc::get_mut(&mut node).unwrap().as_mut_leaf();
             nmut.insert_or_update(k, v);
         }
         node
@@ -92,12 +93,12 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     pub(crate) fn req_clone(&self, txid: usize) -> ABNode<K, V> {
         debug_assert!(txid != self.txid);
         // Do we need to clone this node before we work on it?
-        Arc::new(Box::new(Node {
+        Arc::new(Node {
             #[cfg(test)]
-            nid: NODE_COUNTER.fetch_add(1, Ordering::AcqRel),
+            nid: NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel)),
             txid: txid,
             inner: self.inner_clone(),
-        }))
+        })
     }
 
     #[cfg(test)]
@@ -131,14 +132,8 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
 
     pub(crate) fn get_ref(&self, k: &K) -> Option<&V> {
         match &self.inner {
-            T::L(leaf) => {
-                println!("leaf -> {:?}", leaf);
-                leaf.get_ref(k)
-            }
-            T::B(branch) => {
-                println!("branch -> {:?}", branch);
-                branch.get_ref(k)
-            }
+            T::L(leaf) => leaf.get_ref(k),
+            T::B(branch) => branch.get_ref(k),
         }
     }
 
@@ -188,6 +183,15 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         match &self.inner {
             T::L(leaf) => 1,
             T::B(branch) => branch.leaf_count(),
+        }
+    }
+}
+
+impl<K: Clone + Ord + Debug, V: Clone> Debug for Node<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), Error> {
+        match &self.inner {
+            T::L(leaf) => leaf.fmt(f),
+            T::B(branch) => branch.fmt(f),
         }
     }
 }
@@ -270,10 +274,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                     // Drop the key before us that we are about to replace.
                     let _kdrop =
                         unsafe { ptr::read(self.key.get_unchecked(BK_CAPACITY - 2)).assume_init() };
-                    #[cfg(test)]
-                    {
-                        println!("Removing -> {:?}, {:?}", maxn1.nid, max.nid);
-                    }
                     // Add node and it's key to the correct location.
                     let k: K = kr.clone();
                     let leaf_ins_idx = ins_idx + 1;
@@ -379,6 +379,173 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         }
     }
 
+    pub(crate) fn shrink_decision(&mut self, ridx: usize) -> BRShrinkState {
+        // Given two nodes, we need to decide what to do with them!
+        //
+        // Remember, this isn't happening in a vacuum. This is really a manipulation of
+        // the following structure:
+        //
+        //      parent (self)
+        //     /     \
+        //   left    right
+        //
+        //   We also need to consider the following situation too:
+        //
+        //          root
+        //         /    \
+        //    lbranch   rbranch
+        //    /    \    /     \
+        //   l1    l2  r1     r2
+        //
+        //  Imagine we have exhausted r2, so we need to merge:
+        //
+        //          root
+        //         /    \
+        //    lbranch   rbranch
+        //    /    \    /     \
+        //   l1    l2  r1 <<-- r2
+        //
+        // This leaves us with a partial state of
+        //
+        //          root
+        //         /    \
+        //    lbranch   rbranch (invalid!)
+        //    /    \    /
+        //   l1    l2  r1
+        //
+        // This means rbranch issues a cloneshrink to root. clone shrink must contain the remainer
+        // so that it can be reparented:
+        //
+        //          root
+        //         /
+        //    lbranch --
+        //    /    \    \
+        //   l1    l2   r1
+        //
+        // Now root has to shrink too.
+        //
+        //     root  --
+        //    /    \    \
+        //   l1    l2   r1
+        //
+        // So, we have to analyse the situation.
+        //  * Have left or right been emptied? (how to handle when branches
+        //  *
+        //  * Is left or right belowe a reasonable threshold?
+        //  * Does the opposite have capacity to remain valid?
+        //  *
+        //
+
+        let (left, right) = self.get_mut_pair(ridx);
+
+        if left.is_leaf() {
+            debug_assert!(right.is_leaf());
+            debug_assert!(Arc::strong_count(left) == 1);
+            debug_assert!(Arc::strong_count(right) == 1);
+            let lmut = Arc::get_mut(left).unwrap().as_mut_leaf();
+            let rmut = Arc::get_mut(right).unwrap().as_mut_leaf();
+
+            if lmut.len() == L_CAPACITY {
+                lmut.take_from_l_to_r(rmut);
+                self.rekey_by_idx(ridx);
+                BRShrinkState::Balanced
+            } else if rmut.len() == L_CAPACITY {
+                lmut.take_from_r_to_l(rmut);
+                self.rekey_by_idx(ridx);
+                BRShrinkState::Balanced
+            } else {
+                // merge
+                lmut.merge(rmut);
+                // drop our references
+                // mem::drop(lmut)
+                // mem::drop(rmut)
+                // remove the right node from parent
+                let _ = self.remove_by_idx(ridx);
+                // What is our capacity?
+                if self.count == 0 {
+                    // We now need to be merged across as we only contain a single
+                    // value now.
+                    BRShrinkState::Shrink
+                } else {
+                    BRShrinkState::Merge
+                    // We are complete!
+                }
+            }
+        } else {
+            // right or left is now in a "corrupt" state with a single value that we need to relocate
+            // to left - or we need to borrow from left and fix it!
+            debug_assert!(!right.is_leaf());
+            debug_assert!(Arc::strong_count(left) == 1);
+            debug_assert!(Arc::strong_count(right) == 1);
+            let lmut = Arc::get_mut(left).unwrap().as_mut_branch();
+            let rmut = Arc::get_mut(right).unwrap().as_mut_branch();
+            debug_assert!(rmut.len() == 0 || lmut.len() == 0);
+            if lmut.len() == BK_CAPACITY {
+                lmut.take_from_l_to_r(rmut);
+                self.rekey_by_idx(ridx);
+                BRShrinkState::Balanced
+            } else if rmut.len() == BK_CAPACITY {
+                lmut.take_from_r_to_l(rmut);
+                self.rekey_by_idx(ridx);
+                BRShrinkState::Balanced
+            } else {
+                // merge the right to tail of left.
+                lmut.merge(rmut);
+                // Reduce our count
+                let _ = self.remove_by_idx(ridx);
+                if self.count == 0 {
+                    // We now need to be merged across as we also only contain a single
+                    // value now.
+                    BRShrinkState::Shrink
+                } else {
+                    BRShrinkState::Merge
+                    // We are complete!
+                }
+            }
+        }
+    }
+
+    pub(crate) fn clone_sibling_idx(&mut self, txid: usize, idx: usize) -> usize {
+        // This clones and sets up for a subsequent
+        // merge.
+        if idx == 0 {
+            // If we are zero, we clone our right sibling.
+            // Clone idx 1
+            self.clone_idx(txid, 1);
+            // And increment the idx to 1
+            1
+        } else {
+            // Otherwise we clone to the left
+            self.clone_idx(txid, idx - 1);
+            // And return as is.
+            idx
+        }
+    }
+
+    fn clone_idx(&mut self, txid: usize, idx: usize) {
+        // Do we actually need to clone?
+        unsafe {
+            let prev_ptr = self.get_idx(idx);
+            // Do we really need to clone?
+            if prev_ptr.txid == txid {
+                // No, we already cloned this txn
+                debug_assert!(Arc::strong_count(prev_ptr) == 1);
+                return;
+            }
+            // Now do the clone
+            let prev = unsafe { ptr::read(self.node.get_unchecked(idx)).assume_init() };
+            let cnode = prev.req_clone(txid);
+            debug_assert!(Arc::strong_count(&cnode) == 1);
+            unsafe { ptr::write(self.node.get_unchecked_mut(idx), MaybeUninit::new(cnode)) };
+            debug_assert!(
+                {
+                    let r = unsafe { &mut *self.node[idx].as_mut_ptr() };
+                    Arc::strong_count(&r)
+                } == 1
+            )
+        }
+    }
+
     // get a node containing some K - need to return our related idx.
     pub(crate) fn locate_node(&self, k: &K) -> usize {
         let r = {
@@ -400,11 +567,166 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         }
     }
 
+    pub(crate) fn extract_last_node(&mut self) -> ABNode<K, V> {
+        debug_assert!(self.count == 0);
+        unsafe {
+            // We could just use get_unchecked instead.
+            slice_remove(&mut self.node, 0).assume_init()
+        }
+    }
+
+    pub(crate) fn merge(&mut self, right: &mut Self) {
+        if right.len() == 0 {
+            let node = right.extract_last_node();
+            let k: K = node.min().clone();
+            let ins_idx = self.count;
+            let leaf_ins_idx = ins_idx + 1;
+            unsafe {
+                slice_insert(&mut self.key, MaybeUninit::new(k), ins_idx);
+                slice_insert(&mut self.node, MaybeUninit::new(node), leaf_ins_idx);
+            }
+            self.count += 1;
+        } else {
+            debug_assert!(self.len() == 0);
+            unsafe {
+                // Move all the nodes from right.
+                slice_merge(&mut self.node, 1, &mut right.node, right.count + 1);
+                // Move the related keys.
+                slice_merge(&mut self.key, 1, &mut right.key, right.count);
+            }
+            // Set our count correctly.
+            self.count = right.count + 1;
+            // Set rightt len to 0
+            right.count = 0;
+            // rekey the lowest pointer.
+            unsafe {
+                let nptr = &*self.node[1].as_ptr();
+                let rekey = (*nptr.min()).clone();
+                self.key[0].as_mut_ptr().write(rekey);
+            }
+            // done!
+        }
+    }
+
+    pub(crate) fn take_from_l_to_r(&mut self, right: &mut Self) {
+        debug_assert!(self.len() > right.len());
+        // Starting index of where we move from. We work normally from a branch
+        // with only zero (but the base) branch item, but we do the math anyway
+        // to be sure incase we change later.
+        //
+        // So, self.len must be larger, so let's give a few examples here.
+        //  4 = 7 - (7 + 0) / 2 (will move 4, 5, 6)
+        //  3 = 6 - (6 + 0) / 2 (will move 3, 4, 5)
+        //  3 = 5 - (5 + 0) / 2 (will move 3, 4)
+        //  2 = 4 ....          (will move 2, 3)
+        //
+        let count = ((self.len() + right.len()) / 2);
+        let start_idx = self.len() - count;
+        // Move the remaining element from r to the correct location.
+
+        unsafe {
+            ptr::swap(
+                right.node.get_unchecked_mut(0),
+                right.node.get_unchecked_mut(count),
+            )
+        }
+
+        // Move our values.
+        unsafe {
+            slice_move(&mut right.node, 0, &mut self.node, start_idx + 1, count);
+        }
+        // Remove the keys from left.
+        //
+        // If we have:
+        //    [   k1, k2, k3, k4, k5, k6   ]
+        //    [ v1, v2, v3, v4, v5, v6, v7 ] -> [ v8, ------- ]
+        //
+        // We would move 3 now to:
+        //
+        //    [   k1, k2, k3, k4, k5, k6   ]    [   --, --, --, --, ...
+        //    [ v1, v2, v3, v4, --, --, -- ] -> [ v5, v6, v7, v8, --, ...
+        //
+        // So we need to remove the corresponding keys. so that we get.
+        //
+        //    [   k1, k2, k3, --, --, --   ]    [   --, --, --, --, ...
+        //    [ v1, v2, v3, v4, --, --, -- ] -> [ v5, v6, v7, v8, --, ...
+        //
+        // This means it's start_idx - 1 up to BK cap
+
+        for kidx in (start_idx - 1)..BK_CAPACITY {
+            let _pk = unsafe { ptr::read(self.key.get_unchecked(kidx)).assume_init() };
+            // They are dropped now.
+        }
+        // Adjust both counts - we do this before rekey to ensure that the safety
+        // checks hold in debugging.
+        right.count = count;
+        self.count = start_idx;
+        // Rekey right
+        for kidx in 1..(count + 1) {
+            right.rekey_by_idx(kidx);
+        }
+        // Done!
+    }
+
+    pub(crate) fn take_from_r_to_l(&mut self, right: &mut Self) {
+        debug_assert!(right.len() >= self.len());
+
+        let count = ((self.len() + right.len()) / 2);
+        let start_idx = right.len() - count;
+
+        // We move count from right to left.
+        unsafe {
+            slice_move(&mut self.node, 1, &mut right.node, 0, count);
+        }
+
+        // Pop the excess keys in right
+        // So say we had 6/7 in right, and 0/1 in left.
+        //
+        // We have a start_idx of 4, and count of 3.
+        //
+        // We moved 3 values from right, leaving 4. That means we need to remove
+        // keys 0, 1, 2. The remaining keys are moved down.
+        for kidx in 0..count {
+            let _pk = unsafe { ptr::read(right.key.get_unchecked(kidx)).assume_init() };
+            // They are dropped now.
+        }
+
+        // move keys down in right
+        unsafe {
+            ptr::copy(
+                right.key.as_ptr().add(count),
+                right.key.as_mut_ptr(),
+                start_idx,
+            );
+        }
+        // move nodes down in right
+        unsafe {
+            ptr::copy(
+                right.node.as_ptr().add(count),
+                right.node.as_mut_ptr(),
+                start_idx + 1,
+            );
+        }
+
+        // update counts
+        right.count = start_idx;
+        self.count = count;
+        // Rekey left
+        for kidx in 1..(count + 1) {
+            self.rekey_by_idx(kidx);
+        }
+        // Done!
+    }
+
     // remove a node by idx.
-    pub(crate) fn remove_by_idx(&mut self, idx: usize) -> () {
+    pub(crate) fn remove_by_idx(&mut self, idx: usize) -> ABNode<K, V> {
         debug_assert!(idx <= self.count);
+        debug_assert!(idx > 0);
         // remove by idx.
-        unimplemented!();
+        let _pk = unsafe { slice_remove(&mut self.key, idx - 1).assume_init() };
+        let pn = unsafe { slice_remove(&mut self.node, idx).assume_init() };
+        self.count -= 1;
+        pn
     }
 
     pub(crate) fn replace_by_idx(&mut self, idx: usize, mut node: ABNode<K, V>) -> () {
@@ -416,9 +738,32 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         }
     }
 
+    pub(crate) fn rekey_by_idx(&mut self, idx: usize) {
+        debug_assert!(idx <= self.count);
+        debug_assert!(idx > 0);
+        // For the node listed, rekey it.
+        let nref = self.get_idx(idx);
+        let nkey = (*nref.min()).clone();
+        unsafe {
+            self.key[idx - 1].as_mut_ptr().write(nkey);
+        }
+    }
+
     pub(crate) fn get_mut_idx(&mut self, idx: usize) -> &mut ABNode<K, V> {
         debug_assert!(idx <= self.count);
-        unsafe { &mut *self.node[idx].as_mut_ptr() }
+        let v = unsafe { &mut *self.node[idx].as_mut_ptr() };
+        debug_assert!(Arc::strong_count(&v) == 1);
+        v
+    }
+
+    pub(crate) fn get_mut_pair(&mut self, idx: usize) -> (&mut ABNode<K, V>, &mut ABNode<K, V>) {
+        debug_assert!(idx <= self.count);
+        let l = unsafe { &mut *self.node[idx - 1].as_mut_ptr() };
+        let r = unsafe { &mut *self.node[idx].as_mut_ptr() };
+        debug_assert!(Arc::ptr_eq(&l, &r) == false);
+        debug_assert!(Arc::strong_count(&l) == 1);
+        debug_assert!(Arc::strong_count(&r) == 1);
+        (l, r)
     }
 
     pub(crate) fn get_idx(&self, idx: usize) -> &ABNode<K, V> {
@@ -485,7 +830,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 }
                 lk = rk;
             }
-            println!("Passed sorting");
+            // println!("Passed sorting");
             true
         }
     }
@@ -501,11 +846,15 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             let lkey = lnode.max();
             let rkey = rnode.min();
             if lkey >= pkey || pkey > rkey {
-                println!("out of order key found");
+                println!("++++++");
+                println!("out of order key found {}", work_idx);
+                println!("{:?}", lnode);
+                println!("{:?}", rnode);
+                println!("{:?}", self);
                 return false;
             }
         }
-        println!("Passed descendants");
+        // println!("Passed descendants");
         true
     }
 
@@ -519,7 +868,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 return false;
             }
         }
-        println!("Passed children");
+        // println!("Passed children");
         true
     }
 
@@ -529,11 +878,11 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
     }
 }
 
-impl<K: Clone + Ord, V: Clone> Clone for Branch<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> Clone for Branch<K, V> {
     fn clone(&self) -> Self {
         let mut nkey: [MaybeUninit<K>; BK_CAPACITY] =
             unsafe { MaybeUninit::uninit().assume_init() };
-        let mut nnode: [MaybeUninit<Arc<Box<Node<K, V>>>>; BV_CAPACITY] =
+        let mut nnode: [MaybeUninit<Arc<Node<K, V>>>; BV_CAPACITY] =
             unsafe { MaybeUninit::uninit().assume_init() };
         for idx in 0..self.count {
             unsafe {
@@ -585,37 +934,38 @@ impl<K: Clone + Ord + Debug, V: Clone> Debug for Branch<K, V> {
     }
 }
 
-impl<K: Clone + Ord, V: Clone> Drop for Branch<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> Drop for Branch<K, V> {
     fn drop(&mut self) {
         // Due to the use of maybe uninit we have to drop any contained values.
-        for idx in 0..self.count {
-            unsafe {
-                ptr::drop_in_place(self.key[idx].as_mut_ptr());
+        if self.count > 0 {
+            for idx in 0..self.count {
+                unsafe {
+                    ptr::drop_in_place(self.key[idx].as_mut_ptr());
+                }
+            }
+            // Remember, a branch ALWAYS has two nodes per key, which means
+            // it's N+1,so we have to increase this to ensure we drop them
+            // all.
+            for idx in 0..(self.count + 1) {
+                unsafe {
+                    ptr::drop_in_place(self.node[idx].as_mut_ptr());
+                }
             }
         }
-        // Remember, a branch ALWAYS has two nodes per key, which means
-        // it's N+1,so we have to increase this to ensure we drop them
-        // all.
-        for idx in 0..(self.count + 1) {
-            unsafe {
-                ptr::drop_in_place(self.node[idx].as_mut_ptr());
-            }
-        }
-        println!("branch dropped k:{}, v:{}", self.count, self.count + 1);
     }
 }
 
 #[cfg(test)]
-impl<K: Clone + Ord, V: Clone> Drop for Node<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> Drop for Node<K, V> {
     fn drop(&mut self) {
-        DROP_COUNTER.fetch_add(1, Ordering::AcqRel);
+        let _ = DROP_COUNTER.with(|dc| dc.fetch_add(1, Ordering::AcqRel));
     }
 }
 
 #[cfg(test)]
 pub(crate) fn check_drop_count() {
-    let node = NODE_COUNTER.load(Ordering::Acquire);
-    let drop = DROP_COUNTER.load(Ordering::Acquire);
+    let node = NODE_COUNTER.with(|nc| nc.load(Ordering::Acquire));
+    let drop = DROP_COUNTER.with(|dc| dc.load(Ordering::Acquire));
     assert!(node == drop);
 }
 
@@ -628,17 +978,17 @@ mod tests {
 
     #[test]
     fn test_bptree_node_new() {
-        let mut left = Arc::new(Box::new(Node::new_leaf(0)));
-        let mut right = Arc::new(Box::new(Node::new_leaf(0)));
+        let mut left = Arc::new(Node::new_leaf(0));
+        let mut right = Arc::new(Node::new_leaf(0));
 
         // add some k, vs to each.
         {
-            let lmut = Arc::get_mut(&mut left).unwrap().as_mut().as_mut_leaf();
+            let lmut = Arc::get_mut(&mut left).unwrap().as_mut_leaf();
             lmut.insert_or_update(0, 0);
             lmut.insert_or_update(1, 1);
         }
         {
-            let rmut = Arc::get_mut(&mut right).unwrap().as_mut().as_mut_leaf();
+            let rmut = Arc::get_mut(&mut right).unwrap().as_mut_leaf();
             rmut.insert_or_update(5, 5);
             rmut.insert_or_update(6, 6);
         }
@@ -649,12 +999,12 @@ mod tests {
     }
 
     fn create_branch_one_three() -> Branch<usize, usize> {
-        let mut left = Arc::new(Box::new(Node::new_leaf(0)));
-        let mut right = Arc::new(Box::new(Node::new_leaf(0)));
+        let mut left = Arc::new(Node::new_leaf(0));
+        let mut right = Arc::new(Node::new_leaf(0));
         {
-            let lmut = Arc::get_mut(&mut left).unwrap().as_mut().as_mut_leaf();
+            let lmut = Arc::get_mut(&mut left).unwrap().as_mut_leaf();
             lmut.insert_or_update(1, 1);
-            let rmut = Arc::get_mut(&mut right).unwrap().as_mut().as_mut_leaf();
+            let rmut = Arc::get_mut(&mut right).unwrap().as_mut_leaf();
             rmut.insert_or_update(3, 3);
         }
         Branch::new(left, right)
@@ -675,9 +1025,9 @@ mod tests {
     }
 
     fn create_node(v: usize) -> ABNode<usize, usize> {
-        let mut node = Arc::new(Box::new(Node::new_leaf(0)));
+        let mut node = Arc::new(Node::new_leaf(0));
         {
-            let nmut = Arc::get_mut(&mut node).unwrap().as_mut().as_mut_leaf();
+            let nmut = Arc::get_mut(&mut node).unwrap().as_mut_leaf();
             nmut.insert_or_update(v, v);
         }
         node
