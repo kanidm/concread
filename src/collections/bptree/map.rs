@@ -291,7 +291,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapReadTxn<K, V> {
 mod tests {
     use super::super::constants::L_CAPACITY;
     use super::BptreeMap;
-    use rand::prelude::*;
+    // use rand::prelude::*;
     use rand::seq::SliceRandom;
     use std::iter::FromIterator;
 
@@ -322,8 +322,7 @@ mod tests {
 
     #[test]
     fn test_bptree_map_from_iter_1() {
-        let mut rng = rand::thread_rng();
-        let mut ins: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
+        let ins: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
 
         let map = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
 
@@ -358,8 +357,16 @@ mod tests {
         // read
 
         // Can we see things?
+        unimplemented!();
     }
 
     #[test]
-    fn test_bptree_map_basic_concurrency() {}
+    fn test_bptree_map_basic_concurrency() {
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_map_write_compact() {
+        unimplemented!();
+    }
 }

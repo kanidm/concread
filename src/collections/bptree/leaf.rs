@@ -216,7 +216,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
     #[cfg(test)]
     fn check_sorted(&self) -> bool {
         if self.count == 0 {
-            panic!();
             false
         } else {
             let mut lk: &K = unsafe { &*self.key[0].as_ptr() };
@@ -224,7 +223,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
                 let rk: &K = unsafe { &*self.key[work_idx].as_ptr() };
                 if lk >= rk {
                     println!("{:?}", self);
-                    panic!();
                     return false;
                 }
                 lk = rk;
@@ -337,7 +335,7 @@ mod tests {
             let r = leaf.insert_or_update(kv, kv + 1);
             match r {
                 // Check for some kv, that was the former value.
-                BLInsertState::Ok(Some(kv)) => {}
+                BLInsertState::Ok(Some(_kv)) => {}
                 _ => panic!(),
             }
             let gr = leaf.get_ref(&kv);
@@ -390,7 +388,7 @@ mod tests {
             let kv = kvs[idx];
             let r = leaf.insert_or_update(kv, kv + 1);
             match r {
-                BLInsertState::Ok(Some(kv)) => {}
+                BLInsertState::Ok(Some(_kv)) => {}
                 _ => panic!(),
             }
             let gr = leaf.get_ref(&kv);
@@ -456,14 +454,13 @@ mod tests {
         // Then we insert capacity + 2, and should get that back.
         let r_over = leaf.insert_or_update(high, high);
         match r_over {
-            BLInsertState::Split(high, _) => {}
+            BLInsertState::Split(high, _) => assert!(L_CAPACITY + 2 == high),
             _ => panic!(),
         }
         // Then we insert 0, and we should get capacity + 1 back
-        let zret = L_CAPACITY + 1;
         let r_under = leaf.insert_or_update(0, 0);
-        match r_over {
-            BLInsertState::Split(zret, _) => {}
+        match r_under {
+            BLInsertState::Split(high, _) => assert!(L_CAPACITY == high),
             _ => panic!(),
         }
         assert!(leaf.len() == L_CAPACITY);
@@ -480,7 +477,7 @@ mod tests {
         for kv in 0..(L_CAPACITY - 1) {
             let r = leaf.remove(&kv);
             match r {
-                BLRemoveState::Ok(Some(kv)) => {}
+                BLRemoveState::Ok(Some(_kv)) => {}
                 _ => panic!(),
             }
         }

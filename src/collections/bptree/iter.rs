@@ -280,7 +280,7 @@ mod tests {
         let b1node = Node::new_branch(0, l1node, r1node);
         let b2node = Node::new_branch(0, l2node, r2node);
         let root = Node::new_branch(0, b1node, b2node);
-        let mut test_iter = Iter::new(&root, L_CAPACITY * 4);
+        let test_iter = Iter::new(&root, L_CAPACITY * 4);
 
         println!("{:?}", test_iter.size_hint());
 

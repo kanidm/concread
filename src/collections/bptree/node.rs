@@ -11,8 +11,6 @@ use super::utils::*;
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(test)]
-use std::thread;
 
 #[cfg(test)]
 thread_local!(static NODE_COUNTER: AtomicUsize = AtomicUsize::new(0));

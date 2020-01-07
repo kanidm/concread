@@ -595,11 +595,10 @@ fn path_get_mut_ref<'a, K: Clone + Ord + Debug, V: Clone>(
 #[cfg(test)]
 mod tests {
     use super::super::constants::{BK_CAPACITY, BV_CAPACITY, L_CAPACITY};
-    use super::super::leaf::Leaf;
     use super::super::node::{check_drop_count, ABNode, Node};
     use super::super::states::BRInsertState;
     use super::{CursorReadOps, CursorWrite};
-    use rand::prelude::*;
+    // use rand::prelude::*;
     use rand::seq::SliceRandom;
     use std::mem;
     use std::sync::Arc;
@@ -630,7 +629,7 @@ mod tests {
         let l1 = create_leaf_node(vbase);
         let l2 = create_leaf_node(vbase + 10);
         let mut lbranch = Node::new_branch(0, l1, l2);
-        let mut bref = Arc::get_mut(&mut lbranch).unwrap().as_mut_branch();
+        let bref = Arc::get_mut(&mut lbranch).unwrap().as_mut_branch();
         for i in 2..BV_CAPACITY {
             let l = create_leaf_node(vbase + (10 * i));
             let r = bref.add_node(l);
@@ -1263,7 +1262,7 @@ mod tests {
         let r2 = create_leaf_node(30);
         let lbranch = Node::new_branch(0, l1, l2);
         let rbranch = Node::new_branch(0, r1, r2);
-        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let root = Node::new_branch(0, lbranch, rbranch);
         let mut wcurs = CursorWrite::new(root, 4);
         assert!(wcurs.verify());
 
@@ -1297,7 +1296,7 @@ mod tests {
         let r2 = create_leaf_node(30);
         let lbranch = Node::new_branch(0, l1, l2);
         let rbranch = Node::new_branch(0, r1, r2);
-        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let root = Node::new_branch(0, lbranch, rbranch);
         let mut wcurs = CursorWrite::new(root, 4);
         assert!(wcurs.verify());
 
@@ -1331,7 +1330,7 @@ mod tests {
         let r2 = create_leaf_node(90);
         let rbranch = Node::new_branch(0, r1, r2);
 
-        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let root = Node::new_branch(0, lbranch, rbranch);
         let mut wcurs = CursorWrite::new(root, 5);
         assert!(wcurs.verify());
 
@@ -1365,7 +1364,7 @@ mod tests {
 
         let rbranch = create_branch_node_full(100);
 
-        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let root = Node::new_branch(0, lbranch, rbranch);
         let mut wcurs = CursorWrite::new(root, 5);
         assert!(wcurs.verify());
 
@@ -1399,7 +1398,7 @@ mod tests {
         let r2 = create_leaf_node(30);
         let lbranch = Node::new_branch(0, l1, l2);
         let rbranch = Node::new_branch(0, r1, r2);
-        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let root = Node::new_branch(0, lbranch, rbranch);
         let mut wcurs = CursorWrite::new(root, 4);
         assert!(wcurs.verify());
 
@@ -1436,7 +1435,7 @@ mod tests {
         let r2 = create_leaf_node(30);
         let lbranch = Node::new_branch(0, l1, l2);
         let rbranch = Node::new_branch(0, r1, r2);
-        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let root = Node::new_branch(0, lbranch, rbranch);
         let mut wcurs = CursorWrite::new(root, 4);
         assert!(wcurs.verify());
 
@@ -1473,7 +1472,7 @@ mod tests {
         let r2 = create_leaf_node(90);
         let rbranch = Node::new_branch(0, r1, r2);
 
-        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let root = Node::new_branch(0, lbranch, rbranch);
         let mut wcurs = CursorWrite::new(root, 5);
         assert!(wcurs.verify());
 
@@ -1511,7 +1510,7 @@ mod tests {
 
         let rbranch = create_branch_node_full(100);
 
-        let mut root = Node::new_branch(0, lbranch, rbranch);
+        let root = Node::new_branch(0, lbranch, rbranch);
         let mut wcurs = CursorWrite::new(root, 5);
         assert!(wcurs.verify());
 

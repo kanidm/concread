@@ -255,9 +255,6 @@ impl<T> Deref for EbrCellReadTxn<T> {
 
 #[cfg(test)]
 mod tests {
-    extern crate crossbeam_utils;
-    extern crate time;
-
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::EbrCell;
