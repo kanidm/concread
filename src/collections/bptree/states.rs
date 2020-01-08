@@ -60,7 +60,6 @@ where
     CloneSplit(ABNode<K, V>, ABNode<K, V>),
 }
 
-#[cfg(test)]
 #[derive(Debug)]
 pub(crate) enum CRCloneState<K, V>
 where

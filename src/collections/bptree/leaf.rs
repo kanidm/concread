@@ -192,12 +192,12 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
     pub(crate) fn get_mut_ref_idx(&mut self, idx: usize) -> &mut V {
         unsafe { &mut *self.value[idx].as_mut_ptr() }
     }
+    */
 
     pub(crate) fn get_mut_ref(&mut self, k: &K) -> Option<&mut V> {
         self.get_idx(k)
             .map(|idx| unsafe { &mut *self.value[idx].as_mut_ptr() })
     }
-    */
 
     pub(crate) fn get_kv_idx_checked(&self, idx: usize) -> Option<(&K, &V)> {
         if idx < self.count {

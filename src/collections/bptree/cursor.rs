@@ -11,7 +11,6 @@ use std::sync::Arc;
 
 // use super::branch::Branch;
 use super::iter::Iter;
-#[cfg(test)]
 use super::states::CRCloneState;
 use super::states::{
     BLInsertState, BLRemoveState, BRInsertState, BRShrinkState, CRInsertState, CRRemoveState,
@@ -66,6 +65,11 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
 
     fn kv_iter(&self) -> Iter<K, V> {
         Iter::new(self.get_root_ref(), self.len())
+    }
+
+    #[cfg(test)]
+    fn verify(&self) -> bool {
+        self.get_root_ref().verify()
     }
 }
 
@@ -133,7 +137,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
     }
 
     pub(crate) fn remove(&mut self, k: &K) -> Option<V> {
-        match clone_and_remove(&mut self.root, self.txid, k) {
+        let r = match clone_and_remove(&mut self.root, self.txid, k) {
             CRRemoveState::NoClone(res) => res,
             CRRemoveState::Clone(res, mut nnode) => {
                 mem::swap(&mut self.root, &mut nnode);
@@ -166,7 +170,11 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                     res
                 }
             }
+        };
+        if r.is_some() {
+            self.length -= 1;
         }
+        r
     }
 
     #[cfg(test)]
@@ -180,7 +188,6 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         };
     }
 
-    /*
     pub(crate) fn get_mut_ref(&mut self, k: &K) -> Option<&mut V> {
         match path_clone(&mut self.root, self.txid, k) {
             CRCloneState::Clone(mut nroot) => {
@@ -192,17 +199,10 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         // Now get the ref.
         path_get_mut_ref(&mut self.root, k)
     }
-    */
 
     #[cfg(test)]
     pub(crate) fn root_txid(&self) -> usize {
         self.root.txid
-    }
-
-    // Should probably be in the read trait.
-    #[cfg(test)]
-    pub(crate) fn verify(&self) -> bool {
-        self.root.verify()
     }
 
     pub(crate) fn tree_density(&self) -> (usize, usize) {
@@ -303,40 +303,30 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
         }
     } else {
         // Branch path
-        // The branch path is a bit more reactive than the leaf path, as we trigger
-        // the leaf op, and then decide what we need to do.
-        //
-        // - locate the node we need to work on.
-        let node_txid = node.txid;
-        let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
-        let anode_idx = nmref.locate_node(&k);
-        let mut anode = nmref.get_mut_idx(anode_idx);
-        match clone_and_insert(&mut anode, txid, k, v) {
-            CRInsertState::Clone(res, lnode) => {
-                // Do we require cloning?
-                if txid == node_txid {
-                    // This is reached by a sibling leaf already cloning, then a second leaf
-                    // updates.
+        // Decide if we need to clone - we do this as we descend due to a quirk in Arc
+        // get_mut, because we don't have access to get_mut_unchecked (and this api may
+        // never be stabilised anyway). When we change this to *mut + garbage lists we
+        // could consider restoring the reactive behaviour that clones up, rather than
+        // cloning down the path.
+
+        if node.txid == txid {
+            let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
+            let anode_idx = nmref.locate_node(&k);
+            let mut anode = nmref.get_mut_idx(anode_idx);
+
+            match clone_and_insert(&mut anode, txid, k, v) {
+                CRInsertState::Clone(res, lnode) => {
                     nmref.replace_by_idx(anode_idx, lnode);
+                    // We did not clone, and no further work needed.
                     CRInsertState::NoClone(res)
-                } else {
-                    let mut cnode = node.req_clone(txid);
-                    let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
-                    nmref.replace_by_idx(anode_idx, lnode);
-                    // We have be cloned and done the needed replace of the child, so now we
-                    // pass our cloned state back up.
-                    CRInsertState::Clone(res, cnode)
                 }
-            }
-            CRInsertState::NoClone(res) => {
-                // If our descendant did not clone, then we don't have to either.
-                debug_assert!(txid == node.txid);
-                CRInsertState::NoClone(res)
-            }
-            CRInsertState::Split(rnode) => {
-                // Our child has split, but was already cloned in this txn. Now we need to decide
-                // what is needed.
-                if txid == node_txid {
+                CRInsertState::NoClone(res) => {
+                    // If our descendant did not clone, then we don't have to do any adjustments
+                    // or further work.
+                    debug_assert!(txid == node.txid);
+                    CRInsertState::NoClone(res)
+                }
+                CRInsertState::Split(rnode) => {
                     match nmref.add_node(rnode) {
                         // Similar to CloneSplit - we are either okay, and the insert was happy.
                         BRInsertState::Ok => CRInsertState::NoClone(None),
@@ -348,17 +338,8 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
                             CRInsertState::Split(nrnode)
                         }
                     }
-                } else {
-                    // I think
-                    unreachable!("This represents a corrupt tree state");
                 }
-            }
-            CRInsertState::CloneSplit(lnode, rnode) => {
-                // So we updated our descendant at anode_idx, and it cloned and split.
-                // This means we need to take a number of steps.
-
-                // First, we need to determine if we require cloning.
-                if txid == node_txid {
+                CRInsertState::CloneSplit(lnode, rnode) => {
                     // work inplace.
                     // Second, we update anode_idx node with our lnode as the new clone.
                     nmref.replace_by_idx(anode_idx, lnode);
@@ -376,10 +357,32 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
                             CRInsertState::Split(nrnode)
                         }
                     }
-                } else {
-                    let mut cnode = node.req_clone(txid);
-                    let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
+                }
+            }
+        } else {
+            // Not same txn, clone instead.
+            let mut cnode = node.req_clone(txid);
+            let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
+            let anode_idx = nmref.locate_node(&k);
+            let mut anode = nmref.get_mut_idx(anode_idx);
 
+            match clone_and_insert(&mut anode, txid, k, v) {
+                CRInsertState::Clone(res, lnode) => {
+                    nmref.replace_by_idx(anode_idx, lnode);
+                    // Pass back up that we cloned.
+                    CRInsertState::Clone(res, cnode)
+                }
+                CRInsertState::NoClone(_res) => {
+                    // If our descendant did not clone, then we don't have to either.
+                    debug_assert!(txid == node.txid);
+                    unreachable!("Shoud never be possible.");
+                    // CRInsertState::NoClone(res)
+                }
+                CRInsertState::Split(_rnode) => {
+                    // I think
+                    unreachable!("This represents a corrupt tree state");
+                }
+                CRInsertState::CloneSplit(lnode, rnode) => {
                     // Second, we update anode_idx node with our lnode as the new clone.
                     nmref.replace_by_idx(anode_idx, lnode);
 
@@ -395,12 +398,11 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
                         }
                     }
                 }
-            }
-        }
-    }
+            } // end match
+        } // end if node txn
+    } // end if leaf
 }
 
-#[cfg(test)]
 fn path_clone<'a, K: Clone + Ord + Debug, V: Clone>(
     node: &'a mut ABNode<K, V>,
     txid: usize,
@@ -467,35 +469,21 @@ fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
     } else {
         // Locate the node we need to work on and then react if it
         // requests a shrink.
-        let node_txid = node.txid;
-        debug_assert!(Arc::strong_count(&node) == 1);
-        let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
-        let anode_idx = nmref.locate_node(&k);
-        let mut anode = nmref.get_mut_idx(anode_idx);
-        match clone_and_remove(&mut anode, txid, k) {
-            CRRemoveState::NoClone(res) => {
-                // No action needed, keep unwinding.
-                debug_assert!(txid == node.txid);
-                CRRemoveState::NoClone(res)
-            }
-            CRRemoveState::Clone(res, lnode) => {
-                // Clone the path
-                // Do we need to be cloned?
-                if txid == node_txid {
-                    // No, just replace.
+
+        if node.txid == txid {
+            let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
+            let anode_idx = nmref.locate_node(&k);
+            let mut anode = nmref.get_mut_idx(anode_idx);
+            match clone_and_remove(&mut anode, txid, k) {
+                CRRemoveState::NoClone(res) => {
+                    debug_assert!(txid == node.txid);
+                    CRRemoveState::NoClone(res)
+                }
+                CRRemoveState::Clone(res, lnode) => {
                     nmref.replace_by_idx(anode_idx, lnode);
                     CRRemoveState::NoClone(res)
-                } else {
-                    let mut cnode = node.req_clone(txid);
-                    let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
-                    nmref.replace_by_idx(anode_idx, lnode);
-                    CRRemoveState::Clone(res, cnode)
                 }
-            }
-            CRRemoveState::Shrink(res) => {
-                // This node is already in transaction (so we should be too).
-                if txid == node_txid {
-                    // Setup the sibling if needed.
+                CRRemoveState::Shrink(res) => {
                     let right_idx = nmref.clone_sibling_idx(txid, anode_idx);
                     match nmref.shrink_decision(right_idx) {
                         BRShrinkState::Balanced | BRShrinkState::Merge => {
@@ -512,14 +500,8 @@ fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
                             CRRemoveState::Shrink(res)
                         }
                     }
-                } else {
-                    unreachable!("This represents a corrupt tree state");
                 }
-            }
-            CRRemoveState::CloneShrink(res, nnode) => {
-                // The node was cloned to be removed, and has hit the shrink
-                // decision.
-                if txid == node_txid {
+                CRRemoveState::CloneShrink(res, nnode) => {
                     // We don't need to clone, just work on the nmref we have.
                     //
                     // Swap in the cloned node to the correct location.
@@ -541,12 +523,27 @@ fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
                             CRRemoveState::Shrink(res)
                         }
                     }
-                } else {
-                    // We do need to clone
-                    let mut cnode = node.req_clone(txid);
-                    debug_assert!(Arc::strong_count(&cnode) == 1);
-                    let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
-
+                }
+            }
+        } else {
+            let mut cnode = node.req_clone(txid);
+            let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
+            let anode_idx = nmref.locate_node(&k);
+            let mut anode = nmref.get_mut_idx(anode_idx);
+            match clone_and_remove(&mut anode, txid, k) {
+                CRRemoveState::NoClone(_res) => {
+                    debug_assert!(txid == node.txid);
+                    unreachable!("Should never occur");
+                    // CRRemoveState::NoClone(res)
+                }
+                CRRemoveState::Clone(res, lnode) => {
+                    nmref.replace_by_idx(anode_idx, lnode);
+                    CRRemoveState::Clone(res, cnode)
+                }
+                CRRemoveState::Shrink(_res) => {
+                    unreachable!("This represents a corrupt tree state");
+                }
+                CRRemoveState::CloneShrink(res, nnode) => {
                     // Put our cloned child into the tree at the correct location, don't worry,
                     // the shrink_decision will deal with it.
                     nmref.replace_by_idx(anode_idx, nnode);
@@ -571,12 +568,11 @@ fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
                         }
                     }
                 }
-            } // end cloneshrink
-        }
+            }
+        } // end node.txid
     }
 }
 
-/*
 fn path_get_mut_ref<'a, K: Clone + Ord + Debug, V: Clone>(
     mut node: &'a mut ABNode<K, V>,
     k: &K,
@@ -584,13 +580,19 @@ fn path_get_mut_ref<'a, K: Clone + Ord + Debug, V: Clone>(
     if node.is_leaf()  {
         Arc::get_mut(node).unwrap().as_mut_leaf().get_mut_ref(k)
     } else {
+        // This nmref binds the life of thte reference ...
         let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
         let anode_idx = nmref.locate_node(&k);
         let mut anode = nmref.get_mut_idx(anode_idx);
-        path_get_mut_ref(&mut anode, k)
+        // That we get here. So we can't just return it, and we need to 'strip' the
+        // lifetime so that it's bound to the lifetime of the outer node
+        // rather than the nmref.
+        let r: Option<*mut V> = path_get_mut_ref(&mut anode, k).map(|v| v as *mut V);
+
+        // I solemly swear I am up to no good.
+        r.map(|v| unsafe { &mut *v as &mut V })
     }
 }
-*/
 
 #[cfg(test)]
 mod tests {
@@ -1533,7 +1535,7 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new(root, 0);
+        let mut wcurs = CursorWrite::new(root, L_CAPACITY + 1);
         assert!(wcurs.verify());
 
         wcurs.remove(&20);
@@ -1549,7 +1551,7 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new(root, 0);
+        let mut wcurs = CursorWrite::new(root, L_CAPACITY + 1);
         assert!(wcurs.verify());
 
         wcurs.remove(&10);
@@ -1644,7 +1646,7 @@ mod tests {
         let mut node = tree_create_rand();
 
         for v in 1..(L_CAPACITY << 4) {
-            let mut wcurs = CursorWrite::new(node, 0);
+            let mut wcurs = CursorWrite::new(node, L_CAPACITY << 4);
             // println!("ITER v {}", v);
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
@@ -1664,7 +1666,7 @@ mod tests {
         let mut node = tree_create_rand();
 
         for v in (1..(L_CAPACITY << 4)).rev() {
-            let mut wcurs = CursorWrite::new(node, 0);
+            let mut wcurs = CursorWrite::new(node, L_CAPACITY << 4);
             // println!("ITER v {}", v);
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
@@ -1688,7 +1690,7 @@ mod tests {
         let mut node = tree_create_rand();
 
         for v in ins.into_iter() {
-            let mut wcurs = CursorWrite::new(node, 0);
+            let mut wcurs = CursorWrite::new(node, L_CAPACITY << 4);
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
             assert!(wcurs.verify());

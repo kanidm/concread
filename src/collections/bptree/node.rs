@@ -751,7 +751,9 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
     pub(crate) fn get_mut_idx(&mut self, idx: usize) -> &mut ABNode<K, V> {
         debug_assert!(idx <= self.count);
         let v = unsafe { &mut *self.node[idx].as_mut_ptr() };
-        debug_assert!(Arc::strong_count(&v) == 1);
+        // We can't assert that our child's count is 1 here, because we clone down as we
+        // go now.
+        // debug_assert!(Arc::strong_count(&v) == 1);
         v
     }
 
