@@ -179,12 +179,15 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     }
 
     // split_off
+    /*
     pub fn split_off_gte(&mut self, key: &K) -> BptreeMap<K, V> {
         unimplemented!();
     }
+    */
 
-    pub fn split_off_lte(&mut self, key: &K) -> BptreeMap<K, V> {
-        unimplemented!();
+    /// Remove all values less than (but not including) key from the map.
+    pub fn split_off_lt(&mut self, key: &K) {
+        self.work.split_off_lt(key)
     }
 
     // ADVANCED
@@ -368,8 +371,12 @@ mod tests {
         let r1 = bptree.read();
         {
             let mut w = bptree.write();
-            let mut cursed_zone = w.get_mut(&0).unwrap();
+            let cursed_zone = w.get_mut(&0).unwrap();
             *cursed_zone = 1;
+            // Correctly fails to work as it's a second borrow, which isn't
+            // possible once w.remove occurs
+            // w.remove(&0);
+            // *cursed_zone = 2;
             w.commit();
         }
         let r2 = bptree.read();
@@ -486,6 +493,7 @@ mod tests {
         assert!(bw.verify());
     }
 
+    /*
     const MAX_TARGET: usize = 210_000;
 
     #[test]
@@ -576,7 +584,6 @@ mod tests {
         // Done!
     }
 
-    /*
     #[test]
     fn test_std_mutex_btreemap_thread_stress() {
         use std::collections::BTreeMap;

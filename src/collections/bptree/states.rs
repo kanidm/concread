@@ -42,6 +42,24 @@ pub(crate) enum BRShrinkState {
 }
 
 #[derive(Debug)]
+pub(crate) enum BLPruneState {
+    Ok,
+    Prune,
+}
+
+#[derive(Debug)]
+pub(crate) enum BRPruneState<K, V>
+where
+    K: Ord + Clone + Debug,
+    V: Clone,
+{
+    NoChange,
+    Prune,
+    Shrink(ABNode<K, V>),
+    Ok,
+}
+
+#[derive(Debug)]
 pub(crate) enum CRInsertState<K, V>
 where
     K: Ord + Clone + Debug,
@@ -84,4 +102,19 @@ where
     Shrink(Option<V>),
     //
     CloneShrink(Option<V>, ABNode<K, V>),
+}
+
+#[derive(Debug)]
+pub(crate) enum CRPruneState<K, V>
+where
+    K: Ord + Clone + Debug,
+    V: Clone,
+{
+    // No action needed, node was not cloned.
+    OkNoClone,
+    // No action, node was cloned.
+    OkClone(ABNode<K, V>),
+    // The target node was pruned, so we don't care if it cloned or not as
+    // we'll be removing it.
+    Prune,
 }

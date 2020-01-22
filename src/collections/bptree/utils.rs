@@ -40,3 +40,21 @@ pub(crate) unsafe fn slice_move<T>(
 
     ptr::copy_nonoverlapping(src_ptr, dst_ptr, count);
 }
+
+pub(crate) unsafe fn slice_slide_and_drop<T> (
+    slice: &mut [T],
+    idx: usize,
+    count: usize,
+) {
+    // drop everything up to and including idx
+    for didx in 0..(idx + 1) {
+        // These are dropped
+        let _ = ptr::read(slice.get_unchecked(didx));
+    }
+    // now move everything down.
+    ptr::copy(
+        slice.as_ptr().add(idx + 1),
+        slice.as_mut_ptr(),
+        count
+    );
+}

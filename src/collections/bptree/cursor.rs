@@ -11,9 +11,9 @@ use std::sync::Arc;
 
 // use super::branch::Branch;
 use super::iter::Iter;
-use super::states::CRCloneState;
+use super::states::{CRCloneState, CRPruneState};
 use super::states::{
-    BLInsertState, BLRemoveState, BRInsertState, BRShrinkState, CRInsertState, CRRemoveState,
+    BLInsertState, BLRemoveState, BRInsertState, BRShrinkState, CRInsertState, CRRemoveState, BLPruneState,
 };
 use std::iter::Extend;
 
@@ -69,6 +69,10 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
 
     #[cfg(test)]
     fn verify(&self) -> bool {
+        if cfg!(test) {
+            let (l, _) = self.get_tree_density();
+            assert!(l == self.len());
+        };
         self.get_root_ref().verify()
     }
 }
@@ -200,6 +204,21 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         path_get_mut_ref(&mut self.root, k)
     }
 
+    pub(crate) fn split_off_lt(&mut self, k: &K) {
+        // Remove all the values less than from the top of the tree.
+        match clone_and_split_off_lt(&mut self.root, k) {
+            _ => unimplemented!();
+        }
+        // Now work up the tree and clean up the remaining path inbetween
+
+        // unimplemented!();
+
+        // Iterate over the remaining kv's to fix our k,v count.
+        let newsize = self.kv_iter().count();
+        println!("New count => {:?}", newsize);
+        self.length = newsize;
+    }
+
     #[cfg(test)]
     pub(crate) fn root_txid(&self) -> usize {
         self.root.txid
@@ -243,10 +262,6 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite<K, V>
     }
 
     fn len(&self) -> usize {
-        if cfg!(test) {
-            let (l, _) = self.tree_density();
-            assert!(l == self.length);
-        }
         self.length
     }
 }
@@ -574,7 +589,7 @@ fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
 }
 
 fn path_get_mut_ref<'a, K: Clone + Ord + Debug, V: Clone>(
-    mut node: &'a mut ABNode<K, V>,
+    node: &'a mut ABNode<K, V>,
     k: &K,
 ) -> Option<&'a mut V> {
     if node.is_leaf()  {
@@ -591,6 +606,28 @@ fn path_get_mut_ref<'a, K: Clone + Ord + Debug, V: Clone>(
 
         // I solemly swear I am up to no good.
         r.map(|v| unsafe { &mut *v as &mut V })
+    }
+}
+
+fn clone_and_split_off_lt(
+    root: &'a mut ABNode<K, V>,
+    node: &'a mut ABNode<K, V>,
+    k: &K,
+) -> () {
+    if node.is_leaf() {
+        // I think this should be do nothing, the up walk will clean.
+        unimplemented!();
+    } else {
+        // Should we just always clone regardless of the current txid?
+
+        // Trim anything that needs to go.
+        // There are three states.
+        // - nothing to do
+        // - remove a few things, but not all.
+        // - remove all the maximal value, maximal becomes new root.
+        //    - this needs recurse.
+        //
+        unimplemented!();
     }
 }
 
@@ -648,7 +685,7 @@ mod tests {
     fn test_bptree_cursor_insert_leaf() {
         // First create the node + cursor
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new(node, 0);
+        let mut wcurs = CursorWrite::new(node, 1);
         let prev_txid = wcurs.root_txid();
 
         // Now insert - the txid should be different.
@@ -683,7 +720,7 @@ mod tests {
         // as leaf needs a clone AND to split to achieve the new root.
 
         let node = create_leaf_node_full(10);
-        let mut wcurs = CursorWrite::new(node, 0);
+        let mut wcurs = CursorWrite::new(node, L_CAPACITY);
         let prev_txid = wcurs.root_txid();
 
         let r = wcurs.insert(1, 1);
@@ -703,7 +740,7 @@ mod tests {
         // leaf needs to be below max to start, and we insert enough in-txn
         // to trigger a clone of leaf AND THEN to cause the split.
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new(node, 0);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         for v in 1..(L_CAPACITY + 1) {
             // println!("ITER v {}", v);
@@ -729,7 +766,7 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new(root, 0);
+        let mut wcurs = CursorWrite::new(root, L_CAPACITY * 2);
         assert!(wcurs.verify());
         // println!("{:?}", wcurs);
 
@@ -756,7 +793,7 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new(root, 0);
+        let mut wcurs = CursorWrite::new(root, L_CAPACITY * 2);
         assert!(wcurs.verify());
 
         let r = wcurs.insert(29, 29);
@@ -782,7 +819,7 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new(root, 0);
+        let mut wcurs = CursorWrite::new(root, 2);
         assert!(wcurs.verify());
 
         // Now insert to trigger the needed actions.
@@ -814,7 +851,7 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new(root, 0);
+        let mut wcurs = CursorWrite::new(root, 2);
         assert!(wcurs.verify());
 
         // Now insert to trigger the needed actions.
@@ -843,7 +880,7 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new(root, 0);
+        let mut wcurs = CursorWrite::new(root, 2);
         assert!(wcurs.verify());
 
         let r = wcurs.insert(11, 11);
@@ -876,7 +913,7 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new(root, 0);
+        let mut wcurs = CursorWrite::new(root, L_CAPACITY * 2);
         assert!(wcurs.verify());
 
         let r = wcurs.insert(19, 19);
@@ -899,7 +936,7 @@ mod tests {
         // Insert ascending - we want to ensure the tree is a few levels deep
         // so we do this to a reasonable number.
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new(node, 0);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         for v in 1..(L_CAPACITY << 4) {
             // println!("ITER v {}", v);
@@ -918,7 +955,7 @@ mod tests {
     fn test_bptree_cursor_insert_stress_2() {
         // Insert descending
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new(node, 0);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         for v in (1..(L_CAPACITY << 4)).rev() {
             // println!("ITER v {}", v);
@@ -941,7 +978,7 @@ mod tests {
         ins.shuffle(&mut rng);
 
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new(node, 0);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         for v in ins.into_iter() {
             let r = wcurs.insert(v, v);
@@ -961,15 +998,17 @@ mod tests {
         // Insert ascending - we want to ensure the tree is a few levels deep
         // so we do this to a reasonable number.
         let mut node = create_leaf_node(0);
+        let mut count = 1;
 
         for v in 1..(L_CAPACITY << 4) {
-            let mut wcurs = CursorWrite::new(node, 0);
+            let mut wcurs = CursorWrite::new(node, count);
             // println!("ITER v {}", v);
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
-            let (n, _) = wcurs.finalise();
+            let (n, c) = wcurs.finalise();
             node = n;
+            count = c;
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
@@ -981,15 +1020,17 @@ mod tests {
     fn test_bptree_cursor_insert_stress_5() {
         // Insert descending
         let mut node = create_leaf_node(0);
+        let mut count = 1;
 
         for v in (1..(L_CAPACITY << 4)).rev() {
-            let mut wcurs = CursorWrite::new(node, 0);
+            let mut wcurs = CursorWrite::new(node, count);
             // println!("ITER v {}", v);
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
-            let (n, _) = wcurs.finalise();
+            let (n, c) = wcurs.finalise();
             node = n;
+            count = c;
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
@@ -1005,14 +1046,16 @@ mod tests {
         ins.shuffle(&mut rng);
 
         let mut node = create_leaf_node(0);
+        let mut count = 1;
 
         for v in ins.into_iter() {
-            let mut wcurs = CursorWrite::new(node, 0);
+            let mut wcurs = CursorWrite::new(node, count);
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
-            let (n, _) = wcurs.finalise();
+            let (n, c) = wcurs.finalise();
             node = n;
+            count = c;
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
@@ -1023,7 +1066,7 @@ mod tests {
     #[test]
     fn test_bptree_cursor_search_1() {
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new(node, 0);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         for v in 1..(L_CAPACITY << 4) {
             let r = wcurs.insert(v, v);
@@ -1333,7 +1376,7 @@ mod tests {
         let rbranch = Node::new_branch(0, r1, r2);
 
         let root = Node::new_branch(0, lbranch, rbranch);
-        let mut wcurs = CursorWrite::new(root, 5);
+        let mut wcurs = CursorWrite::new(root, L_CAPACITY + 2);
         assert!(wcurs.verify());
 
         wcurs.remove(&80);
@@ -1367,7 +1410,7 @@ mod tests {
         let rbranch = create_branch_node_full(100);
 
         let root = Node::new_branch(0, lbranch, rbranch);
-        let mut wcurs = CursorWrite::new(root, 5);
+        let mut wcurs = CursorWrite::new(root, L_CAPACITY + 2);
         assert!(wcurs.verify());
 
         wcurs.remove(&10);
@@ -1475,7 +1518,8 @@ mod tests {
         let rbranch = Node::new_branch(0, r1, r2);
 
         let root = Node::new_branch(0, lbranch, rbranch);
-        let mut wcurs = CursorWrite::new(root, 5);
+        let count = BV_CAPACITY + 2;
+        let mut wcurs = CursorWrite::new(root, count);
         assert!(wcurs.verify());
 
         wcurs.path_clone(&0);
@@ -1513,7 +1557,7 @@ mod tests {
         let rbranch = create_branch_node_full(100);
 
         let root = Node::new_branch(0, lbranch, rbranch);
-        let mut wcurs = CursorWrite::new(root, 5);
+        let mut wcurs = CursorWrite::new(root, BV_CAPACITY + 2);
         assert!(wcurs.verify());
 
         for i in 0..BV_CAPACITY {
@@ -1567,14 +1611,14 @@ mod tests {
         ins.shuffle(&mut rng);
 
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new(node, 0);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         for v in ins.into_iter() {
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
         }
-        let (r, _) = wcurs.finalise();
+        let (r, _c) = wcurs.finalise();
         r
     }
 
@@ -1644,15 +1688,17 @@ mod tests {
         // Insert ascending - we want to ensure the tree is a few levels deep
         // so we do this to a reasonable number.
         let mut node = tree_create_rand();
+        let mut count = L_CAPACITY << 4;
 
         for v in 1..(L_CAPACITY << 4) {
-            let mut wcurs = CursorWrite::new(node, L_CAPACITY << 4);
+            let mut wcurs = CursorWrite::new(node, count);
             // println!("ITER v {}", v);
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
-            let (n, _) = wcurs.finalise();
+            let (n, c) = wcurs.finalise();
             node = n;
+            count = c;
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
@@ -1664,15 +1710,17 @@ mod tests {
     fn test_bptree_cursor_remove_stress_5() {
         // Insert descending
         let mut node = tree_create_rand();
+        let mut count = L_CAPACITY << 4;
 
         for v in (1..(L_CAPACITY << 4)).rev() {
-            let mut wcurs = CursorWrite::new(node, L_CAPACITY << 4);
+            let mut wcurs = CursorWrite::new(node, count);
             // println!("ITER v {}", v);
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
-            let (n, _) = wcurs.finalise();
+            let (n, c) = wcurs.finalise();
             node = n;
+            count = c;
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
@@ -1688,19 +1736,340 @@ mod tests {
         ins.shuffle(&mut rng);
 
         let mut node = tree_create_rand();
+        let mut count = L_CAPACITY << 4;
 
         for v in ins.into_iter() {
-            let mut wcurs = CursorWrite::new(node, L_CAPACITY << 4);
+            let mut wcurs = CursorWrite::new(node, count);
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
-            let (n, _) = wcurs.finalise();
+            let (n, c) = wcurs.finalise();
             node = n;
+            count = c;
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
         mem::drop(node);
         check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_1() {
+        // Make a tree witth just a leaf
+        // Do a split_off_lt.
+        let node = create_leaf_node(0);
+        let mut wcurs = CursorWrite::new(node, 1);
+
+        wcurs.split_off_lt(&5);
+
+        // Remember, all the cases of the remove_lte are already tested on
+        // leaf.
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_2() {
+        // Make a tree witth just a leaf
+        // Do a split_off_lt.
+        let node = create_leaf_node_full(10);
+        let mut wcurs = CursorWrite::new(node, 1);
+
+        wcurs.split_off_lt(&11);
+
+        // Remember, all the cases of the remove_lte are already tested on
+        // leaf.
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_3() {
+        // Make a tree witth just a leaf
+        // Do a split_off_lt.
+        let node = create_leaf_node_full(10);
+        let mut wcurs = CursorWrite::new(node, 1);
+
+        wcurs.path_clone(&11);
+        wcurs.split_off_lt(&11);
+
+        // Remember, all the cases of the remove_lte are already tested on
+        // leaf.
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_4() {
+        //
+        //   r
+        // l   r
+        //
+        // l, r full.
+        //
+        // l remain (split_lte middle)
+        // no path_clone
+
+        let lnode = create_leaf_node_full(10);
+        let rnode = create_leaf_node_full(20);
+        let root = Node::new_branch(0, lnode, rnode);
+        let mut wcurs = CursorWrite::new(root, L_CAPACITY * 2);
+        assert!(wcurs.verify());
+
+        wcurs.split_off_lt(&11);
+
+        assert!(wcurs.verify());
+        mem::drop(wcurs);
+        check_drop_count();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_5() {
+        //
+        //   r
+        // l   r
+        //
+        // l, r full.
+        //
+        // l prune (split_lte middle)
+        // r promote
+        // no path_clone
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_6() {
+        //
+        //   r
+        // l   r
+        //
+        // l, r full.
+        //
+        // l remain (split_lte middle)
+        // path_cloned
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_7() {
+        //
+        //   r
+        // l   r
+        //
+        // l, r full.
+        //
+        // l prune (split_lte middle)
+        // r promote
+        // path_cloned
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_8() {
+        // xxx
+        //
+        //   root
+        // l   r
+        //
+        // l, r full.
+        //
+        // r split_lte middle
+        // l/root pruned
+        // no path_clone
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_9() {
+        //
+        //   r
+        // l   r
+        //
+        // l, r full.
+        //
+        // r pruned
+        // should be new leaf (len 0)
+        // no path_clone
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_10() {
+        //
+        //   r
+        // l   r
+        //
+        // l, r full.
+        //
+        // r split_lte middle
+        // r promoted
+        // path_cloned to r
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_11() {
+        //
+        //   r
+        // l   r
+        //
+        // l, r full.
+        //
+        // r pruned
+        // should be new leaf(len 0)
+        // path_cloned tto r
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_12() {
+        //
+        //     root
+        //  a   b   c
+        //
+        // b split_lte middle of b
+        // b,c, root retain
+        // a pruned.
+        // no path clone
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_13() {
+        //
+        //     root
+        //  a   b   c
+        //
+        // b split_lte middle of b
+        // b,c, root retain
+        // a pruned.
+        // path cloned to b
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_14() {
+        //
+        //      root
+        //     a     b
+        //  c   d   e   f
+        //
+        // d middle
+        // a merge to b
+        // b promote to root
+        // no path clone
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_15() {
+        //
+        //      root
+        //     a     b
+        //  c   d   e   f
+        //
+        // d middle
+        // a merge to b
+        // b promote to root
+        // path cloned
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_16() {
+        //
+        //      root
+        //     a     b
+        //  c   d   e   f
+        //
+        // d pruned
+        // a pruned
+        // b promote to root
+        // no path clone
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_17() {
+        //
+        //      root
+        //     a     b
+        //  c   d   e   f
+        //
+        // d pruned
+        // a pruned
+        // b promote to root
+        // path cloned
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_18() {
+        //
+        //      root
+        //     a     b
+        //  c   d   e   f
+        //
+        // e pruned
+        // a pruned
+        // f promote to root
+        // no path clone
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_19() {
+        //
+        //      root
+        //     a     b
+        //  c   d   e   f
+        //
+        // e pruned
+        // a pruned
+        // f promote to root
+        // path cloned
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_20() {
+        //
+        //      root
+        //     a     b
+        //  c   d   e   f
+        //
+        // f pruned
+        // new leaf as root
+        // no path clone
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_21() {
+        //
+        //      root
+        //     a     b
+        //  c   d   e   f
+        //
+        // f pruned
+        // new leaf as root
+        // path cloned
+        unimplemented!();
+    }
+
+    #[test]
+    fn test_bptree_cursor_split_off_lt_stress() {
+        // Each loop:
+        // Maek a tree like:
+        //           100, 200, 300
+        //  10-30  200-230, 300-330, 400-430
+        //  x x x x x x x x x x x x x x x x x
+        // Now remove 0 -> 500.
+        // This will REALLY stress the algo ;)
+        unimplemented!();
     }
 
     /*

@@ -4,7 +4,7 @@ use std::ptr;
 use std::slice;
 
 use super::constants::{L_CAPACITY, L_MAX_IDX};
-use super::states::{BLInsertState, BLRemoveState};
+use super::states::{BLInsertState, BLRemoveState, BLPruneState};
 use super::utils::*;
 
 pub(crate) struct Leaf<K, V>
@@ -96,6 +96,74 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
                     BLRemoveState::Shrink(Some(pv))
                 } else {
                     BLRemoveState::Ok(Some(pv))
+                }
+            }
+        }
+    }
+
+    pub(crate) fn remove_lte(&mut self, k: &K) -> BLPruneState {
+        // Remove everything less than or equal to a value.
+        if self.count == 0 {
+            return BLPruneState::Prune;
+        }
+
+        // Find the pivot point
+        let r = {
+            let (left, _) = self.key.split_at(self.count);
+            let inited: &[K] =
+                unsafe { slice::from_raw_parts(left.as_ptr() as *const K, left.len()) };
+            inited.binary_search(&k)
+        };
+
+        match r {
+            Err(0) => {
+                // No action, nothing to remove.
+                BLPruneState::Ok
+            }
+            // Is our removal including an item?
+            Err(idx) => {
+                if idx == self.count {
+                    // Remove everything.
+                    for didx in 0..self.count {
+                        unsafe {
+                            ptr::drop_in_place(self.key[didx].as_mut_ptr());
+                            ptr::drop_in_place(self.value[didx].as_mut_ptr());
+                        }
+                    }
+                    // Set the count to zero.
+                    self.count = 0;
+                    BLPruneState::Prune
+                } else {
+                    unsafe {
+                        slice_slide_and_drop(&mut self.key, idx, self.count - idx);
+                        slice_slide_and_drop(&mut self.value, idx, self.count - idx);
+                    }
+                    // Only remove self.count - idx
+                    self.count = self.count - idx;
+                    BLPruneState::Ok
+                }
+            }
+            Ok(idx) => {
+                if idx == self.count {
+                    // Remove everything.
+                    for didx in 0..self.count {
+                        unsafe {
+                            ptr::drop_in_place(self.key[didx].as_mut_ptr());
+                            ptr::drop_in_place(self.value[didx].as_mut_ptr());
+                        }
+                    }
+                    // Set the count to zero.
+                    self.count = 0;
+                    BLPruneState::Prune
+                } else {
+                    // Split and move
+                    unsafe {
+                        slice_slide_and_drop(&mut self.key, idx, self.count - idx);
+                        slice_slide_and_drop(&mut self.value, idx, self.count - idx);
+                    }
+
+                    self.count = self.count - (idx + 1);
+                    BLPruneState::Ok
                 }
             }
         }
@@ -216,13 +284,14 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
     #[cfg(test)]
     fn check_sorted(&self) -> bool {
         if self.count == 0 {
-            false
+            true
         } else {
             let mut lk: &K = unsafe { &*self.key[0].as_ptr() };
             for work_idx in 1..self.count {
                 let rk: &K = unsafe { &*self.key[work_idx].as_ptr() };
                 if lk >= rk {
                     println!("{:?}", self);
+                    panic!();
                     return false;
                 }
                 lk = rk;
@@ -530,4 +599,44 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_bptree_leaf_remove_lte() {
+        // Test removing less than or equal.
+        // No op
+        let mut leaf1: Leaf<usize, usize> = Leaf::new();
+        for kv in 0..L_CAPACITY {
+            let _ = leaf1.insert_or_update(kv + 10, kv);
+        }
+
+        leaf1.remove_lte(&5);
+        // Removes all values
+        let mut leaf2: Leaf<usize, usize> = Leaf::new();
+        for kv in 0..L_CAPACITY {
+            let _ = leaf2.insert_or_update(kv + 10, kv);
+        }
+
+        leaf2.remove_lte(&50);
+        // Removes from middle.
+        let mut leaf3: Leaf<usize, usize> = Leaf::new();
+        for kv in 0..L_CAPACITY {
+            let _ = leaf3.insert_or_update(kv + 10, kv);
+        }
+
+        leaf3.remove_lte(&((L_CAPACITY / 2) + 10));
+
+        // Remove less then where not in leaf.
+        let mut leaf4: Leaf<usize, usize> = Leaf::new();
+        let _ = leaf4.insert_or_update(5, 5);
+        let _ = leaf4.insert_or_update(15, 15);
+
+        leaf4.remove_lte(&10);
+        assert!(leaf4.len() == 1);
+
+        let mut leaf5: Leaf<usize, usize> = Leaf::new();
+        let _ = leaf5.insert_or_update(5, 5);
+        let _ = leaf5.insert_or_update(15, 15);
+
+        leaf5.remove_lte(&15);
+        assert!(leaf5.len() == 0);
+    }
 }

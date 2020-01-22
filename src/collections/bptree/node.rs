@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use super::constants::{BK_CAPACITY, BK_CAPACITY_MIN_N1, BV_CAPACITY, L_CAPACITY};
 use super::leaf::Leaf;
-use super::states::{BRInsertState, BRShrinkState};
+use super::states::{BRInsertState, BRShrinkState, BRPruneState};
 use super::utils::*;
 
 #[cfg(test)]
@@ -728,6 +728,24 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         pn
     }
 
+    pub(crate) fn remove_lt_idx(&mut self, idx: usize) -> BRPruneState {
+        if idx == self.count {
+            // We would remove everything.
+            BRPruneState::Prune
+        } else if idx == self.count - 1 {
+            // Remove all but one, IE we now shrink
+            // drop self.count by one.
+            // drop the associated key.
+            BRPruneState::Shrink(node)
+        } else if idx == 0 {
+            // Nothing to do.
+            BRPruneState::Ok
+        } else {
+            // Okay, actually do some shuffle, but our branch will survive.
+            BRPruneState::Ok
+        }
+    }
+
     pub(crate) fn replace_by_idx(&mut self, idx: usize, mut node: ABNode<K, V>) -> () {
         debug_assert!(idx <= self.count);
         // We have to swap the value at idx with this node, then ensure that the
@@ -822,12 +840,14 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
     fn check_sorted(&self) -> bool {
         // check the pivots are sorted.
         if self.count == 0 {
+            panic!();
             false
         } else {
             let mut lk: &K = unsafe { &*self.key[0].as_ptr() };
             for work_idx in 1..self.count {
                 let rk: &K = unsafe { &*self.key[work_idx].as_ptr() };
                 if lk >= rk {
+                    panic!();
                     return false;
                 }
                 lk = rk;
@@ -853,6 +873,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 println!("{:?}", lnode);
                 println!("{:?}", rnode);
                 println!("{:?}", self);
+                panic!();
                 return false;
             }
         }
@@ -867,6 +888,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             let node = unsafe { &*self.node[work_idx].as_ptr() };
             if !node.verify() {
                 println!("Failed children");
+                panic!();
                 return false;
             }
         }
@@ -1035,6 +1057,7 @@ mod tests {
         node
     }
 
+    /*
     #[test]
     fn test_bptree_node_add_min() {
         // Add a new node which is a new minimum. In theory this situation
@@ -1052,6 +1075,7 @@ mod tests {
         // SHOULD NEVER OCCUR!!!
         assert!(branch.verify() == false);
     }
+    */
 
     #[test]
     fn test_bptree_node_add_middle() {
@@ -1130,5 +1154,16 @@ mod tests {
             _ => panic!(),
         };
         assert!(branch.verify());
+    }
+
+    #[test]
+    fn test_bptree_node_prune_states() {
+        // Will the locate_node being eq tto go right affect?
+        // remove none (caller needs to descend down left most)
+        // purge all -> I think this becomes a promote of the rightmost node
+        // remove middle (exact), enough rem
+        // remove middle (non-exact), enough rem
+        // remove middle (exact), one rem
+        // remove middle (non-exact), one rem
     }
 }
