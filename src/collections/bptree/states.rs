@@ -60,6 +60,28 @@ where
 }
 
 #[derive(Debug)]
+pub(crate) enum BRTrimState<K, V>
+where
+    K: Ord + Clone + Debug,
+    V: Clone,
+{
+    Complete,
+    Promote(ABNode<K, V>)
+}
+
+#[derive(Debug)]
+pub(crate) enum CRTrimState<K, V>
+where
+    K: Ord + Clone + Debug,
+    V: Clone,
+{
+    Complete,
+    Clone(ABNode<K, V>),
+    Promote(ABNode<K, V>)
+}
+
+
+#[derive(Debug)]
 pub(crate) enum CRInsertState<K, V>
 where
     K: Ord + Clone + Debug,

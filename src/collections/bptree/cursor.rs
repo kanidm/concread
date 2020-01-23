@@ -13,7 +13,7 @@ use std::sync::Arc;
 use super::iter::Iter;
 use super::states::{CRCloneState, CRPruneState};
 use super::states::{
-    BLInsertState, BLRemoveState, BRInsertState, BRShrinkState, CRInsertState, CRRemoveState, BLPruneState,
+    BLInsertState, BLRemoveState, BRInsertState, BRShrinkState, CRInsertState, CRRemoveState, BLPruneState, BRTrimState, CRTrimState
 };
 use std::iter::Extend;
 
@@ -206,16 +206,36 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
 
     pub(crate) fn split_off_lt(&mut self, k: &K) {
         // Remove all the values less than from the top of the tree.
-        match clone_and_split_off_lt(&mut self.root, k) {
-            _ => unimplemented!();
-        }
-        // Now work up the tree and clean up the remaining path inbetween
+        loop {
+            let result = clone_and_split_off_trim_lt(&mut self.root, self.txid, k);
+            match result {
+                CRTrimState::Complete => break,
+                CRTrimState::Clone(mut nroot) => {
+                    // We cloned the root as we changed it, but don't need
+                    // to recurse.
+                    mem::swap(&mut self.root, &mut nroot);
+                    break;
+                }
+                CRTrimState::Promote(mut nroot) => {
+                    mem::swap(&mut self.root, &mut nroot);
+                    // This will continue and try again.
+                }
+            }
+        };
 
-        // unimplemented!();
+        // Now work up the tree and clean up the remaining path inbetween
+        match clone_and_split_off_prune_lt(&mut self.root, self.txid, k) {
+            CRPruneState::OkNoClone => {}
+            CRPruneState::OkClone(mut nroot) => {
+                mem::swap(&mut self.root, &mut nroot);
+            }
+            CRPruneState::Prune => {
+                unimplemented!();
+            }
+        };
 
         // Iterate over the remaining kv's to fix our k,v count.
         let newsize = self.kv_iter().count();
-        println!("New count => {:?}", newsize);
         self.length = newsize;
     }
 
@@ -609,25 +629,131 @@ fn path_get_mut_ref<'a, K: Clone + Ord + Debug, V: Clone>(
     }
 }
 
-fn clone_and_split_off_lt(
-    root: &'a mut ABNode<K, V>,
+fn clone_and_split_off_trim_lt<'a, K: Clone + Ord + Debug, V: Clone>(
     node: &'a mut ABNode<K, V>,
+    txid: usize,
     k: &K,
-) -> () {
+) -> CRTrimState<K, V> {
+    if node.is_leaf() {
+        // No action, it's a leaf. Prune will do it.
+        CRTrimState::Complete
+    } else {
+        // remove_lt_idx
+        if node.txid == txid {
+            let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
+
+            match nmref.trim_lt_key(k) {
+                BRTrimState::Complete => CRTrimState::Complete,
+                BRTrimState::Promote(node) => CRTrimState::Promote(node),
+            }
+        } else {
+            let mut cnode = node.req_clone(txid);
+            let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
+
+            match nmref.trim_lt_key(k) {
+                BRTrimState::Complete => CRTrimState::Clone(cnode),
+                BRTrimState::Promote(node) => CRTrimState::Promote(node),
+            }
+        }
+    }
+}
+
+fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
+    node: &'a mut ABNode<K, V>,
+    txid: usize,
+    k: &K,
+) -> CRPruneState<K, V> {
     if node.is_leaf() {
         // I think this should be do nothing, the up walk will clean.
-        unimplemented!();
+        if node.txid == txid {
+            let nmref = Arc::get_mut(node).unwrap().as_mut_leaf();
+            match nmref.remove_lte(k) {
+                BLPruneState::Ok => {
+                    CRPruneState::OkNoClone
+                }
+                BLPruneState::Prune => {
+                    CRPruneState::Prune
+                }
+            }
+        } else {
+            let mut cnode = node.req_clone(txid);
+            let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_leaf();
+            match nmref.remove_lte(k) {
+                BLPruneState::Ok => {
+                    CRPruneState::OkClone(cnode)
+                }
+                BLPruneState::Prune => {
+                    CRPruneState::Prune
+                }
+            }
+        }
     } else {
-        // Should we just always clone regardless of the current txid?
-
-        // Trim anything that needs to go.
-        // There are three states.
-        // - nothing to do
-        // - remove a few things, but not all.
-        // - remove all the maximal value, maximal becomes new root.
-        //    - this needs recurse.
-        //
-        unimplemented!();
+        if node.txid == txid {
+            let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
+            let anode_idx = nmref.locate_node(&k);
+            let mut anode = nmref.get_mut_idx(anode_idx);
+            match clone_and_split_off_prune_lt(anode, txid, k) {
+                CRPruneState::OkNoClone => {
+                    unimplemented!()
+                }
+                CRPruneState::OkClone(clone) => {
+                    // Our child cloned, so replace it.
+                    nmref.replace_by_idx(anode_idx, clone);
+                    // Check our node for anything else to be removed.
+                    match nmref.prune(anode_idx) {
+                        Ok(_) => {
+                            // Okay, the branch remains valid, return that we are okay, and
+                            // no clone is needed.
+                            CRPruneState::OkNoClone
+                        }
+                        Err(_) => {
+                            unimplemented!();
+                        }
+                    }
+                }
+                CRPruneState::Prune => {
+                    unimplemented!()
+                }
+            }
+        } else {
+            let mut cnode = node.req_clone(txid);
+            let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
+            let anode_idx = nmref.locate_node(&k);
+            let mut anode = nmref.get_mut_idx(anode_idx);
+            match clone_and_split_off_prune_lt(anode, txid, k) {
+                CRPruneState::OkNoClone => {
+                    // I think this is an impossible state - how can a child be in the
+                    // txid if we are not?
+                    unreachable!("Impossible tree state")
+                }
+                CRPruneState::OkClone(clone) => {
+                    // Our child cloned, so replace it.
+                    nmref.replace_by_idx(anode_idx, clone);
+                    // Check our node for anything else to be removed.
+                    match nmref.prune(anode_idx) {
+                        Ok(_) => {
+                            // Okay, the branch remains valid, return that we are okay.
+                            CRPruneState::OkClone(cnode)
+                        }
+                        Err(_) => {
+                            unimplemented!();
+                        }
+                    }
+                }
+                CRPruneState::Prune => {
+                    let right_idx = nmref.clone_sibling_idx(txid, anode_idx);
+                    match nmref.prune_decision(right_idx, k) {
+                        Ok(_) => {
+                            CRPruneState::OkClone(cnode)
+                        }
+                        Err(_) => {
+                            // This node has fallen below threshold
+                            CRPruneState::Prune
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1753,6 +1879,63 @@ mod tests {
         check_drop_count();
     }
 
+    // This is for setting up trees that are specialised for the split off tests.
+    // This is because we can exercise a LOT of complex edge cases by bracketing
+    // within this tree. It also works on both node sizes.
+    //
+    // This is a 16 node tree, with 4 branches and a root. We have 2 values per leaf to
+    // allow some cases to be explored. We also need "gaps" between the values to allow other
+    // cases.
+    //
+    // Effectively this means we can test by splitoff on the values:
+    // for i in [0,100,200,300]:
+    //     for j in [0, 10, 20, 30]:
+    //         t1 = i + j
+    //         t2 = i + j + 1
+    //         t3 = i + j + 2
+    //         t4 = i + j + 3
+    //
+    fn create_split_off_leaf(base: usize) -> ABNode<usize, usize> {
+        let mut l = Arc::new(Node::new_leaf(0));
+        let lref = Arc::get_mut(&mut l).unwrap().as_mut_leaf();
+        lref.insert_or_update(base + 1, base + 1);
+        lref.insert_or_update(base + 2, base + 2);
+        l
+    }
+
+    fn create_split_off_branch(base: usize) -> ABNode<usize, usize> {
+        // This is a helper for create_split_off_tree to make the sub-branches based
+        // on a base.
+        let l1 = create_split_off_leaf(base);
+        let l2 = create_split_off_leaf(base + 10);
+        let l3 = create_split_off_leaf(base + 20);
+        let l4 = create_split_off_leaf(base + 30);
+
+        let mut branch = Node::new_branch(0, l1, l2);
+        let nref = Arc::get_mut(&mut branch)
+            .unwrap()
+            .as_mut_branch();
+        nref.add_node(l3);
+        nref.add_node(l4);
+
+        branch
+    }
+
+    fn create_split_off_tree() -> ABNode<usize, usize> {
+        let b1 = create_split_off_branch(0);
+        let b2 = create_split_off_branch(100);
+        let b3 = create_split_off_branch(200);
+        let b4 = create_split_off_branch(300);
+        let mut root = Node::new_branch(0, b1, b2);
+        let nref = Arc::get_mut(&mut root)
+            .unwrap()
+            .as_mut_branch();
+        nref.add_node(b3);
+        nref.add_node(b4);
+
+        root
+    }
+
     #[test]
     fn test_bptree_cursor_split_off_lt_1() {
         // Make a tree witth just a leaf
@@ -1804,273 +1987,40 @@ mod tests {
 
     #[test]
     fn test_bptree_cursor_split_off_lt_4() {
-        //
-        //   r
-        // l   r
-        //
-        // l, r full.
-        //
-        // l remain (split_lte middle)
-        // no path_clone
+        let tree = create_split_off_tree();
 
-        let lnode = create_leaf_node_full(10);
-        let rnode = create_leaf_node_full(20);
-        let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new(root, L_CAPACITY * 2);
+        let mut wcurs = CursorWrite::new(tree, 32);
+        // 0 is min, and not present, will cause no change.
+        wcurs.split_off_lt(&0);
         assert!(wcurs.verify());
+        assert!(wcurs.len() == 32);
 
-        wcurs.split_off_lt(&11);
-
-        assert!(wcurs.verify());
+        println!("{:?}", wcurs);
         mem::drop(wcurs);
         check_drop_count();
     }
 
     #[test]
     fn test_bptree_cursor_split_off_lt_5() {
-        //
-        //   r
-        // l   r
-        //
-        // l, r full.
-        //
-        // l prune (split_lte middle)
-        // r promote
-        // no path_clone
-        unimplemented!();
+        let tree = create_split_off_tree();
+
+        let mut wcurs = CursorWrite::new(tree, 32);
+        // 0 is min, and not present, will cause no change.
+        wcurs.split_off_lt(&1);
+        assert!(wcurs.verify());
+        assert!(wcurs.len() == 31);
+
+        println!("{:?}", wcurs);
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree_cursor_split_off_lt_6() {
-        //
-        //   r
-        // l   r
-        //
-        // l, r full.
-        //
-        // l remain (split_lte middle)
-        // path_cloned
+    fn test_bptree_cursor_split_off_lt_xx() {
         unimplemented!();
     }
 
-    #[test]
-    fn test_bptree_cursor_split_off_lt_7() {
-        //
-        //   r
-        // l   r
-        //
-        // l, r full.
-        //
-        // l prune (split_lte middle)
-        // r promote
-        // path_cloned
-        unimplemented!();
-    }
 
-    #[test]
-    fn test_bptree_cursor_split_off_lt_8() {
-        // xxx
-        //
-        //   root
-        // l   r
-        //
-        // l, r full.
-        //
-        // r split_lte middle
-        // l/root pruned
-        // no path_clone
-        unimplemented!();
-    }
-
-    #[test]
-    fn test_bptree_cursor_split_off_lt_9() {
-        //
-        //   r
-        // l   r
-        //
-        // l, r full.
-        //
-        // r pruned
-        // should be new leaf (len 0)
-        // no path_clone
-        unimplemented!();
-    }
-
-    #[test]
-    fn test_bptree_cursor_split_off_lt_10() {
-        //
-        //   r
-        // l   r
-        //
-        // l, r full.
-        //
-        // r split_lte middle
-        // r promoted
-        // path_cloned to r
-        unimplemented!();
-    }
-
-    #[test]
-    fn test_bptree_cursor_split_off_lt_11() {
-        //
-        //   r
-        // l   r
-        //
-        // l, r full.
-        //
-        // r pruned
-        // should be new leaf(len 0)
-        // path_cloned tto r
-        unimplemented!();
-    }
-
-    #[test]
-    fn test_bptree_cursor_split_off_lt_12() {
-        //
-        //     root
-        //  a   b   c
-        //
-        // b split_lte middle of b
-        // b,c, root retain
-        // a pruned.
-        // no path clone
-        unimplemented!();
-    }
-
-    #[test]
-    fn test_bptree_cursor_split_off_lt_13() {
-        //
-        //     root
-        //  a   b   c
-        //
-        // b split_lte middle of b
-        // b,c, root retain
-        // a pruned.
-        // path cloned to b
-        unimplemented!();
-    }
-
-    #[test]
-    fn test_bptree_cursor_split_off_lt_14() {
-        //
-        //      root
-        //     a     b
-        //  c   d   e   f
-        //
-        // d middle
-        // a merge to b
-        // b promote to root
-        // no path clone
-        unimplemented!();
-    }
-
-    #[test]
-    fn test_bptree_cursor_split_off_lt_15() {
-        //
-        //      root
-        //     a     b
-        //  c   d   e   f
-        //
-        // d middle
-        // a merge to b
-        // b promote to root
-        // path cloned
-        unimplemented!();
-    }
-
-    #[test]
-    fn test_bptree_cursor_split_off_lt_16() {
-        //
-        //      root
-        //     a     b
-        //  c   d   e   f
-        //
-        // d pruned
-        // a pruned
-        // b promote to root
-        // no path clone
-        unimplemented!();
-    }
-
-    #[test]
-    fn test_bptree_cursor_split_off_lt_17() {
-        //
-        //      root
-        //     a     b
-        //  c   d   e   f
-        //
-        // d pruned
-        // a pruned
-        // b promote to root
-        // path cloned
-        unimplemented!();
-    }
-
-    #[test]
-    fn test_bptree_cursor_split_off_lt_18() {
-        //
-        //      root
-        //     a     b
-        //  c   d   e   f
-        //
-        // e pruned
-        // a pruned
-        // f promote to root
-        // no path clone
-        unimplemented!();
-    }
-
-    #[test]
-    fn test_bptree_cursor_split_off_lt_19() {
-        //
-        //      root
-        //     a     b
-        //  c   d   e   f
-        //
-        // e pruned
-        // a pruned
-        // f promote to root
-        // path cloned
-        unimplemented!();
-    }
-
-    #[test]
-    fn test_bptree_cursor_split_off_lt_20() {
-        //
-        //      root
-        //     a     b
-        //  c   d   e   f
-        //
-        // f pruned
-        // new leaf as root
-        // no path clone
-        unimplemented!();
-    }
-
-    #[test]
-    fn test_bptree_cursor_split_off_lt_21() {
-        //
-        //      root
-        //     a     b
-        //  c   d   e   f
-        //
-        // f pruned
-        // new leaf as root
-        // path cloned
-        unimplemented!();
-    }
-
-    #[test]
-    fn test_bptree_cursor_split_off_lt_stress() {
-        // Each loop:
-        // Maek a tree like:
-        //           100, 200, 300
-        //  10-30  200-230, 300-330, 400-430
-        //  x x x x x x x x x x x x x x x x x
-        // Now remove 0 -> 500.
-        // This will REALLY stress the algo ;)
-        unimplemented!();
-    }
 
     /*
     #[test]
