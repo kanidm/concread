@@ -702,7 +702,7 @@ fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
         if node.txid == txid {
             let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
             let anode_idx = nmref.locate_node(&k);
-            let mut anode = nmref.get_mut_idx(anode_idx);
+            let anode = nmref.get_mut_idx(anode_idx);
             let result = clone_and_split_off_prune_lt(anode, txid, k);
             match result {
                 CRPruneState::OkNoClone => CRPruneState::OkNoClone,
@@ -749,7 +749,7 @@ fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
             let mut cnode = node.req_clone(txid);
             let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
             let anode_idx = nmref.locate_node(&k);
-            let mut anode = nmref.get_mut_idx(anode_idx);
+            let anode = nmref.get_mut_idx(anode_idx);
             let result = clone_and_split_off_prune_lt(anode, txid, k);
             match result {
                 CRPruneState::OkNoClone => {

@@ -48,18 +48,6 @@ pub(crate) enum BLPruneState {
 }
 
 #[derive(Debug)]
-pub(crate) enum BRPruneState<K, V>
-where
-    K: Ord + Clone + Debug,
-    V: Clone,
-{
-    NoChange,
-    Prune,
-    Shrink(ABNode<K, V>),
-    Ok,
-}
-
-#[derive(Debug)]
 pub(crate) enum BRTrimState<K, V>
 where
     K: Ord + Clone + Debug,
