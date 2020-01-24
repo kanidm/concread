@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use super::constants::{BK_CAPACITY, BK_CAPACITY_MIN_N1, BV_CAPACITY, L_CAPACITY};
 use super::leaf::Leaf;
-use super::states::{BRInsertState, BRPruneState, BRShrinkState, BRTrimState};
+use super::states::{BRInsertState, BRShrinkState, BRTrimState};
 use super::utils::*;
 
 #[cfg(test)]
@@ -533,14 +533,11 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
 
         // This is subtely different to prune, in that we handle branch rebalancing.
 
-        let empty = anode_idx == self.count;
-
         // First, clean up any excess we hold.
         self.prune(anode_idx).expect("Invalid branch state!");
 
         if self.count == 0 {
-            panic!();
-            return Err(());
+            unreachable!("Corrupt tree?");
         }
 
         // We now can assert that 0 is the node we are about to act upon.
@@ -917,7 +914,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                     // * The key is less than min. IE it wants to remove the lowest value.
                     // Check the "max" value of the subtree to know if we can proceed.
 
-                    let tnode: &Node<K, V> = (&*self.get_idx(0));
+                    let tnode: &Node<K, V> = &*self.get_idx(0);
                     let branch_k: &K = tnode.max();
                     if branch_k < k {
                         // Everything is smaller, let's remove it.
@@ -953,7 +950,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                     //   the prune/walk will have to examine n3 to know about further changes.
                     debug_assert!(idx > 0);
 
-                    let tnode: &Node<K, V> = (&*self.get_idx(idx));
+                    let tnode: &Node<K, V> = &*self.get_idx(idx);
                     let branch_k: &K = tnode.max();
 
                     if branch_k < k {
@@ -962,7 +959,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                             slice_slide_and_drop(&mut self.key, idx, self.count - (idx + 1));
                             slice_slide_and_drop(&mut self.node, idx, self.count - idx);
                         }
-                        self.count -= (idx + 1);
+                        self.count -= idx + 1;
                     } else {
                         unsafe {
                             slice_slide_and_drop(&mut self.key, idx - 1, self.count - idx);
