@@ -1,4 +1,5 @@
 use std::ptr;
+use std::mem::MaybeUninit;
 
 pub(crate) unsafe fn slice_insert<T>(slice: &mut [T], new: T, idx: usize) {
     ptr::copy(
@@ -42,14 +43,15 @@ pub(crate) unsafe fn slice_move<T>(
 }
 
 pub(crate) unsafe fn slice_slide_and_drop<T> (
-    slice: &mut [T],
+    slice: &mut [MaybeUninit<T>],
     idx: usize,
     count: usize,
 ) {
     // drop everything up to and including idx
     for didx in 0..(idx + 1) {
-        // These are dropped
-        let _ = ptr::read(slice.get_unchecked(didx));
+        // These are dropped here ...?
+        ptr::drop_in_place(slice[didx].as_mut_ptr());
+        println!("dropping {:?}", didx);
     }
     // now move everything down.
     ptr::copy(

@@ -11,11 +11,29 @@ use super::utils::*;
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
+use std::sync::Mutex;
+#[cfg(test)]
+use std::collections::BTreeSet;
 
 #[cfg(test)]
-thread_local!(static NODE_COUNTER: AtomicUsize = AtomicUsize::new(0));
+thread_local!(static NODE_COUNTER: AtomicUsize = AtomicUsize::new(1));
 #[cfg(test)]
-thread_local!(static DROP_COUNTER: AtomicUsize = AtomicUsize::new(0));
+thread_local!(static ALLOC_LIST: Mutex<BTreeSet<usize>> = Mutex::new(BTreeSet::new()));
+
+#[cfg(test)]
+fn alloc_nid() -> usize {
+    let nid: usize = NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel));
+    ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(nid));
+    nid
+}
+
+#[cfg(test)]
+fn release_nid(nid: usize) {
+    let r = ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
+    assert!(r == true);
+}
+
 
 pub(crate) struct Branch<K, V>
 where
@@ -54,7 +72,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     pub(crate) fn new_leaf(txid: usize) -> Self {
         Node {
             #[cfg(test)]
-            nid: NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel)),
+            nid: alloc_nid(),
             txid: txid,
             inner: T::L(Leaf::new()),
         }
@@ -67,7 +85,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     pub(crate) fn new_branch(txid: usize, l: ABNode<K, V>, r: ABNode<K, V>) -> ABNode<K, V> {
         Arc::new(Node {
             #[cfg(test)]
-            nid: NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel)),
+            nid: alloc_nid(),
             txid: txid,
             inner: T::B(Branch::new(l, r)),
         })
@@ -94,7 +112,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         // Do we need to clone this node before we work on it?
         Arc::new(Node {
             #[cfg(test)]
-            nid: NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel)),
+            nid: alloc_nid(),
             txid: txid,
             inner: self.inner_clone(),
         })
@@ -506,7 +524,30 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         }
     }
 
-    pub(crate) fn prune_decision(&mut self, ridx: usize, k: &K) -> Result<(), ()> {
+    pub(crate) fn prune_decision(&mut self, txid: usize, anode_idx: usize) -> Result<(), ()> {
+        // So this means there are quite a few cases
+        //
+        //    [   k1, k2, k3, k4, k5, k6   ]
+        //    [ v1, v2, v3, v4, v5, v6, v7 ]
+        //
+        // * anode_idx is maximum (self.count - 1), so we also now are empty.
+        // * anything else, so we can shift down.
+
+        // This is subtely different to prune, in that we handle branch rebalancing.
+        println!("prune_decision -> {:?}", anode_idx);
+        println!("{:?}", self);
+
+        if anode_idx == self.count {
+            /* We've hit a situation that shouldn't occur? */
+            unimplemented!();
+        }
+
+        // First, clean up any excess we hold.
+        self.prune(anode_idx)
+            .expect("Invalid branch state!");
+
+        // We now can assert that 0 is the node we are about to act upon.
+        let ridx = self.clone_sibling_idx(txid, 0);
         let (left, right) = self.get_mut_pair(ridx);
 
         if left.is_leaf() {
@@ -515,15 +556,32 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             debug_assert!(Arc::strong_count(right) == 1);
             let lmut = Arc::get_mut(left).unwrap().as_mut_leaf();
             let rmut = Arc::get_mut(right).unwrap().as_mut_leaf();
-            unimplemented!();
+
+            if lmut.len() == L_CAPACITY {
+                unreachable!("We should never be able to borrow from left!");
+            } else if rmut.len() == L_CAPACITY {
+                lmut.take_from_r_to_l(rmut);
+                self.rekey_by_idx(ridx);
+                Ok(())
+            } else {
+                // merge
+                lmut.merge(rmut);
+                // drop our references
+                // mem::drop(lmut)
+                // mem::drop(rmut)
+                // remove the right node from parent
+                let _ = self.remove_by_idx(ridx);
+                // What is our capacity?
+                if self.count == 0 {
+                    // We now need to be merged across as we only contain a single
+                    // value now.
+                    Err(())
+                } else {
+                    Ok(())
+                    // We are complete!
+                }
+            }
         } else {
-            // right or left is now in a "corrupt" state with a single value that we need to relocate
-            // to left - or we need to borrow from left and fix it!
-            debug_assert!(!right.is_leaf());
-            debug_assert!(Arc::strong_count(left) == 1);
-            debug_assert!(Arc::strong_count(right) == 1);
-            let lmut = Arc::get_mut(left).unwrap().as_mut_branch();
-            let rmut = Arc::get_mut(right).unwrap().as_mut_branch();
             unimplemented!();
         }
     }
@@ -541,6 +599,8 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         //    so if we worked on idx 3, that means we need to remove 0 -> 2 in both
         // k/v sets.
         //
+        debug_assert!(idx <= self.count);
+        println!("slide and drop! c: {:?} i:{:?}", self.count, idx);
 
         // If the idx is 0, we do not need to act.
         if idx == 0 {
@@ -549,11 +609,12 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             // We must have to remove v6 and lower, so we need to be merge to a neighbor.
             unsafe {
                 // We just drop all the keys.
-                for idx in 0..self.count {
-                    ptr::drop_in_place(self.key[idx].as_mut_ptr());
+                for kidx in 0..self.count {
+                    ptr::drop_in_place(self.key[kidx].as_mut_ptr());
+                    ptr::drop_in_place(self.node[kidx].as_mut_ptr());
                 }
-                // Move everything down.
-                slice_slide_and_drop(&mut self.node, idx - 1, 1);
+                // Move the last node to the bottom.
+                ptr::swap(self.node[0].as_mut_ptr(), self.node[self.count].as_mut_ptr());
             }
             self.count = 0;
             // This node is now invalid, but has a single remaining pointer in position 0;
@@ -561,11 +622,11 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             Err(())
         } else {
             // We still have enough to be a valid node, move on
-            unsafe {
-                slice_slide_and_drop(&mut self.key, idx - 1, self.count - idx);
-                slice_slide_and_drop(&mut self.node, idx - 1, self.count - idx);
-            }
             self.count = self.count - idx;
+            unsafe {
+                slice_slide_and_drop(&mut self.key, idx - 1, self.count);
+                slice_slide_and_drop(&mut self.node, idx - 1, self.count + 1);
+            }
             Ok(())
         }
     }
@@ -1094,15 +1155,25 @@ impl<K: Clone + Ord + Debug, V: Clone> Drop for Branch<K, V> {
 #[cfg(test)]
 impl<K: Clone + Ord + Debug, V: Clone> Drop for Node<K, V> {
     fn drop(&mut self) {
-        let _ = DROP_COUNTER.with(|dc| dc.fetch_add(1, Ordering::AcqRel));
+        if cfg!(test) {
+            println!("fn drop -> {:?}", self.nid);
+            release_nid(self.nid)
+        }
     }
 }
 
 #[cfg(test)]
 pub(crate) fn check_drop_count() {
-    let node = NODE_COUNTER.with(|nc| nc.load(Ordering::Acquire));
-    let drop = DROP_COUNTER.with(|dc| dc.load(Ordering::Acquire));
-    assert!(node == drop);
+    let size = ALLOC_LIST.with(|llist| {
+        let guard = llist.lock().unwrap();
+        let size = guard.len();
+        if size > 0 {
+            println!("failed to drop nodes!");
+            println!("{:?}", guard);
+        }
+        size
+    });
+    assert!(size == 0);
 }
 
 #[cfg(test)]

@@ -104,6 +104,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
     pub(crate) fn remove_lte(&mut self, k: &K) -> BLPruneState {
         // Remove everything less than or equal to a value.
         if self.count == 0 {
+            println!("remove_lte -> count == 0");
             return BLPruneState::Prune;
         }
 
@@ -118,11 +119,12 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         match r {
             Err(0) => {
                 // No action, nothing to remove.
+                println!("remove_lte -> Err 0");
                 BLPruneState::Ok
             }
             // Is our removal including an item?
             Err(idx) => {
-                if idx == self.count {
+                if idx >= self.count {
                     // Remove everything.
                     for didx in 0..self.count {
                         unsafe {
@@ -132,6 +134,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
                     }
                     // Set the count to zero.
                     self.count = 0;
+                    println!("remove_lte -> Err, idx == self.count");
                     BLPruneState::Prune
                 } else {
                     unsafe {
@@ -140,11 +143,12 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
                     }
                     // Only remove self.count - idx
                     self.count = self.count - idx;
+                    println!("remove_lte -> Err, idx != self.count");
                     BLPruneState::Ok
                 }
             }
             Ok(idx) => {
-                if idx == self.count {
+                if (idx + 1) == self.count {
                     // Remove everything.
                     for didx in 0..self.count {
                         unsafe {
@@ -154,8 +158,11 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
                     }
                     // Set the count to zero.
                     self.count = 0;
+                    println!("remove_lte -> Ok, idx == self.count");
                     BLPruneState::Prune
                 } else {
+                    println!("before -> {:?}", self);
+                    println!("idx {:?}", idx);
                     // Split and move
                     unsafe {
                         slice_slide_and_drop(&mut self.key, idx, self.count - idx);
@@ -163,6 +170,8 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
                     }
 
                     self.count = self.count - (idx + 1);
+                    println!("after -> {:?}", self);
+                    println!("remove_lte -> Ok idx != self.count");
                     BLPruneState::Ok
                 }
             }

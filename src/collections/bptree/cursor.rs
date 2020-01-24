@@ -208,6 +208,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         // Remove all the values less than from the top of the tree.
         loop {
             let result = clone_and_split_off_trim_lt(&mut self.root, self.txid, k);
+            println!("--> {:?}", result);
             match result {
                 CRTrimState::Complete => break,
                 CRTrimState::Clone(mut nroot) => {
@@ -224,13 +225,32 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         };
 
         // Now work up the tree and clean up the remaining path inbetween
-        match clone_and_split_off_prune_lt(&mut self.root, self.txid, k) {
+        let result = clone_and_split_off_prune_lt(&mut self.root, self.txid, k);
+        println!("--> {:?}", result);
+        match result {
             CRPruneState::OkNoClone => {}
             CRPruneState::OkClone(mut nroot) => {
                 mem::swap(&mut self.root, &mut nroot);
             }
             CRPruneState::Prune => {
-                unimplemented!();
+                if self.root.is_leaf() {
+                    // No action, the tree is now empty.
+                } else {
+                    // Root is being demoted, get the last branch and
+                    // promote it to the root.
+                    let rmut = Arc::get_mut(&mut self.root).unwrap().as_mut_branch();
+                    let mut pnode = rmut.extract_last_node();
+                    mem::swap(&mut self.root, &mut pnode);
+                }
+            }
+            CRPruneState::ClonePrune(mut clone) => {
+                if self.root.is_leaf() {
+                    mem::swap(&mut self.root, &mut clone);
+                } else {
+                    let rmut = Arc::get_mut(&mut clone).unwrap().as_mut_branch();
+                    let mut pnode = rmut.extract_last_node();
+                    mem::swap(&mut self.root, &mut pnode);
+                }
             }
         };
 
@@ -666,6 +686,7 @@ fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
     if node.is_leaf() {
         // I think this should be do nothing, the up walk will clean.
         if node.txid == txid {
+            println!("Leaf --> same txid");
             let nmref = Arc::get_mut(node).unwrap().as_mut_leaf();
             match nmref.remove_lte(k) {
                 BLPruneState::Ok => {
@@ -676,14 +697,16 @@ fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
                 }
             }
         } else {
+            println!("Leaf --> clone");
             let mut cnode = node.req_clone(txid);
             let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_leaf();
             match nmref.remove_lte(k) {
                 BLPruneState::Ok => {
+                    println!("== {:?}", cnode);
                     CRPruneState::OkClone(cnode)
                 }
                 BLPruneState::Prune => {
-                    CRPruneState::Prune
+                    CRPruneState::ClonePrune(cnode)
                 }
             }
         }
@@ -692,7 +715,9 @@ fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
             let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
             let anode_idx = nmref.locate_node(&k);
             let mut anode = nmref.get_mut_idx(anode_idx);
-            match clone_and_split_off_prune_lt(anode, txid, k) {
+            let result = clone_and_split_off_prune_lt(anode, txid, k);
+            println!("== same txid branch path -> {:?}", result);
+            match result {
                 CRPruneState::OkNoClone => {
                     unimplemented!()
                 }
@@ -714,13 +739,18 @@ fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
                 CRPruneState::Prune => {
                     unimplemented!()
                 }
+                CRPruneState::ClonePrune(clone) => {
+                    unimplemented!()
+                }
             }
         } else {
             let mut cnode = node.req_clone(txid);
             let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
             let anode_idx = nmref.locate_node(&k);
             let mut anode = nmref.get_mut_idx(anode_idx);
-            match clone_and_split_off_prune_lt(anode, txid, k) {
+            let result = clone_and_split_off_prune_lt(anode, txid, k);
+            println!("== clone branch path -> {:?}", result);
+            match result {
                 CRPruneState::OkNoClone => {
                     // I think this is an impossible state - how can a child be in the
                     // txid if we are not?
@@ -729,30 +759,41 @@ fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
                 CRPruneState::OkClone(clone) => {
                     // Our child cloned, so replace it.
                     nmref.replace_by_idx(anode_idx, clone);
+                    println!("pre-prune {:?}", nmref);
                     // Check our node for anything else to be removed.
                     match nmref.prune(anode_idx) {
                         Ok(_) => {
+                            println!("post-prune {:?}", nmref);
                             // Okay, the branch remains valid, return that we are okay.
                             CRPruneState::OkClone(cnode)
                         }
                         Err(_) => {
+                            // CRPruneState::ClonePrune(cnode)
                             unimplemented!();
                         }
                     }
                 }
                 CRPruneState::Prune => {
-                    let right_idx = nmref.clone_sibling_idx(txid, anode_idx);
-                    match nmref.prune_decision(right_idx, k) {
+                    unimplemented!();
+                }
+                CRPruneState::ClonePrune(clone) => {
+                    // Our child cloned, and intends to be removed.
+                    nmref.replace_by_idx(anode_idx, clone);
+                    // Now make the prune decision.
+                    match nmref.prune_decision(txid, anode_idx) {
                         Ok(_) => {
+                            // Okay, the branch remains valid. Now we need to trim any
+                            // excess if possible.
+
                             CRPruneState::OkClone(cnode)
                         }
                         Err(_) => {
-                            // This node has fallen below threshold
-                            CRPruneState::Prune
+                            // CRPruneState::ClonePrune(cnode)
+                            unimplemented!();
                         }
                     }
-                }
-            }
+                } // end clone prune
+            } // end match result
         }
     }
 }
@@ -1937,7 +1978,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree_cursor_split_off_lt_1() {
+    fn test_bptree_cursor_split_off_lt_01() {
         // Make a tree witth just a leaf
         // Do a split_off_lt.
         let node = create_leaf_node(0);
@@ -1953,7 +1994,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree_cursor_split_off_lt_2() {
+    fn test_bptree_cursor_split_off_lt_02() {
         // Make a tree witth just a leaf
         // Do a split_off_lt.
         let node = create_leaf_node_full(10);
@@ -1969,7 +2010,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree_cursor_split_off_lt_3() {
+    fn test_bptree_cursor_split_off_lt_03() {
         // Make a tree witth just a leaf
         // Do a split_off_lt.
         let node = create_leaf_node_full(10);
@@ -1985,30 +2026,16 @@ mod tests {
         check_drop_count();
     }
 
-    #[test]
-    fn test_bptree_cursor_split_off_lt_4() {
+    fn run_split_off_test(v: usize, exp: usize) {
+        println!("RUNNING -> {:?}", v);
         let tree = create_split_off_tree();
 
         let mut wcurs = CursorWrite::new(tree, 32);
         // 0 is min, and not present, will cause no change.
-        wcurs.split_off_lt(&0);
+        wcurs.split_off_lt(&v);
         assert!(wcurs.verify());
-        assert!(wcurs.len() == 32);
-
-        println!("{:?}", wcurs);
-        mem::drop(wcurs);
-        check_drop_count();
-    }
-
-    #[test]
-    fn test_bptree_cursor_split_off_lt_5() {
-        let tree = create_split_off_tree();
-
-        let mut wcurs = CursorWrite::new(tree, 32);
-        // 0 is min, and not present, will cause no change.
-        wcurs.split_off_lt(&1);
-        assert!(wcurs.verify());
-        assert!(wcurs.len() == 31);
+        assert!(!wcurs.contains_key(&v));
+        // assert!(wcurs.len() == exp);
 
         println!("{:?}", wcurs);
         mem::drop(wcurs);
@@ -2017,10 +2044,22 @@ mod tests {
 
     #[test]
     fn test_bptree_cursor_split_off_lt_xx() {
-        unimplemented!();
+        let outer: [usize; 4] = [0, 100, 200, 300];
+        let inner: [usize; 4] = [0, 10, 20, 30];
+        for i in outer.iter() {
+            for j in inner.iter() {
+                run_split_off_test(i + j, 32);
+                run_split_off_test(i + j + 1, 32);
+                run_split_off_test(i + j + 2, 32);
+                run_split_off_test(i + j + 3, 32);
+            }
+        }
     }
 
-
+    #[test]
+    fn test_bptree_cursor_split_off_lt_yy() {
+                run_split_off_test(21, 32);
+    }
 
     /*
     #[test]
