@@ -131,9 +131,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    extern crate crossbeam_utils;
-    extern crate time;
-
     use super::LinCowCell;
     use crossbeam_utils::thread::scope;
     use std::sync::atomic::{AtomicUsize, Ordering};

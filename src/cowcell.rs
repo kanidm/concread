@@ -206,10 +206,6 @@ impl<'a, T> DerefMut for CowCellWriteTxn<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    extern crate crossbeam_utils;
-    extern crate parking_lot;
-    extern crate time;
-
     use super::CowCell;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

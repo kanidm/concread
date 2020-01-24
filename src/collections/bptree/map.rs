@@ -142,7 +142,10 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
         self.work.len()
     }
 
-    // is_empty
+    /// Determine if the set is currently empty
+    pub fn is_empty(&self) -> bool {
+        self.work.len() == 0
+    }
 
     // (adv) range
 
@@ -163,20 +166,39 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
         self.work.clear()
     }
 
-    // get_mut
-
     /// Insert or update a value by key. If the value previously existed it is returned
     /// as `Some(V)`. If the value did not previously exist this returns `None`.
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         self.work.insert(k, v)
     }
 
-    // remove
+    /// Remove a key if it exists in the tree. If the value exists, we return it as `Some(V)`,
+    /// and if it did not exist, we return `None`
+    pub fn remove(&mut self, k: &K) -> Option<V> {
+        self.work.remove(k)
+    }
 
     // split_off
+    /*
+    pub fn split_off_gte(&mut self, key: &K) -> BptreeMap<K, V> {
+        unimplemented!();
+    }
+    */
+
+    /// Remove all values less than (but not including) key from the map.
+    pub fn split_off_lt(&mut self, key: &K) {
+        self.work.split_off_lt(key)
+    }
 
     // ADVANCED
     // append (join two sets)
+
+    /// Get a mutable reference to a value in the tree. This is correctly, and
+    /// safely cloned before you attempt to mutate the value, isolating it from
+    /// other transactions.
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        self.work.get_mut_ref(key)
+    }
 
     // range_mut
 
@@ -206,12 +228,21 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     ///
     /// If you call this function, and the current occupation is less than 50% the tree will be
     /// rebalanced. This may briefly consume more ram, but will achieve a near ~100% occupation
-    /// of k:v in the tree, with a reduction in leaves and branches - basically it makes search
-    /// faster.
-    pub fn compact(&mut self) {
+    /// of k:v in the tree, with a reduction in leaves and branches.
+    ///
+    /// The net result is a short term stall, for long term lower memory usage and faster
+    /// search response times.
+    ///
+    /// You should consider using this "randomly" IE 1 in X commits, so that you are not
+    /// walking the tree continually, after a large randomise insert, or when memory
+    /// pressure is high.
+    pub fn compact(&mut self) -> bool {
         let (l, m) = self.work.tree_density();
         if (m / l) > 1 {
             self.compact_force();
+            true
+        } else {
+            false
         }
     }
 
@@ -247,18 +278,61 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     }
 }
 
-/*
-impl<'a, K: Clone + Ord + Debug, V: Clone> Extend for BptreeMapWriteTxn<'a, K, V> {
+impl<'a, K: Clone + Ord + Debug, V: Clone> Extend<(K, V)> for BptreeMapWriteTxn<'a, K, V> {
+    fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
+        self.work.extend(iter)
+    }
 }
-*/
+
+impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapReadTxn<K, V> {
+    /// Retrieve a value from the tree. If the value exists, a reference is returned
+    /// as `Some(&V)`, otherwise if not present `None` is returned.
+    pub fn get(&'a self, k: &'a K) -> Option<&'a V> {
+        self.work.search(k)
+    }
+
+    /// Assert if a key exists in the tree.
+    pub fn contains_key(&self, k: &K) -> bool {
+        self.work.contains_key(k)
+    }
+
+    /// Returns the current number of k:v pairs in the tree
+    pub fn len(&self) -> usize {
+        self.work.len()
+    }
+
+    /// Determine if the set is currently empty
+    pub fn is_empty(&self) -> bool {
+        self.work.len() == 0
+    }
+
+    // (adv) range
+
+    /// Iterator over `(&K, &V)` of the set
+    pub fn iter(&self) -> Iter<K, V> {
+        self.work.kv_iter()
+    }
+
+    // (adv) keys
+
+    // (adv) values
+
+    #[cfg(test)]
+    pub(crate) fn verify(&self) -> bool {
+        self.work.verify()
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::super::constants::L_CAPACITY;
     use super::BptreeMap;
-    use rand::prelude::*;
+    // use rand::prelude::*;
+    use crossbeam_utils::thread::scope;
     use rand::seq::SliceRandom;
+    use rand::Rng;
     use std::iter::FromIterator;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_bptree_map_basic_write() {
@@ -286,9 +360,40 @@ mod tests {
     }
 
     #[test]
+    fn test_bptree_map_cursed_get_mut() {
+        let bptree: BptreeMap<usize, usize> = BptreeMap::new();
+        {
+            let mut w = bptree.write();
+            w.insert(0, 0);
+            w.commit();
+        }
+        let r1 = bptree.read();
+        {
+            let mut w = bptree.write();
+            let cursed_zone = w.get_mut(&0).unwrap();
+            *cursed_zone = 1;
+            // Correctly fails to work as it's a second borrow, which isn't
+            // possible once w.remove occurs
+            // w.remove(&0);
+            // *cursed_zone = 2;
+            w.commit();
+        }
+        let r2 = bptree.read();
+        assert!(r1.get(&0) == Some(&0));
+        assert!(r2.get(&0) == Some(&1));
+
+        /*
+        // Correctly fails to compile. PHEW!
+        let fail = {
+            let mut w = bptree.write();
+            w.get_mut(&0).unwrap()
+        };
+        */
+    }
+
+    #[test]
     fn test_bptree_map_from_iter_1() {
-        let mut rng = rand::thread_rng();
-        let mut ins: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
+        let ins: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
 
         let map = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
 
@@ -311,4 +416,345 @@ mod tests {
         assert!(w.verify());
         assert!(w.tree_density() == ((L_CAPACITY << 4), (L_CAPACITY << 4)));
     }
+
+    #[test]
+    fn test_bptree_map_basic_concurrency() {
+        // Create a map
+        let map = BptreeMap::new();
+
+        // add values
+        {
+            let mut w = map.write();
+            w.extend((0..10_000).map(|v| (v, v)));
+            w.commit();
+        }
+
+        // read
+        let r = map.read();
+        assert!(r.len() == 10_000);
+        for i in 0..10_000 {
+            assert!(r.contains_key(&i))
+        }
+
+        // Check a second write doesn't interfere
+        {
+            let mut w = map.write();
+            w.extend((10_000..20_000).map(|v| (v, v)));
+            w.commit();
+        }
+
+        assert!(r.len() == 10_000);
+
+        // But a new write can see
+        let r2 = map.read();
+        assert!(r2.len() == 20_000);
+        for i in 0..20_000 {
+            assert!(r2.contains_key(&i))
+        }
+
+        // Now drain the tree, and the reader should be unaffected.
+        {
+            let mut w = map.write();
+            for i in 0..20_000 {
+                assert!(w.remove(&i).is_some())
+            }
+            w.commit();
+        }
+
+        // All consistent!
+        assert!(r.len() == 10_000);
+        assert!(r2.len() == 20_000);
+        for i in 0..20_000 {
+            assert!(r2.contains_key(&i))
+        }
+
+        let r3 = map.read();
+        println!("{:?}", r3.len());
+        assert!(r3.len() == 0);
+    }
+
+    #[test]
+    fn test_bptree_map_write_compact() {
+        let insa: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
+        let map = BptreeMap::from_iter(insa.into_iter().map(|v| (v, v)));
+
+        let mut w = map.write();
+        // Created linearly, should not need compact
+        assert!(w.compact() == false);
+        assert!(w.verify());
+
+        let insb: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
+        let bmap = BptreeMap::from_iter(insb.into_iter().rev().map(|v| (v, v)));
+        let mut bw = bmap.write();
+        assert!(bw.compact() == true);
+        // Assert the density is "best"
+        assert!(bw.tree_density() == ((L_CAPACITY << 4), (L_CAPACITY << 4)));
+        assert!(bw.verify());
+    }
+
+    /*
+    const MAX_TARGET: usize = 210_000;
+
+    #[test]
+    fn test_bptree_map_thread_stress() {
+        let start = time::now();
+        let reader_completions = AtomicUsize::new(0);
+        // Setup a tree with some initial data.
+        let map: BptreeMap<usize, usize> = BptreeMap::from_iter(
+            (0..10_000).map(|v| (v, v))
+        );
+        // now setup the threads.
+        scope(|scope| {
+            let mref = &map;
+            let rref = &reader_completions;
+
+            let _readers: Vec<_> = (0..7)
+                .map(|_| {
+                    scope.spawn(move || {
+                        println!("Started reader ...");
+                        let mut rng = rand::thread_rng();
+                        let mut proceed = true;
+                        while proceed {
+                            let m_read = mref.read();
+                            proceed = ! m_read.contains_key(&MAX_TARGET);
+                            // Get a random number.
+                            // Add 10_000 * random
+                            // Remove 10_000 * random
+                            let v1 = rng.gen_range(1, 18) * 10_000;
+                            let r1 = v1 + 10_000;
+                            for i in v1..r1 {
+                                m_read.get(&i);
+                            }
+                            assert!(m_read.verify());
+                            rref.fetch_add(1, Ordering::Relaxed);
+                        }
+                        println!("Closing reader ...");
+                    })
+                })
+                .collect();
+
+            let _writers: Vec<_> = (0..3)
+                .map(|_| {
+                    scope.spawn(move || {
+                        println!("Started writer ...");
+                        let mut rng = rand::thread_rng();
+                        let mut proceed = true;
+                        while proceed {
+                            let mut m_write = mref.write();
+                            proceed = ! m_write.contains_key(&MAX_TARGET);
+                            // Get a random number.
+                            // Add 10_000 * random
+                            // Remove 10_000 * random
+                            let v1 = rng.gen_range(1, 18) * 10_000;
+                            let r1 = v1 + 10_000;
+                            let v2 = rng.gen_range(1, 19) * 10_000;
+                            let r2 = v2 + 10_000;
+
+                            for i in v1..r1 {
+                                m_write.insert(i, i);
+                            }
+                            for i in v2..r2 {
+                                m_write.remove(&i);
+                            }
+                            m_write.commit();
+                        }
+                        println!("Closing writer ...");
+                    })
+                })
+                .collect();
+
+            let _complete = scope.spawn(move || {
+                let mut last_value = 200_000;
+                while last_value < MAX_TARGET {
+                    let mut m_write = mref.write();
+                    last_value += 1;
+                    if last_value % 1000 == 0 {
+                        println!("{:?}", last_value);
+                    }
+                    m_write.insert(last_value, last_value);
+                    assert!(m_write.verify());
+                    m_write.commit();
+                }
+            });
+
+        });
+        let end = time::now();
+        print!("BptreeMap MT create :{} reader completions :{}", end - start, reader_completions.load(Ordering::Relaxed));
+        // Done!
+    }
+
+    #[test]
+    fn test_std_mutex_btreemap_thread_stress() {
+        use std::collections::BTreeMap;
+        use std::sync::Mutex;
+
+        let start = time::now();
+        let reader_completions = AtomicUsize::new(0);
+        // Setup a tree with some initial data.
+        let map: Mutex<BTreeMap<usize, usize>> = Mutex::new(BTreeMap::from_iter(
+            (0..10_000).map(|v| (v, v))
+        ));
+        // now setup the threads.
+        scope(|scope| {
+            let mref = &map;
+            let rref = &reader_completions;
+
+            let _readers: Vec<_> = (0..7)
+                .map(|_| {
+                    scope.spawn(move || {
+                        println!("Started reader ...");
+                        let mut rng = rand::thread_rng();
+                        let mut proceed = true;
+                        while proceed {
+                            let m_read = mref.lock().unwrap();
+                            proceed = ! m_read.contains_key(&MAX_TARGET);
+                            // Get a random number.
+                            // Add 10_000 * random
+                            // Remove 10_000 * random
+                            let v1 = rng.gen_range(1, 18) * 10_000;
+                            let r1 = v1 + 10_000;
+                            for i in v1..r1 {
+                                m_read.get(&i);
+                            }
+                            rref.fetch_add(1, Ordering::Relaxed);
+                        }
+                        println!("Closing reader ...");
+                    })
+                })
+                .collect();
+
+            let _writers: Vec<_> = (0..3)
+                .map(|_| {
+                    scope.spawn(move || {
+                        println!("Started writer ...");
+                        let mut rng = rand::thread_rng();
+                        let mut proceed = true;
+                        while proceed {
+                            let mut m_write = mref.lock().unwrap();
+                            proceed = ! m_write.contains_key(&MAX_TARGET);
+                            // Get a random number.
+                            // Add 10_000 * random
+                            // Remove 10_000 * random
+                            let v1 = rng.gen_range(1, 18) * 10_000;
+                            let r1 = v1 + 10_000;
+                            let v2 = rng.gen_range(1, 19) * 10_000;
+                            let r2 = v2 + 10_000;
+
+                            for i in v1..r1 {
+                                m_write.insert(i, i);
+                            }
+                            for i in v2..r2 {
+                                m_write.remove(&i);
+                            }
+                        }
+                        println!("Closing writer ...");
+                    })
+                })
+                .collect();
+
+            let _complete = scope.spawn(move || {
+                let mut last_value = 200_000;
+                while last_value < MAX_TARGET {
+                    let mut m_write = mref.lock().unwrap();
+                    last_value += 1;
+                    if last_value % 1000 == 0 {
+                        println!("{:?}", last_value);
+                    }
+                    m_write.insert(last_value, last_value);
+                }
+            });
+
+        });
+        let end = time::now();
+        print!("Mutex<BTreeMap> MT create :{} reader completions :{}", end - start, reader_completions.load(Ordering::Relaxed));
+        // Done!
+    }
+
+    #[test]
+    fn test_std_rwlock_btreemap_thread_stress() {
+        use std::collections::BTreeMap;
+        use std::sync::RwLock;
+
+        let start = time::now();
+        let reader_completions = AtomicUsize::new(0);
+        // Setup a tree with some initial data.
+        let map: RwLock<BTreeMap<usize, usize>> = RwLock::new(BTreeMap::from_iter(
+            (0..10_000).map(|v| (v, v))
+        ));
+        // now setup the threads.
+        scope(|scope| {
+            let mref = &map;
+            let rref = &reader_completions;
+
+            let _readers: Vec<_> = (0..7)
+                .map(|_| {
+                    scope.spawn(move || {
+                        println!("Started reader ...");
+                        let mut rng = rand::thread_rng();
+                        let mut proceed = true;
+                        while proceed {
+                            let m_read = mref.read().unwrap();
+                            proceed = ! m_read.contains_key(&MAX_TARGET);
+                            // Get a random number.
+                            // Add 10_000 * random
+                            // Remove 10_000 * random
+                            let v1 = rng.gen_range(1, 18) * 10_000;
+                            let r1 = v1 + 10_000;
+                            for i in v1..r1 {
+                                m_read.get(&i);
+                            }
+                            rref.fetch_add(1, Ordering::Relaxed);
+                        }
+                        println!("Closing reader ...");
+                    })
+                })
+                .collect();
+
+            let _writers: Vec<_> = (0..3)
+                .map(|_| {
+                    scope.spawn(move || {
+                        println!("Started writer ...");
+                        let mut rng = rand::thread_rng();
+                        let mut proceed = true;
+                        while proceed {
+                            let mut m_write = mref.write().unwrap();
+                            proceed = ! m_write.contains_key(&MAX_TARGET);
+                            // Get a random number.
+                            // Add 10_000 * random
+                            // Remove 10_000 * random
+                            let v1 = rng.gen_range(1, 18) * 10_000;
+                            let r1 = v1 + 10_000;
+                            let v2 = rng.gen_range(1, 19) * 10_000;
+                            let r2 = v2 + 10_000;
+
+                            for i in v1..r1 {
+                                m_write.insert(i, i);
+                            }
+                            for i in v2..r2 {
+                                m_write.remove(&i);
+                            }
+                        }
+                        println!("Closing writer ...");
+                    })
+                })
+                .collect();
+
+            let _complete = scope.spawn(move || {
+                let mut last_value = 200_000;
+                while last_value < MAX_TARGET {
+                    let mut m_write = mref.write().unwrap();
+                    last_value += 1;
+                    if last_value % 1000 == 0 {
+                        println!("{:?}", last_value);
+                    }
+                    m_write.insert(last_value, last_value);
+                }
+            });
+
+        });
+        let end = time::now();
+        print!("RwLock<BTreeMap> MT create :{} reader completions :{}", end - start, reader_completions.load(Ordering::Relaxed));
+        // Done!
+    }
+    */
 }
