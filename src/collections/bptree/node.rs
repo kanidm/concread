@@ -6,15 +6,15 @@ use std::sync::Arc;
 
 use super::constants::{BK_CAPACITY, BK_CAPACITY_MIN_N1, BV_CAPACITY, L_CAPACITY};
 use super::leaf::Leaf;
-use super::states::{BRInsertState, BRShrinkState, BRPruneState, BRTrimState};
+use super::states::{BRInsertState, BRPruneState, BRShrinkState, BRTrimState};
 use super::utils::*;
 
+#[cfg(test)]
+use std::collections::BTreeSet;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::Mutex;
-#[cfg(test)]
-use std::collections::BTreeSet;
 
 #[cfg(test)]
 thread_local!(static NODE_COUNTER: AtomicUsize = AtomicUsize::new(1));
@@ -33,7 +33,6 @@ fn release_nid(nid: usize) {
     let r = ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
     assert!(r == true);
 }
-
 
 pub(crate) struct Branch<K, V>
 where
@@ -141,7 +140,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
-    #[cfg(test)]
     fn max(&self) -> &K {
         match &self.inner {
             T::L(leaf) => leaf.max(),
@@ -534,17 +532,16 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         // * anything else, so we can shift down.
 
         // This is subtely different to prune, in that we handle branch rebalancing.
-        println!("prune_decision -> {:?}", anode_idx);
-        println!("{:?}", self);
 
-        if anode_idx == self.count {
-            /* We've hit a situation that shouldn't occur? */
-            unimplemented!();
-        }
+        let empty = anode_idx == self.count;
 
         // First, clean up any excess we hold.
-        self.prune(anode_idx)
-            .expect("Invalid branch state!");
+        self.prune(anode_idx).expect("Invalid branch state!");
+
+        if self.count == 0 {
+            panic!();
+            return Err(());
+        }
 
         // We now can assert that 0 is the node we are about to act upon.
         let ridx = self.clone_sibling_idx(txid, 0);
@@ -582,7 +579,32 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 }
             }
         } else {
-            unimplemented!();
+            debug_assert!(!right.is_leaf());
+            debug_assert!(Arc::strong_count(left) == 1);
+            debug_assert!(Arc::strong_count(right) == 1);
+            let lmut = Arc::get_mut(left).unwrap().as_mut_branch();
+            let rmut = Arc::get_mut(right).unwrap().as_mut_branch();
+            debug_assert!(rmut.len() == 0 || lmut.len() == 0);
+            if lmut.len() == BK_CAPACITY {
+                unreachable!("This should never occur during a prune decision");
+            } else if rmut.len() == BK_CAPACITY {
+                lmut.take_from_r_to_l(rmut);
+                self.rekey_by_idx(ridx);
+                Ok(())
+            } else {
+                // merge the right to tail of left.
+                lmut.merge(rmut);
+                // Reduce our count
+                let _ = self.remove_by_idx(ridx);
+                if self.count == 0 {
+                    // We now need to be merged across as we also only contain a single
+                    // value now.
+                    Err(())
+                } else {
+                    Ok(())
+                    // We are complete!
+                }
+            }
         }
     }
 
@@ -600,11 +622,10 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         // k/v sets.
         //
         debug_assert!(idx <= self.count);
-        println!("slide and drop! c: {:?} i:{:?}", self.count, idx);
 
         // If the idx is 0, we do not need to act.
         if idx == 0 {
-            return Ok(())
+            return Ok(());
         } else if idx == self.count {
             // We must have to remove v6 and lower, so we need to be merge to a neighbor.
             unsafe {
@@ -614,11 +635,13 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                     ptr::drop_in_place(self.node[kidx].as_mut_ptr());
                 }
                 // Move the last node to the bottom.
-                ptr::swap(self.node[0].as_mut_ptr(), self.node[self.count].as_mut_ptr());
+                ptr::swap(
+                    self.node[0].as_mut_ptr(),
+                    self.node[self.count].as_mut_ptr(),
+                );
             }
             self.count = 0;
             // This node is now invalid, but has a single remaining pointer in position 0;
-            unimplemented!();
             Err(())
         } else {
             // We still have enough to be a valid node, move on
@@ -873,50 +896,90 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                     //   and promote the maximum
                     unimplemented!();
                 } else {
-                    // * A key matches exactly a value. IE k is 4. This means we cane remove
+                    // * A key matches exactly a value. IE k is 4. This means we can remove
                     //   n1 and n2 because we know 4 must be in n3 as the min.
-                    unimplemented!();
+                    unsafe {
+                        slice_slide_and_drop(&mut self.key, idx, self.count - (idx + 1));
+                        slice_slide_and_drop(&mut self.node, idx, self.count - idx);
+                    }
+                    self.count -= idx + 1;
+
+                    if self.count == 0 {
+                        let rnode = self.extract_last_node();
+                        BRTrimState::Promote(rnode)
+                    } else {
+                        BRTrimState::Complete
+                    }
                 }
             }
             Err(idx) => {
                 if idx == 0 {
-                    // * The key is less than min. IE it wants to remove "inside" n1. we simply
-                    //   return, as no trimming is possible.
-                    BRTrimState::Complete
-                } else if idx > self.count {
-                    // * The value is greater than all. This means we have to remove everything BUT
-                    //   the maximal node.
-                    unimplemented!();
+                    // * The key is less than min. IE it wants to remove the lowest value.
+                    // Check the "max" value of the subtree to know if we can proceed.
+
+                    let tnode: &Node<K, V> = (&*self.get_idx(0));
+                    let branch_k: &K = tnode.max();
+                    if branch_k < k {
+                        // Everything is smaller, let's remove it.
+                        let _pk = unsafe { slice_remove(&mut self.key, 0).assume_init() };
+                        let _pn = unsafe { slice_remove(&mut self.node, 0).assume_init() };
+                        self.count -= 1;
+                        BRTrimState::Complete
+                    } else {
+                        BRTrimState::Complete
+                    }
+                } else if idx >= self.count {
+                    // remove everything except max.
+                    unsafe {
+                        // We just drop all the keys.
+                        for kidx in 0..self.count {
+                            ptr::drop_in_place(self.key[kidx].as_mut_ptr());
+                            ptr::drop_in_place(self.node[kidx].as_mut_ptr());
+                        }
+                        // Move the last node to the bottom.
+                        ptr::swap(
+                            self.node[0].as_mut_ptr(),
+                            self.node[self.count].as_mut_ptr(),
+                        );
+                    }
+                    self.count = 0;
+
+                    let rnode = self.extract_last_node();
+                    // Something may still be valid, hand it on.
+                    BRTrimState::Promote(rnode)
                 } else {
                     // * A key is between two values. We can remove everything less, but not
                     //   the assocated. For example, remove 6 would cause n1, n2 to be removed, but
                     //   the prune/walk will have to examine n3 to know about further changes.
-                    unimplemented!();
+                    debug_assert!(idx > 0);
+
+                    let tnode: &Node<K, V> = (&*self.get_idx(idx));
+                    let branch_k: &K = tnode.max();
+
+                    if branch_k < k {
+                        // Remove including idx.
+                        unsafe {
+                            slice_slide_and_drop(&mut self.key, idx, self.count - (idx + 1));
+                            slice_slide_and_drop(&mut self.node, idx, self.count - idx);
+                        }
+                        self.count -= (idx + 1);
+                    } else {
+                        unsafe {
+                            slice_slide_and_drop(&mut self.key, idx - 1, self.count - idx);
+                            slice_slide_and_drop(&mut self.node, idx - 1, self.count - (idx - 1));
+                        }
+                        self.count -= idx;
+                    }
+
+                    if self.count == 0 {
+                        let rnode = self.extract_last_node();
+                        BRTrimState::Promote(rnode)
+                    } else {
+                        BRTrimState::Complete
+                    }
                 }
             }
         }
-
-
-
-        /*
-        if idx == self.count {
-            // We would remove everything.
-            BRPruneState::Prune
-        } else if idx == self.count - 1 {
-            // Remove all but one, IE we now shrink
-            // drop self.count by one.
-            // drop the associated key.
-            unimplemented!();
-            // let node = ...?
-            // BRPruneState::Shrink(node)
-        } else if idx == 0 {
-            // Nothing to do.
-            BRPruneState::Ok
-        } else {
-            // Okay, actually do some shuffle, but our branch will survive.
-            BRPruneState::Ok
-        }
-        */
     }
 
     pub(crate) fn replace_by_idx(&mut self, idx: usize, mut node: ABNode<K, V>) -> () {
@@ -975,9 +1038,10 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         unsafe { (*self.node[0].as_ptr()).min() }
     }
 
-    #[cfg(test)]
     pub(crate) fn max(&self) -> &K {
-        unsafe { (*self.node[self.count].as_ptr()).max() }
+        let nref: &Node<K, V> = &*self.get_idx(self.count);
+        nref.max()
+        // unsafe { (*self.node[self.count].as_ptr()).max() }
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -1043,9 +1107,9 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             if lkey >= pkey || pkey > rkey {
                 println!("++++++");
                 println!("out of order key found {}", work_idx);
-                println!("{:?}", lnode);
-                println!("{:?}", rnode);
-                println!("{:?}", self);
+                println!("left --> {:?}", lnode);
+                println!("right -> {:?}", rnode);
+                println!("prnt  -> {:?}", self);
                 panic!();
                 return false;
             }
@@ -1155,10 +1219,8 @@ impl<K: Clone + Ord + Debug, V: Clone> Drop for Branch<K, V> {
 #[cfg(test)]
 impl<K: Clone + Ord + Debug, V: Clone> Drop for Node<K, V> {
     fn drop(&mut self) {
-        if cfg!(test) {
-            println!("fn drop -> {:?}", self.nid);
-            release_nid(self.nid)
-        }
+        #[cfg(test)]
+        release_nid(self.nid)
     }
 }
 

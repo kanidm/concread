@@ -66,7 +66,7 @@ where
     V: Clone,
 {
     Complete,
-    Promote(ABNode<K, V>)
+    Promote(ABNode<K, V>),
 }
 
 pub(crate) enum CRTrimState<K, V>
@@ -76,7 +76,7 @@ where
 {
     Complete,
     Clone(ABNode<K, V>),
-    Promote(ABNode<K, V>)
+    Promote(ABNode<K, V>),
 }
 
 impl<K: Ord + Clone + Debug, V: Clone> Debug for CRTrimState<K, V> {
@@ -88,7 +88,6 @@ impl<K: Ord + Clone + Debug, V: Clone> Debug for CRTrimState<K, V> {
         }
     }
 }
-
 
 #[derive(Debug)]
 pub(crate) enum CRInsertState<K, V>

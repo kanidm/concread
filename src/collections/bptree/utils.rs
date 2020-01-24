@@ -1,5 +1,5 @@
-use std::ptr;
 use std::mem::MaybeUninit;
+use std::ptr;
 
 pub(crate) unsafe fn slice_insert<T>(slice: &mut [T], new: T, idx: usize) {
     ptr::copy(
@@ -42,7 +42,7 @@ pub(crate) unsafe fn slice_move<T>(
     ptr::copy_nonoverlapping(src_ptr, dst_ptr, count);
 }
 
-pub(crate) unsafe fn slice_slide_and_drop<T> (
+pub(crate) unsafe fn slice_slide_and_drop<T>(
     slice: &mut [MaybeUninit<T>],
     idx: usize,
     count: usize,
@@ -51,12 +51,7 @@ pub(crate) unsafe fn slice_slide_and_drop<T> (
     for didx in 0..(idx + 1) {
         // These are dropped here ...?
         ptr::drop_in_place(slice[didx].as_mut_ptr());
-        println!("dropping {:?}", didx);
     }
     // now move everything down.
-    ptr::copy(
-        slice.as_ptr().add(idx + 1),
-        slice.as_mut_ptr(),
-        count
-    );
+    ptr::copy(slice.as_ptr().add(idx + 1), slice.as_mut_ptr(), count);
 }
