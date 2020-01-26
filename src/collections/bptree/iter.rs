@@ -170,6 +170,64 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for Iter<'a, K, V> {
     }
 }
 
+pub struct KeyIter<'a, K, V>
+where
+    K: Ord + Clone + Debug,
+    V: Clone,
+{
+    iter: Iter<'a, K, V>,
+}
+
+impl<'a, K: Clone + Ord + Debug, V: Clone> KeyIter<'a, K, V> {
+    pub(crate) fn new(root: &'a ABNode<K, V>, length: usize) -> Self {
+        KeyIter {
+            iter: Iter::new(root, length),
+        }
+    }
+}
+
+impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for KeyIter<'a, K, V> {
+    type Item = &'a K;
+
+    /// Yield the next key value reference, or `None` if exhausted.
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|(k, _)| k)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+}
+
+pub struct ValueIter<'a, K, V>
+where
+    K: Ord + Clone + Debug,
+    V: Clone,
+{
+    iter: Iter<'a, K, V>,
+}
+
+impl<'a, K: Clone + Ord + Debug, V: Clone> ValueIter<'a, K, V> {
+    pub(crate) fn new(root: &'a ABNode<K, V>, length: usize) -> Self {
+        ValueIter {
+            iter: Iter::new(root, length),
+        }
+    }
+}
+
+impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for ValueIter<'a, K, V> {
+    type Item = &'a V;
+
+    /// Yield the next key value reference, or `None` if exhausted.
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|(_, v)| v)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::constants::L_CAPACITY;

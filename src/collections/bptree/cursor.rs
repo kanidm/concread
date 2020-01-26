@@ -5,12 +5,13 @@
 // throughout the structure and how to handle that effectively
 
 use super::node::{ABNode, Node};
+use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
 
 // use super::branch::Branch;
-use super::iter::Iter;
+use super::iter::{Iter, KeyIter, ValueIter};
 use super::states::{
     BLInsertState, BLPruneState, BLRemoveState, BRInsertState, BRShrinkState, BRTrimState,
     CRInsertState, CRRemoveState, CRTrimState,
@@ -18,7 +19,7 @@ use super::states::{
 use super::states::{CRCloneState, CRPruneState};
 use std::iter::Extend;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct CursorRead<K, V>
 where
     K: Ord + Clone + Debug,
@@ -51,13 +52,27 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         rref.tree_density()
     }
 
-    fn search<'a>(&'a self, k: &'a K) -> Option<&'a V> {
+    fn search<'a, 'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
         // Search for and return if a value exists at key.
         let rref = self.get_root_ref();
         rref.get_ref(k)
+            // You know, I don't even want to talk about the poor life decisions
+            // that lead to this code existing.
+            .map(|v| unsafe {
+                let x = v as *const V;
+                &*x as &V
+            })
     }
 
-    fn contains_key(&self, k: &K) -> bool {
+    fn contains_key<'a, 'b, Q: ?Sized>(&'a self, k: &'b Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
         match self.search(k) {
             Some(_) => true,
             None => false,
@@ -68,12 +83,17 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         Iter::new(self.get_root_ref(), self.len())
     }
 
-    #[cfg(test)]
+    fn k_iter(&self) -> KeyIter<K, V> {
+        KeyIter::new(self.get_root_ref(), self.len())
+    }
+
+    fn v_iter(&self) -> ValueIter<K, V> {
+        ValueIter::new(self.get_root_ref(), self.len())
+    }
+
     fn verify(&self) -> bool {
-        if cfg!(test) {
-            let (l, _) = self.get_tree_density();
-            assert!(l == self.len());
-        };
+        let (l, _) = self.get_tree_density();
+        assert!(l == self.len());
         self.get_root_ref().verify()
     }
 }
@@ -270,7 +290,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
 
 impl<K: Clone + Ord + Debug, V: Clone> Extend<(K, V)> for CursorWrite<K, V> {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
-        iter.into_iter().for_each(move |(k, v)| {
+        iter.into_iter().for_each(|(k, v)| {
             let _ = self.insert(k, v);
         });
     }

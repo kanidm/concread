@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::fmt::{self, Debug, Error};
 use std::mem::MaybeUninit;
 use std::ptr;
@@ -117,7 +118,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         })
     }
 
-    #[cfg(test)]
     pub(crate) fn verify(&self) -> bool {
         match &self.inner {
             T::L(leaf) => leaf.verify(),
@@ -147,7 +147,11 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
-    pub(crate) fn get_ref(&self, k: &K) -> Option<&V> {
+    pub(crate) fn get_ref<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
         match &self.inner {
             T::L(leaf) => leaf.get_ref(k),
             T::B(branch) => branch.get_ref(k),
@@ -691,12 +695,16 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
     }
 
     // get a node containing some K - need to return our related idx.
-    pub(crate) fn locate_node(&self, k: &K) -> usize {
+    pub(crate) fn locate_node<Q: ?Sized>(&self, k: &Q) -> usize
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
         let r = {
             let (left, _) = self.key.split_at(self.count);
             let inited: &[K] =
                 unsafe { slice::from_raw_parts(left.as_ptr() as *const K, left.len()) };
-            inited.binary_search(&k)
+            slice_search_linear(inited, k)
         };
 
         // If the value is Ok(idx), then that means
@@ -1045,7 +1053,11 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         self.count
     }
 
-    pub(crate) fn get_ref(&self, k: &K) -> Option<&V> {
+    pub(crate) fn get_ref<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
         // Which node should hold this value?
         let idx = self.locate_node(k);
         unsafe { (*self.node[idx].as_ptr()).get_ref(k) }
@@ -1070,10 +1082,10 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         lcount
     }
 
-    #[cfg(test)]
     fn check_sorted(&self) -> bool {
         // check the pivots are sorted.
         if self.count == 0 {
+            #[cfg(test)]
             panic!();
             false
         } else {
@@ -1081,6 +1093,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             for work_idx in 1..self.count {
                 let rk: &K = unsafe { &*self.key[work_idx].as_ptr() };
                 if lk >= rk {
+                    #[cfg(test)]
                     panic!();
                     return false;
                 }
@@ -1091,7 +1104,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         }
     }
 
-    #[cfg(test)]
     fn check_descendents_valid(&self) -> bool {
         for work_idx in 0..self.count {
             // get left max and right min
@@ -1107,6 +1119,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 println!("left --> {:?}", lnode);
                 println!("right -> {:?}", rnode);
                 println!("prnt  -> {:?}", self);
+                #[cfg(test)]
                 panic!();
                 return false;
             }
@@ -1115,13 +1128,13 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         true
     }
 
-    #[cfg(test)]
     fn verify_children(&self) -> bool {
         // For each child node call verify on it.
         for work_idx in 0..self.count {
             let node = unsafe { &*self.node[work_idx].as_ptr() };
             if !node.verify() {
                 println!("Failed children");
+                #[cfg(test)]
                 panic!();
                 return false;
             }
@@ -1130,7 +1143,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         true
     }
 
-    #[cfg(test)]
     pub(crate) fn verify(&self) -> bool {
         self.check_sorted() && self.check_descendents_valid() && self.verify_children()
     }

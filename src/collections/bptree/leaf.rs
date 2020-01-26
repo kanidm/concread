@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::fmt::{self, Debug, Error};
 use std::mem::MaybeUninit;
 use std::ptr;
@@ -232,19 +233,29 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         unsafe { &*self.key[idx].as_ptr() }
     }
 
-    pub(crate) fn get_idx(&self, k: &K) -> Option<usize> {
+    pub(crate) fn get_idx<Q: ?Sized>(&self, k: &Q) -> Option<usize>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
         match {
             let (left, _) = self.key.split_at(self.count);
             let inited: &[K] =
                 unsafe { slice::from_raw_parts(left.as_ptr() as *const K, left.len()) };
-            inited.binary_search(&k)
+
+            slice_search_linear(inited, k)
+            // inited.binary_search(k)
         } {
             Ok(idx) => Some(idx),
             Err(_) => None,
         }
     }
 
-    pub(crate) fn get_ref(&self, k: &K) -> Option<&V> {
+    pub(crate) fn get_ref<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
         self.get_idx(k)
             .map(|idx| unsafe { &*self.value[idx].as_ptr() })
     }
@@ -274,7 +285,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         self.count
     }
 
-    #[cfg(test)]
     fn check_sorted(&self) -> bool {
         if self.count == 0 {
             true
@@ -284,6 +294,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
                 let rk: &K = unsafe { &*self.key[work_idx].as_ptr() };
                 if lk >= rk {
                     println!("{:?}", self);
+                    #[cfg(test)]
                     panic!();
                     return false;
                 }
@@ -294,7 +305,6 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn verify(&self) -> bool {
         self.check_sorted()
     }

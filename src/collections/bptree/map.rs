@@ -2,11 +2,13 @@
 
 use super::cursor::CursorReadOps;
 use super::cursor::{CursorRead, CursorWrite};
-use super::iter::Iter;
+use super::iter::{Iter, KeyIter, ValueIter};
 use super::node::{ABNode, Node};
 use parking_lot::{Mutex, MutexGuard};
+use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::iter::FromIterator;
+// use std::marker::PhantomData;
 
 /// A concurrently readable map based on a modified B+Tree structure.
 ///
@@ -58,6 +60,31 @@ where
     work: CursorWrite<K, V>,
     caller: &'a BptreeMap<K, V>,
     _guard: MutexGuard<'a, ()>,
+}
+
+enum SnapshotType<'a, K, V>
+where
+    K: Ord + Clone + Debug,
+    V: Clone,
+{
+    R(&'a CursorRead<K, V>),
+    W(&'a CursorWrite<K, V>),
+}
+
+/// A point-in-time snapshot of the tree from within a read OR write. This is
+/// useful for building other transactional types ontop of this structure, as
+/// you need a way to downcast both BptreeMapReadTxn or BptreeMapWriteTxn to
+/// a singular reader type for a number of get_inner() style patterns.
+///
+/// This snapshot IS safe within the read thread due to the nature of the
+/// implementation borrowing the inner tree to prevent mutations within the
+/// same thread while the read snapshot is open.
+pub struct BptreeMapReadSnapshot<'a, K, V>
+where
+    K: Ord + Clone + Debug,
+    V: Clone,
+{
+    work: SnapshotType<'a, K, V>,
 }
 
 impl<K: Clone + Ord + Debug, V: Clone> BptreeMap<K, V> {
@@ -128,12 +155,20 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
 
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
-    pub fn get(&'a self, k: &'a K) -> Option<&'a V> {
+    pub fn get<'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
         self.work.search(k)
     }
 
     /// Assert if a key exists in the tree.
-    pub fn contains_key(&self, k: &K) -> bool {
+    pub fn contains_key<'b, Q: ?Sized>(&'a self, k: &'b Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
         self.work.contains_key(k)
     }
 
@@ -152,6 +187,16 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     /// Iterator over `(&K, &V)` of the set
     pub fn iter(&self) -> Iter<K, V> {
         self.work.kv_iter()
+    }
+
+    /// Iterator over &K
+    pub fn values(&self) -> ValueIter<K, V> {
+        self.work.v_iter()
+    }
+
+    /// Iterator over &V
+    pub fn keys(&self) -> KeyIter<K, V> {
+        self.work.k_iter()
     }
 
     // (adv) keys
@@ -238,7 +283,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     /// pressure is high.
     pub fn compact(&mut self) -> bool {
         let (l, m) = self.work.tree_density();
-        if (m / l) > 1 {
+        if l > 0 && (m / l) > 1 {
             self.compact_force();
             true
         } else {
@@ -269,6 +314,15 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
         self.work.verify()
     }
 
+    /// Create a read-snapshot of the current tree. This does NOT guarantee the tree may
+    /// not be mutated during the read, so you MUST guarantee that no functions of the
+    /// write txn are called while this snapshot is active.
+    pub fn to_snapshot(&'a self) -> BptreeMapReadSnapshot<K, V> {
+        BptreeMapReadSnapshot {
+            work: SnapshotType::W(&self.work),
+        }
+    }
+
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to percieve these changes.
     ///
@@ -280,19 +334,27 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
 
 impl<'a, K: Clone + Ord + Debug, V: Clone> Extend<(K, V)> for BptreeMapWriteTxn<'a, K, V> {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
-        self.work.extend(iter)
+        self.work.extend(iter);
     }
 }
 
 impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapReadTxn<K, V> {
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
-    pub fn get(&'a self, k: &'a K) -> Option<&'a V> {
+    pub fn get<Q: ?Sized>(&'a self, k: &'a Q) -> Option<&'a V>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
         self.work.search(k)
     }
 
     /// Assert if a key exists in the tree.
-    pub fn contains_key(&self, k: &K) -> bool {
+    pub fn contains_key<'b, Q: ?Sized>(&'a self, k: &'b Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
         self.work.contains_key(k)
     }
 
@@ -313,13 +375,94 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapReadTxn<K, V> {
         self.work.kv_iter()
     }
 
-    // (adv) keys
+    /// Iterator over &K
+    pub fn values(&self) -> ValueIter<K, V> {
+        self.work.v_iter()
+    }
 
-    // (adv) values
+    /// Iterator over &V
+    pub fn keys(&self) -> KeyIter<K, V> {
+        self.work.k_iter()
+    }
+
+    /// Create a read-snapshot of the current tree.
+    /// As this is the read variant, it IS safe, and guaranteed the tree will not change.
+    pub fn to_snapshot(&'a self) -> BptreeMapReadSnapshot<K, V> {
+        BptreeMapReadSnapshot {
+            work: SnapshotType::R(&self.work)
+            // pin: PhantomData,
+        }
+    }
 
     #[cfg(test)]
     pub(crate) fn verify(&self) -> bool {
         self.work.verify()
+    }
+}
+
+impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapReadSnapshot<'a, K, V> {
+    /// Retrieve a value from the tree. If the value exists, a reference is returned
+    /// as `Some(&V)`, otherwise if not present `None` is returned.
+    pub fn get<Q: ?Sized>(&'a self, k: &'a Q) -> Option<&'a V>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
+        match self.work {
+            SnapshotType::R(work) => work.search(k),
+            SnapshotType::W(work) => work.search(k),
+        }
+    }
+
+    /// Assert if a key exists in the tree.
+    pub fn contains_key<'b, Q: ?Sized>(&'a self, k: &'b Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
+        match self.work {
+            SnapshotType::R(work) => work.contains_key(k),
+            SnapshotType::W(work) => work.contains_key(k),
+        }
+    }
+
+    /// Returns the current number of k:v pairs in the tree
+    pub fn len(&self) -> usize {
+        match self.work {
+            SnapshotType::R(work) => work.len(),
+            SnapshotType::W(work) => work.len(),
+        }
+    }
+
+    /// Determine if the set is currently empty
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    // (adv) range
+
+    /// Iterator over `(&K, &V)` of the set
+    pub fn iter(&self) -> Iter<K, V> {
+        match self.work {
+            SnapshotType::R(work) => work.kv_iter(),
+            SnapshotType::W(work) => work.kv_iter(),
+        }
+    }
+
+    /// Iterator over &K
+    pub fn values(&self) -> ValueIter<K, V> {
+        match self.work {
+            SnapshotType::R(work) => work.v_iter(),
+            SnapshotType::W(work) => work.v_iter(),
+        }
+    }
+
+    /// Iterator over &V
+    pub fn keys(&self) -> KeyIter<K, V> {
+        match self.work {
+            SnapshotType::R(work) => work.k_iter(),
+            SnapshotType::W(work) => work.k_iter(),
+        }
     }
 }
 

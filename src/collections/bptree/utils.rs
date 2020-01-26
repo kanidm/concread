@@ -1,3 +1,5 @@
+use std::borrow::Borrow;
+use std::cmp::Ordering;
 use std::mem::MaybeUninit;
 use std::ptr;
 
@@ -54,4 +56,19 @@ pub(crate) unsafe fn slice_slide_and_drop<T>(
     }
     // now move everything down.
     ptr::copy(slice.as_ptr().add(idx + 1), slice.as_mut_ptr(), count);
+}
+
+pub(crate) fn slice_search_linear<K, Q: ?Sized>(slice: &[K], k: &Q) -> Result<usize, usize>
+where
+    K: Borrow<Q>,
+    Q: Ord,
+{
+    for (idx, nk) in slice.iter().enumerate() {
+        match k.cmp(nk.borrow()) {
+            Ordering::Greater => {}
+            Ordering::Equal => return Ok(idx),
+            Ordering::Less => return Err(idx),
+        }
+    }
+    Err(slice.len())
 }
