@@ -229,6 +229,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         // Remove all the values less than from the top of the tree.
         loop {
             let result = clone_and_split_off_trim_lt(&mut self.root, self.txid, k);
+            // println!("clone_and_split_off_trim_lt -> {:?}", result);
             match result {
                 CRTrimState::Complete => break,
                 CRTrimState::Clone(mut nroot) => {
@@ -246,6 +247,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
 
         // Now work up the tree and clean up the remaining path inbetween
         let result = clone_and_split_off_prune_lt(&mut self.root, self.txid, k);
+        // println!("clone_and_split_off_prune_lt -> {:?}", result);
         match result {
             CRPruneState::OkNoClone => {}
             CRPruneState::OkClone(mut nroot) => {
@@ -353,12 +355,12 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
             // No clone required.
             // simply do the insert.
             let mref = Arc::get_mut(node).unwrap();
-            match mref.as_mut_leaf().insert_or_update(k, v) {
+            match mref.as_mut_leaf().insert_or_update(txid, k, v) {
                 BLInsertState::Ok(res) => CRInsertState::NoClone(res),
-                BLInsertState::Split(sk, sv) => {
+                BLInsertState::Split(rnode) => {
                     // We split, but left is already part of the txn group, so lets
                     // just return what's new.
-                    let rnode = Node::new_leaf_ins(txid, sk, sv);
+                    // let rnode = Node::new_leaf_ins(txid, sk, sv);
                     CRInsertState::Split(rnode)
                 }
             }
@@ -367,10 +369,10 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
             let mut cnode = node.req_clone(txid);
             let mref = Arc::get_mut(&mut cnode).unwrap();
             // insert to the new node.
-            match mref.as_mut_leaf().insert_or_update(k, v) {
+            match mref.as_mut_leaf().insert_or_update(txid, k, v) {
                 BLInsertState::Ok(res) => CRInsertState::Clone(res, cnode),
-                BLInsertState::Split(sk, sv) => {
-                    let rnode = Node::new_leaf_ins(txid, sk, sv);
+                BLInsertState::Split(rnode) => {
+                    // let rnode = Node::new_leaf_ins(txid, sk, sv);
                     CRInsertState::CloneSplit(cnode, rnode)
                 }
             }
@@ -724,8 +726,18 @@ fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
             let anode_idx = nmref.locate_node(&k);
             let anode = nmref.get_mut_idx(anode_idx);
             let result = clone_and_split_off_prune_lt(anode, txid, k);
+            // println!("== clone_and_split_off_prune_lt --> {:?}", result);
             match result {
-                CRPruneState::OkNoClone => CRPruneState::OkNoClone,
+                CRPruneState::OkNoClone => {
+                    match nmref.prune(anode_idx) {
+                        Ok(_) => {
+                            // Okay, the branch remains valid, return that we are okay, and
+                            // no clone is needed.
+                            CRPruneState::OkNoClone
+                        }
+                        Err(_) => CRPruneState::Prune,
+                    }
+                }
                 CRPruneState::OkClone(clone) => {
                     // Our child cloned, so replace it.
                     nmref.replace_by_idx(anode_idx, clone);
@@ -736,9 +748,7 @@ fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
                             // no clone is needed.
                             CRPruneState::OkNoClone
                         }
-                        Err(_) => {
-                            unimplemented!();
-                        }
+                        Err(_) => CRPruneState::Prune,
                     }
                 }
                 CRPruneState::Prune => {
@@ -771,6 +781,7 @@ fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
             let anode_idx = nmref.locate_node(&k);
             let anode = nmref.get_mut_idx(anode_idx);
             let result = clone_and_split_off_prune_lt(anode, txid, k);
+            // println!("!= clone_and_split_off_prune_lt --> {:?}", result);
             match result {
                 CRPruneState::OkNoClone => {
                     // I think this is an impossible state - how can a child be in the
@@ -812,7 +823,7 @@ fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::constants::{BK_CAPACITY, BV_CAPACITY, L_CAPACITY};
+    use super::super::constants::{BK_CAPACITY, BV_CAPACITY, CAPACITY, L_CAPACITY};
     use super::super::node::{check_drop_count, ABNode, Node};
     use super::super::states::BRInsertState;
     use super::{CursorReadOps, CursorWrite};
@@ -825,7 +836,7 @@ mod tests {
         let mut node = Arc::new(Node::new_leaf(0));
         {
             let nmut = Arc::get_mut(&mut node).unwrap().as_mut_leaf();
-            nmut.insert_or_update(v, v);
+            nmut.insert_or_update(0, v, v);
         }
         node
     }
@@ -837,7 +848,7 @@ mod tests {
             let nmut = Arc::get_mut(&mut node).unwrap().as_mut_leaf();
             for idx in 0..L_CAPACITY {
                 let v = vbase + idx;
-                nmut.insert_or_update(v, v);
+                nmut.insert_or_update(0, v, v);
             }
         }
         node
@@ -1932,6 +1943,31 @@ mod tests {
         check_drop_count();
     }
 
+    #[test]
+    fn test_bptree_cursor_remove_stress_7() {
+        // Insert random
+        let mut rng = rand::thread_rng();
+        let mut ins: Vec<usize> = (1..10240).collect();
+
+        let mut wcurs = CursorWrite::new(Node::new_ableaf(0), 0);
+        wcurs.extend(ins.iter().map(|v| (*v, *v)));
+
+        // ins.shuffle(&mut rng);
+
+        let mut compacts = 0;
+
+        for v in ins.into_iter() {
+            let r = wcurs.remove(&v);
+            assert!(r == Some(v));
+            assert!(wcurs.verify());
+            let (l, m) = wcurs.tree_density();
+            if l > 0 && (m / l) > 1 {
+                compacts += 1;
+            }
+        }
+        println!("compacts {:?}", compacts);
+    }
+
     // This is for setting up trees that are specialised for the split off tests.
     // This is because we can exercise a LOT of complex edge cases by bracketing
     // within this tree. It also works on both node sizes.
@@ -1951,8 +1987,8 @@ mod tests {
     fn create_split_off_leaf(base: usize) -> ABNode<usize, usize> {
         let mut l = Arc::new(Node::new_leaf(0));
         let lref = Arc::get_mut(&mut l).unwrap().as_mut_leaf();
-        lref.insert_or_update(base + 1, base + 1);
-        lref.insert_or_update(base + 2, base + 2);
+        lref.insert_or_update(0, base + 1, base + 1);
+        lref.insert_or_update(0, base + 2, base + 2);
         l
     }
 
@@ -2062,8 +2098,9 @@ mod tests {
     }
 
     fn run_split_off_test(v: usize, exp: usize) {
-        // println!("RUNNING -> {:?}", v);
+        println!("RUNNING -> {:?}", v);
         let tree = create_split_off_tree();
+        println!("START -> {:?}", tree);
 
         let mut wcurs = CursorWrite::new(tree, 32);
         // 0 is min, and not present, will cause no change.
@@ -2081,6 +2118,10 @@ mod tests {
 
     #[test]
     fn test_bptree_cursor_split_off_lt_clone_stress() {
+        if CAPACITY < 10 {
+            // Can't proceed as the "fake" tree we make is invalid.
+            return;
+        }
         let outer: [usize; 4] = [0, 100, 200, 300];
         let inner: [usize; 4] = [0, 10, 20, 30];
         for i in outer.iter() {
@@ -2095,6 +2136,10 @@ mod tests {
 
     #[test]
     fn test_bptree_cursor_split_off_lt_stress() {
+        if CAPACITY < 10 {
+            // Can't proceed as the "fake" tree we make is invalid.
+            return;
+        }
         let outer: [usize; 4] = [0, 100, 200, 300];
         let inner: [usize; 4] = [0, 10, 20, 30];
         for i in outer.iter() {
@@ -2108,8 +2153,24 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree_cursor_split_off_lt_yy() {
-        run_split_off_test(333, 32);
+    fn test_bptree_cursor_split_off_lt_random_stress() {
+        let data: Vec<isize> = (0..1024).collect();
+
+        for v in data.iter() {
+            let mut wcurs = CursorWrite::new(Node::new_ableaf(0), 0);
+            wcurs.extend(data.iter().map(|v| (v, v)));
+
+            if v > &0 {
+                assert!(wcurs.contains_key(&(v - 1)));
+            }
+
+            wcurs.split_off_lt(&v);
+            assert!(!wcurs.contains_key(&(v - 1)));
+            assert!(wcurs.verify());
+            let contents: Vec<_> = wcurs.k_iter().collect();
+            assert!(contents[0] == &v);
+            assert!(contents.len() as isize == (1024 - v));
+        }
     }
 
     /*

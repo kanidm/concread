@@ -9,7 +9,8 @@ where
 {
     Ok(Option<V>),
     // Return's a K,V that should be put into a new leaf.
-    Split(K, V),
+    // Split(K, V),
+    Split(ABNode<K, V>),
 }
 
 #[derive(Debug)]

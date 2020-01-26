@@ -95,7 +95,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         let mut node = Arc::new(Node::new_leaf(txid));
         {
             let nmut = Arc::get_mut(&mut node).unwrap().as_mut_leaf();
-            nmut.insert_or_update(k, v);
+            nmut.insert_or_update(txid, k, v);
         }
         node
     }
@@ -466,23 +466,10 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             let lmut = Arc::get_mut(left).unwrap().as_mut_leaf();
             let rmut = Arc::get_mut(right).unwrap().as_mut_leaf();
 
-            if lmut.len() == L_CAPACITY {
-                lmut.take_from_l_to_r(rmut);
-                self.rekey_by_idx(ridx);
-                BRShrinkState::Balanced
-            } else if rmut.len() == L_CAPACITY {
-                lmut.take_from_r_to_l(rmut);
-                self.rekey_by_idx(ridx);
-                BRShrinkState::Balanced
-            } else {
-                // merge
+            if lmut.len() + rmut.len() <= L_CAPACITY {
                 lmut.merge(rmut);
-                // drop our references
-                // mem::drop(lmut)
-                // mem::drop(rmut)
                 // remove the right node from parent
                 let _ = self.remove_by_idx(ridx);
-                // What is our capacity?
                 if self.count == 0 {
                     // We now need to be merged across as we only contain a single
                     // value now.
@@ -491,7 +478,50 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                     BRShrinkState::Merge
                     // We are complete!
                 }
+            } else {
+                if rmut.len() >= (L_CAPACITY / 2) + 1 {
+                    lmut.take_from_r_to_l(rmut);
+                    self.rekey_by_idx(ridx);
+                    BRShrinkState::Balanced
+                } else if lmut.len() >= (L_CAPACITY / 2) + 1 {
+                    lmut.take_from_l_to_r(rmut);
+                    self.rekey_by_idx(ridx);
+                    BRShrinkState::Balanced
+                } else {
+                    // Do nothing
+                    BRShrinkState::Balanced
+                }
             }
+        /*
+        // This original version merges leaves only when one falls to one item
+        // remaining, and only borrows when a neighbor is max.
+        if lmut.len() == L_CAPACITY {
+            lmut.take_from_l_to_r(rmut);
+            self.rekey_by_idx(ridx);
+            BRShrinkState::Balanced
+        } else if rmut.len() == L_CAPACITY {
+            lmut.take_from_r_to_l(rmut);
+            self.rekey_by_idx(ridx);
+            BRShrinkState::Balanced
+        } else {
+            // merge
+            lmut.merge(rmut);
+            // drop our references
+            // mem::drop(lmut)
+            // mem::drop(rmut)
+            // remove the right node from parent
+            let _ = self.remove_by_idx(ridx);
+            // What is our capacity?
+            if self.count == 0 {
+                // We now need to be merged across as we only contain a single
+                // value now.
+                BRShrinkState::Shrink
+            } else {
+                BRShrinkState::Merge
+                // We are complete!
+            }
+        }
+        */
         } else {
             // right or left is now in a "corrupt" state with a single value that we need to relocate
             // to left - or we need to borrow from left and fix it!
@@ -532,17 +562,16 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         //    [   k1, k2, k3, k4, k5, k6   ]
         //    [ v1, v2, v3, v4, v5, v6, v7 ]
         //
+        //
         // * anode_idx is maximum (self.count - 1), so we also now are empty.
         // * anything else, so we can shift down.
 
         // This is subtely different to prune, in that we handle branch rebalancing.
 
         // First, clean up any excess we hold.
-        self.prune(anode_idx).expect("Invalid branch state!");
-
-        if self.count == 0 {
-            unreachable!("Corrupt tree?");
-        }
+        // We return if the prune removes all but one node. It's not possible for it to
+        // remove everything.
+        self.prune(anode_idx)?;
 
         // We now can assert that 0 is the node we are about to act upon.
         let ridx = self.clone_sibling_idx(txid, 0);
@@ -623,6 +652,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         // k/v sets.
         //
         debug_assert!(idx <= self.count);
+        //println!("About to prune -> {:?} from {:?}", idx, self);
 
         // If the idx is 0, we do not need to act.
         if idx == 0 {
@@ -643,6 +673,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             }
             self.count = 0;
             // This node is now invalid, but has a single remaining pointer in position 0;
+            // println!("prune state -> {:?}", self);
             Err(())
         } else {
             // We still have enough to be a valid node, move on
@@ -651,6 +682,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 slice_slide_and_drop(&mut self.key, idx - 1, self.count);
                 slice_slide_and_drop(&mut self.node, idx - 1, self.count + 1);
             }
+            // println!("prune state -> {:?}", self);
             Ok(())
         }
     }
@@ -1085,9 +1117,13 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
     fn check_sorted(&self) -> bool {
         // check the pivots are sorted.
         if self.count == 0 {
+            /*
+            println!("{:?}", self);
             #[cfg(test)]
             panic!();
             false
+            */
+            true
         } else {
             let mut lk: &K = unsafe { &*self.key[0].as_ptr() };
             for work_idx in 1..self.count {
@@ -1262,13 +1298,13 @@ mod tests {
         // add some k, vs to each.
         {
             let lmut = Arc::get_mut(&mut left).unwrap().as_mut_leaf();
-            lmut.insert_or_update(0, 0);
-            lmut.insert_or_update(1, 1);
+            lmut.insert_or_update(0, 0, 0);
+            lmut.insert_or_update(0, 1, 1);
         }
         {
             let rmut = Arc::get_mut(&mut right).unwrap().as_mut_leaf();
-            rmut.insert_or_update(5, 5);
-            rmut.insert_or_update(6, 6);
+            rmut.insert_or_update(0, 5, 5);
+            rmut.insert_or_update(0, 6, 6);
         }
 
         let branch = Branch::new(left, right);
@@ -1281,9 +1317,9 @@ mod tests {
         let mut right = Arc::new(Node::new_leaf(0));
         {
             let lmut = Arc::get_mut(&mut left).unwrap().as_mut_leaf();
-            lmut.insert_or_update(1, 1);
+            lmut.insert_or_update(0, 1, 1);
             let rmut = Arc::get_mut(&mut right).unwrap().as_mut_leaf();
-            rmut.insert_or_update(3, 3);
+            rmut.insert_or_update(0, 3, 3);
         }
         Branch::new(left, right)
     }
@@ -1306,7 +1342,7 @@ mod tests {
         let mut node = Arc::new(Node::new_leaf(0));
         {
             let nmut = Arc::get_mut(&mut node).unwrap().as_mut_leaf();
-            nmut.insert_or_update(v, v);
+            nmut.insert_or_update(0, v, v);
         }
         node
     }

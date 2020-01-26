@@ -1,5 +1,9 @@
 // This should be 8 or 16 to represent how many 64 bit data we want
 // to contain (assuming a 64 bit type).
+//
+// Some low-quality rough testing has shown 16 is about twice as fast as
+// 8 here, and about 20% faster than 10. So the wider nodes is probably the
+// way to go.
 pub const CAPACITY: usize = 16;
 
 // --> LEAVES

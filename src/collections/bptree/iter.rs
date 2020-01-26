@@ -242,7 +242,7 @@ mod tests {
             let nmut = Arc::get_mut(&mut node).unwrap().as_mut_leaf();
             for idx in 0..L_CAPACITY {
                 let v = vbase + idx;
-                nmut.insert_or_update(v, v);
+                nmut.insert_or_update(0, v, v);
             }
         }
         node

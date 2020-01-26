@@ -64,7 +64,8 @@ where
     Q: Ord,
 {
     for (idx, nk) in slice.iter().enumerate() {
-        match k.cmp(nk.borrow()) {
+        let r = k.cmp(nk.borrow());
+        match r {
             Ordering::Greater => {}
             Ordering::Equal => return Ok(idx),
             Ordering::Less => return Err(idx),

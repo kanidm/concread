@@ -5,6 +5,7 @@ use std::ptr;
 use std::slice;
 
 use super::constants::{L_CAPACITY, L_MAX_IDX};
+use super::node::Node;
 use super::states::{BLInsertState, BLPruneState, BLRemoveState};
 use super::utils::*;
 
@@ -27,7 +28,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         }
     }
 
-    pub(crate) fn insert_or_update(&mut self, k: K, v: V) -> BLInsertState<K, V> {
+    pub(crate) fn insert_or_update(&mut self, txid: usize, k: K, v: V) -> BLInsertState<K, V> {
         // Update the node, and split if required.
         // There are three possible paths
         let r = {
@@ -46,9 +47,23 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
             Err(idx) => {
                 if self.count == L_CAPACITY {
                     // * The node is full, so we must indicate as such.
+                    /*
+                    // okay, so we have L_CAPACITY + 1 here, so we want to have L_CAPACITY/2 + 1
+                    // remain on left.
+                    if idx >= self.count {
+                        // new value is going to be new right node max.
+                        // So we need L_CAPACITY / 2 - 1 to be moved.
+
+                    } else {
+                        // We need L_CAPACITY to move,
+                        // new value would stay in left.
+                    }
+                    */
+
                     if idx >= self.count {
                         // The requested insert is larger than our max key.
-                        BLInsertState::Split(k, v)
+                        let rnode = Node::new_leaf_ins(txid, k, v);
+                        BLInsertState::Split(rnode)
                     } else {
                         // The requested insert in within our range, return current
                         // max.
@@ -58,7 +73,8 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
                             slice_insert(&mut self.key, MaybeUninit::new(k), idx);
                             slice_insert(&mut self.value, MaybeUninit::new(v), idx);
                         }
-                        BLInsertState::Split(pk, pv)
+                        let rnode = Node::new_leaf_ins(txid, pk, pv);
+                        BLInsertState::Split(rnode)
                     }
                 } else {
                     // We have space, insert at the correct location after shifting.
@@ -103,6 +119,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
     }
 
     pub(crate) fn remove_lt(&mut self, k: &K) -> BLPruneState {
+        // println!("Start remove_lt on {:?}", self);
         // Remove everything less than or equal to a value.
         if self.count == 0 {
             return BLPruneState::Prune;
@@ -113,7 +130,8 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
             let (left, _) = self.key.split_at(self.count);
             let inited: &[K] =
                 unsafe { slice::from_raw_parts(left.as_ptr() as *const K, left.len()) };
-            inited.binary_search(&k)
+            // inited.binary_search(&k)
+            slice_search_linear(inited, k)
         };
 
         match r {
@@ -377,7 +395,7 @@ mod tests {
         let mut leaf: Leaf<usize, usize> = Leaf::new();
 
         for kv in 0..L_CAPACITY {
-            let r = leaf.insert_or_update(kv, kv);
+            let r = leaf.insert_or_update(0, kv, kv);
             match r {
                 BLInsertState::Ok(None) => {}
                 _ => panic!(),
@@ -394,7 +412,7 @@ mod tests {
         let mut leaf: Leaf<usize, usize> = Leaf::new();
 
         for kv in 0..L_CAPACITY {
-            let r = leaf.insert_or_update(kv, kv);
+            let r = leaf.insert_or_update(0, kv, kv);
             match r {
                 BLInsertState::Ok(None) => {}
                 _ => panic!(),
@@ -404,7 +422,7 @@ mod tests {
         }
 
         for kv in 0..L_CAPACITY {
-            let r = leaf.insert_or_update(kv, kv + 1);
+            let r = leaf.insert_or_update(0, kv, kv + 1);
             match r {
                 // Check for some kv, that was the former value.
                 BLInsertState::Ok(Some(_kv)) => {}
@@ -426,7 +444,7 @@ mod tests {
 
         for idx in 0..L_CAPACITY {
             let kv = kvs[idx];
-            let r = leaf.insert_or_update(kv, kv);
+            let r = leaf.insert_or_update(0, kv, kv);
             match r {
                 BLInsertState::Ok(None) => {}
                 _ => panic!(),
@@ -446,7 +464,7 @@ mod tests {
 
         for idx in 0..L_CAPACITY {
             let kv = kvs[idx];
-            let r = leaf.insert_or_update(kv, kv);
+            let r = leaf.insert_or_update(0, kv, kv);
             match r {
                 BLInsertState::Ok(None) => {}
                 _ => panic!(),
@@ -458,7 +476,7 @@ mod tests {
 
         for idx in 0..L_CAPACITY {
             let kv = kvs[idx];
-            let r = leaf.insert_or_update(kv, kv + 1);
+            let r = leaf.insert_or_update(0, kv, kv + 1);
             match r {
                 BLInsertState::Ok(Some(_kv)) => {}
                 _ => panic!(),
@@ -479,7 +497,7 @@ mod tests {
 
         for idx in 0..L_CAPACITY {
             let kv = kvs[idx];
-            let r = leaf.insert_or_update(kv, kv);
+            let r = leaf.insert_or_update(0, kv, kv);
             match r {
                 BLInsertState::Ok(None) => {}
                 _ => panic!(),
@@ -499,7 +517,7 @@ mod tests {
 
         for idx in 0..L_CAPACITY {
             let kv = kvs[idx];
-            let r = leaf.insert_or_update(kv, kv);
+            let r = leaf.insert_or_update(0, kv, kv);
             match r {
                 BLInsertState::Ok(None) => {}
                 _ => panic!(),
@@ -517,25 +535,27 @@ mod tests {
         let high = L_CAPACITY + 2;
         // First we insert from 1 to capacity + 1.
         for kv in 1..(L_CAPACITY + 1) {
-            let r = leaf.insert_or_update(kv, kv);
+            let r = leaf.insert_or_update(0, kv, kv);
             match r {
                 BLInsertState::Ok(None) => {}
                 _ => panic!(),
             }
         }
         // Then we insert capacity + 2, and should get that back.
-        let r_over = leaf.insert_or_update(high, high);
+        let r_over = leaf.insert_or_update(0, high, high);
         match r_over {
-            BLInsertState::Split(high, _) => assert!(L_CAPACITY + 2 == high),
+            BLInsertState::Split(_) => {}
             _ => panic!(),
         }
         // Then we insert 0, and we should get capacity + 1 back
-        let r_under = leaf.insert_or_update(0, 0);
+        /*
+        let r_under = leaf.insert_or_update(0, 0, 0);
         match r_under {
-            BLInsertState::Split(high, _) => assert!(L_CAPACITY == high),
+            BLInsertState::Split(_) => assert!(L_CAPACITY == high),
             _ => panic!(),
         }
         assert!(leaf.len() == L_CAPACITY);
+        */
     }
 
     // remove in order
@@ -543,7 +563,7 @@ mod tests {
     fn test_bptree_leaf_remove_order() {
         let mut leaf: Leaf<usize, usize> = Leaf::new();
         for kv in 0..L_CAPACITY {
-            let _ = leaf.insert_or_update(kv, kv);
+            let _ = leaf.insert_or_update(0, kv, kv);
         }
         // Remove all but one!
         for kv in 0..(L_CAPACITY - 1) {
@@ -581,7 +601,7 @@ mod tests {
     fn test_bptree_leaf_remove_out_of_order() {
         let mut leaf: Leaf<usize, usize> = Leaf::new();
         for kv in 0..L_CAPACITY {
-            let _ = leaf.insert_or_update(kv, kv);
+            let _ = leaf.insert_or_update(0, kv, kv);
         }
         // Remove all but one!
         for kv in (L_CAPACITY / 2)..(L_CAPACITY - 1) {
@@ -608,29 +628,29 @@ mod tests {
         // No op
         let mut leaf1: Leaf<usize, usize> = Leaf::new();
         for kv in 0..L_CAPACITY {
-            let _ = leaf1.insert_or_update(kv + 10, kv);
+            let _ = leaf1.insert_or_update(0, kv + 10, kv);
         }
 
         leaf1.remove_lt(&5);
         // Removes all values
         let mut leaf2: Leaf<usize, usize> = Leaf::new();
         for kv in 0..L_CAPACITY {
-            let _ = leaf2.insert_or_update(kv + 10, kv);
+            let _ = leaf2.insert_or_update(0, kv + 10, kv);
         }
 
         leaf2.remove_lt(&50);
         // Removes from middle.
         let mut leaf3: Leaf<usize, usize> = Leaf::new();
         for kv in 0..L_CAPACITY {
-            let _ = leaf3.insert_or_update(kv + 10, kv);
+            let _ = leaf3.insert_or_update(0, kv + 10, kv);
         }
 
         leaf3.remove_lt(&((L_CAPACITY / 2) + 10));
 
         // Remove less then where not in leaf.
         let mut leaf4: Leaf<usize, usize> = Leaf::new();
-        let _ = leaf4.insert_or_update(5, 5);
-        let _ = leaf4.insert_or_update(15, 15);
+        let _ = leaf4.insert_or_update(0, 5, 5);
+        let _ = leaf4.insert_or_update(0, 15, 15);
 
         leaf4.remove_lt(&5);
         assert!(leaf4.len() == 2);
@@ -639,8 +659,8 @@ mod tests {
         assert!(leaf4.len() == 1);
 
         let mut leaf5: Leaf<usize, usize> = Leaf::new();
-        let _ = leaf5.insert_or_update(5, 5);
-        let _ = leaf5.insert_or_update(15, 15);
+        let _ = leaf5.insert_or_update(0, 5, 5);
+        let _ = leaf5.insert_or_update(0, 15, 15);
 
         leaf5.remove_lt(&16);
         assert!(leaf5.len() == 0);
