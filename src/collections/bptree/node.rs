@@ -32,7 +32,7 @@ fn alloc_nid() -> usize {
 #[cfg(test)]
 fn release_nid(nid: usize) {
     let r = ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
-    assert!(r == true);
+    // assert!(r == true);
 }
 
 pub(crate) struct Branch<K, V>
@@ -233,7 +233,145 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         new
     }
 
-    // Add a new pivot + node.
+    // This is similar to add_node, but handles the case we split left instead. It changes
+    // the mathematics of the operation quite a bit!
+    pub(crate) fn add_left_node(
+        &mut self,
+        node: ABNode<K, V>,
+        sibidx: usize,
+    ) -> BRInsertState<K, V> {
+        // println!("branch -> {:?}", self);
+        // println!("adding -> {:?}", node);
+        // println!("idx -> {:?}", sibidx);
+
+        if self.count == BK_CAPACITY {
+            if sibidx == self.count {
+                // If sibidx == self.count, then we must be going into max - 1.
+                //    [   k1, k2, k3, k4, k5, k6   ]
+                //    [ v1, v2, v3, v4, v5, v6, v7 ]
+                //                            ^ ^-- sibidx
+                //                             \---- where left should go
+                //
+                //    [   k1, k2, k3, k4, k5, xx   ]
+                //    [ v1, v2, v3, v4, v5, v6, xx ]
+                //
+                //    [   k1, k2, k3, k4, k5, xx   ]    [   k6   ]
+                //    [ v1, v2, v3, v4, v5, v6, xx ] -> [ ln, v7 ]
+                //
+                // So in this case we drop k6, and return a split.
+
+                let max =
+                    unsafe { ptr::read(self.node.get_unchecked(BV_CAPACITY - 1)).assume_init() };
+                let _kdrop =
+                    unsafe { ptr::read(self.key.get_unchecked(BK_CAPACITY - 1)).assume_init() };
+                self.count -= 1;
+                BRInsertState::Split(node, max)
+            } else if sibidx == (self.count - 1) {
+                // If sibidx == (self.count - 1), then we must be going into max - 2
+                //    [   k1, k2, k3, k4, k5, k6   ]
+                //    [ v1, v2, v3, v4, v5, v6, v7 ]
+                //                         ^ ^-- sibidx
+                //                          \---- where left should go
+                //
+                //    [   k1, k2, k3, k4, dd, xx   ]
+                //    [ v1, v2, v3, v4, v5, xx, xx ]
+                //
+                //
+                // This means that we need to return v6,v7 in a split, and
+                // just append node after v5.
+                let maxn1 =
+                    unsafe { ptr::read(self.node.get_unchecked(BV_CAPACITY - 2)).assume_init() };
+                let max =
+                    unsafe { ptr::read(self.node.get_unchecked(BV_CAPACITY - 1)).assume_init() };
+                let _kdrop =
+                    unsafe { ptr::read(self.key.get_unchecked(BK_CAPACITY - 1)).assume_init() };
+                let _kdrop =
+                    unsafe { ptr::read(self.key.get_unchecked(BK_CAPACITY - 2)).assume_init() };
+                self.count = self.count - 2;
+                //    [   k1, k2, k3, k4, dd, xx   ]    [   k6   ]
+                //    [ v1, v2, v3, v4, v5, xx, xx ] -> [ v6, v7 ]
+                let k: K = node.min().clone();
+                unsafe {
+                    slice_insert(&mut self.key, MaybeUninit::new(k), sibidx - 1);
+                    slice_insert(&mut self.node, MaybeUninit::new(node), sibidx);
+                }
+                self.count += 1;
+                //
+                //    [   k1, k2, k3, k4, nk, xx   ]    [   k6   ]
+                //    [ v1, v2, v3, v4, v5, ln, xx ] -> [ v6, v7 ]
+
+                BRInsertState::Split(maxn1, max)
+            } else {
+                // All other cases;
+                //    [   k1, k2, k3, k4, k5, k6   ]
+                //    [ v1, v2, v3, v4, v5, v6, v7 ]
+                //                 ^ ^-- sibidx
+                //                  \---- where left should go
+                //
+                //    [   k1, k2, k3, k4, dd, xx   ]
+                //    [ v1, v2, v3, v4, v5, xx, xx ]
+                //
+                //    [   k1, k2, k3, nk, k4, dd   ]    [   k6   ]
+                //    [ v1, v2, v3, ln, v4, v5, xx ] -> [ v6, v7 ]
+                //
+                // This means that we need to return v6,v7 in a split,, drop k5,
+                // then insert
+
+                // Setup the nodes we intend to split away.
+                let maxn1 =
+                    unsafe { ptr::read(self.node.get_unchecked(BV_CAPACITY - 2)).assume_init() };
+                let max =
+                    unsafe { ptr::read(self.node.get_unchecked(BV_CAPACITY - 1)).assume_init() };
+                let _kdrop =
+                    unsafe { ptr::read(self.key.get_unchecked(BK_CAPACITY - 1)).assume_init() };
+                let _kdrop =
+                    unsafe { ptr::read(self.key.get_unchecked(BK_CAPACITY - 2)).assume_init() };
+                self.count = self.count - 2;
+
+                // println!("pre-fixup -> {:?}", self);
+
+                let nref = self.get_idx(sibidx);
+                let nkey = (*nref.min()).clone();
+
+                unsafe {
+                    slice_insert(&mut self.node, MaybeUninit::new(node), sibidx);
+                    slice_insert(&mut self.key, MaybeUninit::new(nkey), sibidx);
+                }
+
+                self.count += 1;
+                // println!("post fixup -> {:?}", self);
+
+                BRInsertState::Split(maxn1, max)
+            }
+        } else {
+            // We have space, so just put it in!
+            //    [   k1, k2, k3, k4, xx, xx   ]
+            //    [ v1, v2, v3, v4, v5, xx, xx ]
+            //                 ^ ^-- sibidx
+            //                  \---- where left should go
+            //
+            //    [   k1, k2, k3, k4, xx, xx   ]
+            //    [ v1, v2, v3, ln, v4, v5, xx ]
+            //
+            //    [   k1, k2, k3, nk, k4, xx   ]
+            //    [ v1, v2, v3, ln, v4, v5, xx ]
+            //
+
+            let nref = self.get_idx(sibidx);
+            let nkey = (*nref.min()).clone();
+
+            unsafe {
+                slice_insert(&mut self.node, MaybeUninit::new(node), sibidx);
+                slice_insert(&mut self.key, MaybeUninit::new(nkey), sibidx);
+            }
+
+            self.count += 1;
+            // println!("post fixup -> {:?}", self);
+            BRInsertState::Ok
+        }
+    }
+
+    // Add a new pivot + node, in the normal "right split" case.
     pub(crate) fn add_node(&mut self, node: ABNode<K, V>) -> BRInsertState<K, V> {
         // Do we have space?
         if self.count == BK_CAPACITY {
@@ -252,7 +390,9 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 let (left, _) = self.key.split_at(self.count);
                 let inited: &[K] =
                     unsafe { slice::from_raw_parts(left.as_ptr() as *const K, left.len()) };
-                inited.binary_search(kr)
+
+                // inited.binary_search(kr)
+                slice_search_linear(inited, kr)
             };
             let ins_idx = r.unwrap_err();
             let res = match ins_idx {
@@ -319,7 +459,8 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 let (left, _) = self.key.split_at(self.count);
                 let inited: &[K] =
                     unsafe { slice::from_raw_parts(left.as_ptr() as *const K, left.len()) };
-                inited.binary_search(&k)
+                // inited.binary_search(&k)
+                slice_search_linear(inited, &k)
             };
             // if r is ever found, I think this is a bug, because we should never be able to
             // add a node with an existing min.

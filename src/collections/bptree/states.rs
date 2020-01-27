@@ -11,6 +11,8 @@ where
     // Return's a K,V that should be put into a new leaf.
     // Split(K, V),
     Split(ABNode<K, V>),
+    // We split in the reverse direction.
+    RevSplit(ABNode<K, V>),
 }
 
 #[derive(Debug)]
@@ -93,8 +95,10 @@ where
     // previously existed, so it implies return none to the
     // caller.
     Split(ABNode<K, V>),
+    RevSplit(ABNode<K, V>),
     // We had to clone and split.
     CloneSplit(ABNode<K, V>, ABNode<K, V>),
+    CloneRevSplit(ABNode<K, V>, ABNode<K, V>),
 }
 
 #[derive(Debug)]

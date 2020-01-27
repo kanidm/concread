@@ -618,21 +618,36 @@ mod tests {
 
     #[test]
     fn test_bptree_map_write_compact() {
+        let mut rng = rand::thread_rng();
         let insa: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
+
         let map = BptreeMap::from_iter(insa.into_iter().map(|v| (v, v)));
 
         let mut w = map.write();
         // Created linearly, should not need compact
         assert!(w.compact() == false);
         assert!(w.verify());
+        assert!(w.tree_density() == ((L_CAPACITY << 4), (L_CAPACITY << 4)));
 
+        // Even in reverse, we shouldn't need it ...
         let insb: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
         let bmap = BptreeMap::from_iter(insb.into_iter().rev().map(|v| (v, v)));
         let mut bw = bmap.write();
-        assert!(bw.compact() == true);
+        assert!(bw.compact() == false);
+        assert!(bw.verify());
         // Assert the density is "best"
         assert!(bw.tree_density() == ((L_CAPACITY << 4), (L_CAPACITY << 4)));
-        assert!(bw.verify());
+
+        // Random however, may.
+        let mut insc: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
+        insc.shuffle(&mut rng);
+        let cmap = BptreeMap::from_iter(insc.into_iter().map(|v| (v, v)));
+        let mut cw = cmap.write();
+        let (_n, d1) = cw.tree_density();
+        cw.compact_force();
+        assert!(cw.verify());
+        let (_n, d2) = cw.tree_density();
+        assert!(d2 <= d1);
     }
 
     /*

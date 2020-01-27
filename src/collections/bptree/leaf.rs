@@ -35,7 +35,8 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
             let (left, _) = self.key.split_at(self.count);
             let inited: &[K] =
                 unsafe { slice::from_raw_parts(left.as_ptr() as *const K, left.len()) };
-            inited.binary_search(&k)
+            // inited.binary_search(&k)
+            slice_search_linear(inited, &k)
         };
         match r {
             Ok(idx) => {
@@ -47,23 +48,20 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
             Err(idx) => {
                 if self.count == L_CAPACITY {
                     // * The node is full, so we must indicate as such.
-                    /*
-                    // okay, so we have L_CAPACITY + 1 here, so we want to have L_CAPACITY/2 + 1
-                    // remain on left.
-                    if idx >= self.count {
-                        // new value is going to be new right node max.
-                        // So we need L_CAPACITY / 2 - 1 to be moved.
-
-                    } else {
-                        // We need L_CAPACITY to move,
-                        // new value would stay in left.
-                    }
-                    */
-
                     if idx >= self.count {
                         // The requested insert is larger than our max key.
                         let rnode = Node::new_leaf_ins(txid, k, v);
                         BLInsertState::Split(rnode)
+                    } else if idx == 0 {
+                        // If this value is smaller than all else, we want to handle this special
+                        // case. The reason is we don't want to heavily fragment in the reverse
+                        // insert case, so we support spliting left, but it requires a more complex
+                        // parent operation to support.
+                        //
+                        // This does require a rekey to the parent however, which adds extra states
+                        // etc.
+                        let lnode = Node::new_leaf_ins(txid, k, v);
+                        BLInsertState::RevSplit(lnode)
                     } else {
                         // The requested insert in within our range, return current
                         // max.

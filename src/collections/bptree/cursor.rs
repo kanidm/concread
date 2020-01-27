@@ -153,6 +153,16 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                 // key to overwrite.
                 None
             }
+            CRInsertState::RevSplit(lnode) => {
+                let mut nroot = Node::new_branch(self.txid, lnode, self.root.clone());
+                mem::swap(&mut self.root, &mut nroot);
+                None
+            }
+            CRInsertState::CloneRevSplit(rnode, lnode) => {
+                let mut nroot = Node::new_branch(self.txid, lnode, rnode);
+                mem::swap(&mut self.root, &mut nroot);
+                None
+            }
         };
         // If this is none, it means a new slot is now occupied.
         if r.is_none() {
@@ -363,6 +373,7 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
                     // let rnode = Node::new_leaf_ins(txid, sk, sv);
                     CRInsertState::Split(rnode)
                 }
+                BLInsertState::RevSplit(lnode) => CRInsertState::RevSplit(lnode),
             }
         } else {
             // Clone required.
@@ -375,6 +386,7 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
                     // let rnode = Node::new_leaf_ins(txid, sk, sv);
                     CRInsertState::CloneSplit(cnode, rnode)
                 }
+                BLInsertState::RevSplit(lnode) => CRInsertState::CloneRevSplit(cnode, lnode),
             }
         }
     } else {
@@ -434,6 +446,23 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
                         }
                     }
                 }
+                CRInsertState::RevSplit(lnode) => match nmref.add_left_node(lnode, anode_idx) {
+                    BRInsertState::Ok => CRInsertState::NoClone(None),
+                    BRInsertState::Split(clnode, crnode) => {
+                        let nrnode = Node::new_branch(txid, clnode, crnode);
+                        CRInsertState::Split(nrnode)
+                    }
+                },
+                CRInsertState::CloneRevSplit(nnode, lnode) => {
+                    nmref.replace_by_idx(anode_idx, nnode);
+                    match nmref.add_left_node(lnode, anode_idx) {
+                        BRInsertState::Ok => CRInsertState::NoClone(None),
+                        BRInsertState::Split(clnode, crnode) => {
+                            let nrnode = Node::new_branch(txid, clnode, crnode);
+                            CRInsertState::Split(nrnode)
+                        }
+                    }
+                }
             }
         } else {
             // Not same txn, clone instead.
@@ -470,6 +499,19 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
                             // Create a new branch to hold these children.
                             let nrnode = Node::new_branch(txid, clnode, crnode);
                             // Return it
+                            CRInsertState::CloneSplit(cnode, nrnode)
+                        }
+                    }
+                }
+                CRInsertState::RevSplit(lnode) => {
+                    unreachable!("This represents a corrupt tree state");
+                }
+                CRInsertState::CloneRevSplit(nnode, lnode) => {
+                    nmref.replace_by_idx(anode_idx, nnode);
+                    match nmref.add_left_node(lnode, anode_idx) {
+                        BRInsertState::Ok => CRInsertState::Clone(None, cnode),
+                        BRInsertState::Split(clnode, crnode) => {
+                            let nrnode = Node::new_branch(txid, clnode, crnode);
                             CRInsertState::CloneSplit(cnode, nrnode)
                         }
                     }
