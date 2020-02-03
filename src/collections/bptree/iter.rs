@@ -170,6 +170,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for Iter<'a, K, V> {
     }
 }
 
+/// Iterater over references to Keys stored in the map.
 pub struct KeyIter<'a, K, V>
 where
     K: Ord + Clone + Debug,
@@ -199,6 +200,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for KeyIter<'a, K, V> {
     }
 }
 
+/// Iterater over references to Values stored in the map.
 pub struct ValueIter<'a, K, V>
 where
     K: Ord + Clone + Debug,

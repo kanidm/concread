@@ -12,11 +12,12 @@ use std::sync::Arc;
 
 // use super::branch::Branch;
 use super::iter::{Iter, KeyIter, ValueIter};
+use super::states::CRCloneState;
 use super::states::{
-    BLInsertState, BLPruneState, BLRemoveState, BRInsertState, BRShrinkState, BRTrimState,
-    CRInsertState, CRRemoveState, CRTrimState,
+    BLInsertState, BLRemoveState, BRInsertState, BRShrinkState, BRTrimState, CRInsertState,
+    CRRemoveState, CRTrimState,
 };
-use super::states::{CRCloneState, CRPruneState};
+// CRPruneState
 use std::iter::Extend;
 
 #[derive(Debug, Clone)]
@@ -91,6 +92,7 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         ValueIter::new(self.get_root_ref(), self.len())
     }
 
+    #[cfg(test)]
     fn verify(&self) -> bool {
         let (l, _) = self.get_tree_density();
         assert!(l == self.len());
@@ -255,6 +257,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
             }
         }
 
+        /*
         // Now work up the tree and clean up the remaining path inbetween
         let result = clone_and_split_off_prune_lt(&mut self.root, self.txid, k);
         // println!("clone_and_split_off_prune_lt -> {:?}", result);
@@ -284,6 +287,20 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                 }
             }
         };
+        */
+
+        // Get rid of anything else dangling
+        let mut rmkeys: Vec<K> = Vec::new();
+        for ki in self.k_iter() {
+            if ki >= k {
+                break;
+            }
+            rmkeys.push(ki.clone());
+        }
+
+        for kr in rmkeys.into_iter() {
+            let _ = self.remove(&kr);
+        }
 
         // Iterate over the remaining kv's to fix our k,v count.
         let newsize = self.kv_iter().count();
@@ -503,7 +520,7 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
                         }
                     }
                 }
-                CRInsertState::RevSplit(lnode) => {
+                CRInsertState::RevSplit(_lnode) => {
                     unreachable!("This represents a corrupt tree state");
                 }
                 CRInsertState::CloneRevSplit(nnode, lnode) => {
@@ -741,6 +758,7 @@ fn clone_and_split_off_trim_lt<'a, K: Clone + Ord + Debug, V: Clone>(
     }
 }
 
+/*
 fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
     node: &'a mut ABNode<K, V>,
     txid: usize,
@@ -862,6 +880,7 @@ fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
         }
     }
 }
+*/
 
 #[cfg(test)]
 mod tests {
@@ -1994,7 +2013,7 @@ mod tests {
         let mut wcurs = CursorWrite::new(Node::new_ableaf(0), 0);
         wcurs.extend(ins.iter().map(|v| (*v, *v)));
 
-        // ins.shuffle(&mut rng);
+        ins.shuffle(&mut rng);
 
         let mut compacts = 0;
 
@@ -2112,7 +2131,7 @@ mod tests {
         check_drop_count();
     }
 
-    fn run_split_off_test_clone(v: usize, exp: usize) {
+    fn run_split_off_test_clone(v: usize, _exp: usize) {
         // println!("RUNNING -> {:?}", v);
         let tree = create_split_off_tree();
 
@@ -2139,7 +2158,7 @@ mod tests {
         check_drop_count();
     }
 
-    fn run_split_off_test(v: usize, exp: usize) {
+    fn run_split_off_test(v: usize, _exp: usize) {
         println!("RUNNING -> {:?}", v);
         let tree = create_split_off_tree();
         println!("START -> {:?}", tree);
@@ -2208,6 +2227,9 @@ mod tests {
 
             wcurs.split_off_lt(&v);
             assert!(!wcurs.contains_key(&(v - 1)));
+            if v < &1024 {
+                assert!(wcurs.contains_key(&v));
+            }
             assert!(wcurs.verify());
             let contents: Vec<_> = wcurs.k_iter().collect();
             assert!(contents[0] == &v);

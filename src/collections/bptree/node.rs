@@ -31,7 +31,7 @@ fn alloc_nid() -> usize {
 
 #[cfg(test)]
 fn release_nid(nid: usize) {
-    let r = ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
+    let _r = ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
     // assert!(r == true);
 }
 
@@ -118,6 +118,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn verify(&self) -> bool {
         match &self.inner {
             T::L(leaf) => leaf.verify(),
@@ -697,6 +698,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         }
     }
 
+    /*
     pub(crate) fn prune_decision(&mut self, txid: usize, anode_idx: usize) -> Result<(), ()> {
         // So this means there are quite a few cases
         //
@@ -827,6 +829,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
             Ok(())
         }
     }
+    */
 
     pub(crate) fn clone_sibling_idx(&mut self, txid: usize, idx: usize) -> usize {
         // This clones and sets up for a subsequent
@@ -1255,23 +1258,19 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         lcount
     }
 
+    #[cfg(test)]
     fn check_sorted(&self) -> bool {
         // check the pivots are sorted.
         if self.count == 0 {
-            /*
             println!("{:?}", self);
-            #[cfg(test)]
-            panic!();
+            debug_assert!(false);
             false
-            */
-            true
         } else {
             let mut lk: &K = unsafe { &*self.key[0].as_ptr() };
             for work_idx in 1..self.count {
                 let rk: &K = unsafe { &*self.key[work_idx].as_ptr() };
                 if lk >= rk {
-                    #[cfg(test)]
-                    panic!();
+                    debug_assert!(false);
                     return false;
                 }
                 lk = rk;
@@ -1281,6 +1280,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         }
     }
 
+    #[cfg(test)]
     fn check_descendents_valid(&self) -> bool {
         for work_idx in 0..self.count {
             // get left max and right min
@@ -1296,8 +1296,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
                 println!("left --> {:?}", lnode);
                 println!("right -> {:?}", rnode);
                 println!("prnt  -> {:?}", self);
-                #[cfg(test)]
-                panic!();
+                debug_assert!(false);
                 return false;
             }
         }
@@ -1305,14 +1304,14 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         true
     }
 
+    #[cfg(test)]
     fn verify_children(&self) -> bool {
         // For each child node call verify on it.
         for work_idx in 0..self.count {
             let node = unsafe { &*self.node[work_idx].as_ptr() };
             if !node.verify() {
                 println!("Failed children");
-                #[cfg(test)]
-                panic!();
+                debug_assert!(false);
                 return false;
             }
         }
@@ -1320,6 +1319,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Branch<K, V> {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn verify(&self) -> bool {
         self.check_sorted() && self.check_descendents_valid() && self.verify_children()
     }
