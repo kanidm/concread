@@ -44,6 +44,7 @@ pub(crate) enum BRShrinkState {
     Shrink,
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) enum BLPruneState {
     Ok,
@@ -127,6 +128,7 @@ where
     CloneShrink(Option<V>, ABNode<K, V>),
 }
 
+/*
 pub(crate) enum CRPruneState<K, V>
 where
     K: Ord + Clone + Debug,
@@ -152,3 +154,4 @@ impl<K: Ord + Clone + Debug, V: Clone> Debug for CRPruneState<K, V> {
         }
     }
 }
+*/

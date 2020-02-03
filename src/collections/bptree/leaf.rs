@@ -6,7 +6,9 @@ use std::slice;
 
 use super::constants::{L_CAPACITY, L_MAX_IDX};
 use super::node::Node;
-use super::states::{BLInsertState, BLPruneState, BLRemoveState};
+#[cfg(test)]
+use super::states::BLPruneState;
+use super::states::{BLInsertState, BLRemoveState};
 use super::utils::*;
 
 pub(crate) struct Leaf<K, V>
@@ -116,6 +118,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn remove_lt(&mut self, k: &K) -> BLPruneState {
         // println!("Start remove_lt on {:?}", self);
         // Remove everything less than or equal to a value.
@@ -301,6 +304,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         self.count
     }
 
+    #[cfg(test)]
     fn check_sorted(&self) -> bool {
         if self.count == 0 {
             true
@@ -310,8 +314,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
                 let rk: &K = unsafe { &*self.key[work_idx].as_ptr() };
                 if lk >= rk {
                     println!("{:?}", self);
-                    #[cfg(test)]
-                    panic!();
+                    debug_assert!(false);
                     return false;
                 }
                 lk = rk;
@@ -321,6 +324,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn verify(&self) -> bool {
         self.check_sorted()
     }

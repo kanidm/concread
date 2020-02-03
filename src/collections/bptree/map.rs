@@ -471,11 +471,8 @@ mod tests {
     use super::super::constants::L_CAPACITY;
     use super::BptreeMap;
     // use rand::prelude::*;
-    use crossbeam_utils::thread::scope;
     use rand::seq::SliceRandom;
-    use rand::Rng;
     use std::iter::FromIterator;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_bptree_map_basic_write() {
@@ -651,6 +648,9 @@ mod tests {
     }
 
     /*
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crossbeam_utils::thread::scope;
+    use rand::Rng;
     const MAX_TARGET: usize = 210_000;
 
     #[test]
