@@ -322,6 +322,7 @@ mod tests {
     const MAX_TARGET: i64 = 2000;
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_multithread_create() {
         let start = time::now();
         // Create the new ebrcell.
@@ -398,6 +399,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_gc_operation() {
         GC_COUNT.store(0, Ordering::Release);
         let data = TestGcWrapper { data: 0 };

@@ -2005,6 +2005,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_bptree_cursor_remove_stress_7() {
         // Insert random
         let mut rng = rand::thread_rng();
@@ -2214,6 +2215,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_bptree_cursor_split_off_lt_random_stress() {
         let data: Vec<isize> = (0..1024).collect();
 

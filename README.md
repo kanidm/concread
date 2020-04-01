@@ -71,6 +71,20 @@ see the new data.
 This is a space-time trade off, using more memory to achieve better parallel
 behaviour.
 
+Safety
+------
+
+This library has extensive testing, and passes it's test suite under [miri], a rust
+undefined behaviour checker. If you find an issue however, please let us know so we can
+fix it!
+
+To check with miri OR asan on nightly:
+
+    cargo clean && cargo miri setup && cargo miri test
+    RUSTC_FLAGS="-Z sanitizer=address" cargo test
+
+[miri]: https://github.com/rust-lang/miri
+
 Contributing
 ------------
 
