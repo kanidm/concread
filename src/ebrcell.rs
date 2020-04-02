@@ -192,16 +192,13 @@ where
 
         // Load the previous data ready for unlinking
         let prev_data = self.active.load(Acquire, &guard);
-        let prev_data_owned = unsafe { prev_data.into_owned() };
         // Make the data Owned, and set it in the active.
         let owned_data: Owned<T> = Owned::new(element.unwrap());
         let _shared_data = self
             .active
             .compare_and_set(prev_data, owned_data, Release, &guard);
         // Finally, set our previous data for cleanup.
-        guard.defer(move || {
-            let _ = prev_data_owned;
-        });
+        unsafe { guard.defer_destroy(prev_data) };
         // Then return the current data with a readtxn. Do we need a new guard scope?
     }
 
@@ -237,10 +234,7 @@ where
         let guard = epoch::pin();
 
         let prev_data = self.active.load(Acquire, &guard);
-        let prev_data_owned = unsafe { prev_data.into_owned() };
-        guard.defer(move || {
-            let _ = prev_data_owned;
-        });
+        unsafe { guard.defer_destroy(prev_data) };
     }
 }
 
