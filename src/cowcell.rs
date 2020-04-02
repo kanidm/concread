@@ -275,7 +275,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn test_multithread_create() {
-        let start = time::now();
+        let start = time::Instant::now();
         // Create the new cowcell.
         let data: i64 = 0;
         let cc = CowCell::new(data);
@@ -285,7 +285,7 @@ mod tests {
 
             let _readers: Vec<_> = (0..7)
                 .map(|_| {
-                    scope.spawn(move || {
+                    scope.spawn(move |_| {
                         let mut last_value: i64 = 0;
                         while last_value < MAX_TARGET {
                             let cc_rotxn = cc_ref.read();
@@ -300,7 +300,7 @@ mod tests {
 
             let _writers: Vec<_> = (0..3)
                 .map(|_| {
-                    scope.spawn(move || {
+                    scope.spawn(move |_| {
                         let mut last_value: i64 = 0;
                         while last_value < MAX_TARGET {
                             let mut cc_wrtxn = cc_ref.write();
@@ -317,8 +317,8 @@ mod tests {
                 .collect();
         });
 
-        let end = time::now();
-        print!("Arc MT create :{} ", end - start);
+        let end = time::Instant::now();
+        print!("Arc MT create :{:?} ", end - start);
     }
 
     static GC_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -360,7 +360,7 @@ mod tests {
             let cc_ref = &cc;
             let _writers: Vec<_> = (0..3)
                 .map(|_| {
-                    scope.spawn(move || {
+                    scope.spawn(move |_| {
                         test_gc_operation_thread(cc_ref);
                     })
                 })

@@ -20,6 +20,7 @@ use crossbeam_epoch::{Atomic, Guard, Owned};
 use std::sync::atomic::Ordering::{Acquire, Release};
 
 use parking_lot::{Mutex, MutexGuard};
+use std::marker::Send;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 
@@ -32,7 +33,7 @@ use std::ops::{Deref, DerefMut};
 /// abort a change, don't call commit and allow the write transaction to
 /// go out of scope. This causes the `EbrCell` to unlock allowing other
 /// writes to proceed.
-pub struct EbrCellWriteTxn<'a, T: 'a> {
+pub struct EbrCellWriteTxn<'a, T: 'static + Clone + Send> {
     data: Option<T>,
     // This way we know who to contact for updating our data ....
     caller: &'a EbrCell<T>,
@@ -63,7 +64,10 @@ where
     }
 }
 
-impl<'a, T> Deref for EbrCellWriteTxn<'a, T> {
+impl<'a, T> Deref for EbrCellWriteTxn<'a, T>
+where
+    T: Clone + Send,
+{
     type Target = T;
 
     #[inline]
@@ -72,7 +76,10 @@ impl<'a, T> Deref for EbrCellWriteTxn<'a, T> {
     }
 }
 
-impl<'a, T> DerefMut for EbrCellWriteTxn<'a, T> {
+impl<'a, T> DerefMut for EbrCellWriteTxn<'a, T>
+where
+    T: Clone + Send,
+{
     fn deref_mut(&mut self) -> &mut T {
         self.data.as_mut().unwrap()
     }
@@ -123,7 +130,7 @@ impl<'a, T> DerefMut for EbrCellWriteTxn<'a, T> {
 /// assert_eq!(*new_read_txn, 1);
 /// ```
 #[derive(Debug)]
-pub struct EbrCell<T> {
+pub struct EbrCell<T: Clone + Send + 'static> {
     write: Mutex<()>,
     active: Atomic<T>,
 }
@@ -185,17 +192,16 @@ where
 
         // Load the previous data ready for unlinking
         let prev_data = self.active.load(Acquire, &guard);
+        let prev_data_owned = unsafe { prev_data.into_owned() };
         // Make the data Owned, and set it in the active.
         let owned_data: Owned<T> = Owned::new(element.unwrap());
         let _shared_data = self
             .active
             .compare_and_set(prev_data, owned_data, Release, &guard);
         // Finally, set our previous data for cleanup.
-        unsafe {
-            guard.defer(move || {
-                drop(prev_data.into_owned());
-            });
-        }
+        guard.defer(move || {
+            let _ = prev_data_owned;
+        });
         // Then return the current data with a readtxn. Do we need a new guard scope?
     }
 
@@ -220,7 +226,10 @@ where
     }
 }
 
-impl<T> Drop for EbrCell<T> {
+impl<T> Drop for EbrCell<T>
+where
+    T: Clone + Send + 'static,
+{
     fn drop(&mut self) {
         // Right, we are dropping! Everything is okay here *except*
         // that we need to tell our active data to be unlinked, else it may
@@ -228,11 +237,10 @@ impl<T> Drop for EbrCell<T> {
         let guard = epoch::pin();
 
         let prev_data = self.active.load(Acquire, &guard);
-        unsafe {
-            guard.defer(move || {
-                drop(prev_data.into_owned());
-            });
-        }
+        let prev_data_owned = unsafe { prev_data.into_owned() };
+        guard.defer(move || {
+            let _ = prev_data_owned;
+        });
     }
 }
 
@@ -324,7 +332,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn test_multithread_create() {
-        let start = time::now();
+        let start = time::Instant::now();
         // Create the new ebrcell.
         let data: i64 = 0;
         let cc = EbrCell::new(data);
@@ -334,7 +342,7 @@ mod tests {
 
             let _readers: Vec<_> = (0..7)
                 .map(|_| {
-                    scope.spawn(move || {
+                    scope.spawn(move |_| {
                         let mut last_value: i64 = 0;
                         while last_value < MAX_TARGET {
                             let cc_rotxn = cc_ref.read();
@@ -349,7 +357,7 @@ mod tests {
 
             let _writers: Vec<_> = (0..3)
                 .map(|_| {
-                    scope.spawn(move || {
+                    scope.spawn(move |_| {
                         let mut last_value: i64 = 0;
                         while last_value < MAX_TARGET {
                             let mut cc_wrtxn = cc_ref.write();
@@ -366,8 +374,8 @@ mod tests {
                 .collect();
         });
 
-        let end = time::now();
-        print!("Ebr MT create :{} ", end - start);
+        let end = time::Instant::now();
+        print!("Ebr MT create :{:?} ", end - start);
     }
 
     static GC_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -409,7 +417,7 @@ mod tests {
             let cc_ref = &cc;
             let _writers: Vec<_> = (0..3)
                 .map(|_| {
-                    scope.spawn(move || {
+                    scope.spawn(move |_| {
                         test_gc_operation_thread(cc_ref);
                     })
                 })
