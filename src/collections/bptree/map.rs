@@ -557,60 +557,70 @@ mod tests {
         assert!(w.tree_density() == ((L_CAPACITY << 4), (L_CAPACITY << 4)));
     }
 
-    #[test]
-    fn test_bptree_map_basic_concurrency() {
+    fn bptree_map_basic_concurrency(lower: usize, upper: usize) {
         // Create a map
         let map = BptreeMap::new();
 
         // add values
         {
             let mut w = map.write();
-            w.extend((0..10_000).map(|v| (v, v)));
+            w.extend((0..lower).map(|v| (v, v)));
             w.commit();
         }
 
         // read
         let r = map.read();
-        assert!(r.len() == 10_000);
-        for i in 0..10_000 {
+        assert!(r.len() == lower);
+        for i in 0..lower {
             assert!(r.contains_key(&i))
         }
 
         // Check a second write doesn't interfere
         {
             let mut w = map.write();
-            w.extend((10_000..20_000).map(|v| (v, v)));
+            w.extend((lower..upper).map(|v| (v, v)));
             w.commit();
         }
 
-        assert!(r.len() == 10_000);
+        assert!(r.len() == lower);
 
         // But a new write can see
         let r2 = map.read();
-        assert!(r2.len() == 20_000);
-        for i in 0..20_000 {
+        assert!(r2.len() == upper);
+        for i in 0..upper {
             assert!(r2.contains_key(&i))
         }
 
         // Now drain the tree, and the reader should be unaffected.
         {
             let mut w = map.write();
-            for i in 0..20_000 {
+            for i in 0..upper {
                 assert!(w.remove(&i).is_some())
             }
             w.commit();
         }
 
         // All consistent!
-        assert!(r.len() == 10_000);
-        assert!(r2.len() == 20_000);
-        for i in 0..20_000 {
+        assert!(r.len() == lower);
+        assert!(r2.len() == upper);
+        for i in 0..upper {
             assert!(r2.contains_key(&i))
         }
 
         let r3 = map.read();
         println!("{:?}", r3.len());
         assert!(r3.len() == 0);
+    }
+
+    #[test]
+    fn test_bptree_map_basic_concurrency_small() {
+        bptree_map_basic_concurrency(100, 200)
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn test_bptree_map_basic_concurrency_large() {
+        bptree_map_basic_concurrency(10_000, 20_000)
     }
 
     #[test]
