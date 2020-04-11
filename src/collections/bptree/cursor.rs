@@ -715,7 +715,7 @@ fn path_get_mut_ref<'a, K: Clone + Ord + Debug, V: Clone>(
     if node.is_leaf() {
         Arc::get_mut(node).unwrap().as_mut_leaf().get_mut_ref(k)
     } else {
-        // This nmref binds the life of thte reference ...
+        // This nmref binds the life of the reference ...
         let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
         let anode_idx = nmref.locate_node(&k);
         let mut anode = nmref.get_mut_idx(anode_idx);

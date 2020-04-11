@@ -150,6 +150,12 @@ impl<K: Clone + Ord + Debug, V: Clone> FromIterator<(K, V)> for BptreeMap<K, V> 
     }
 }
 
+impl<'a, K: Clone + Ord + Debug, V: Clone> Extend<(K, V)> for BptreeMapWriteTxn<'a, K, V> {
+    fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
+        self.work.extend(iter);
+    }
+}
+
 impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     // == RO methods
 
@@ -329,12 +335,6 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     /// To abort, just do not call this function.
     pub fn commit(self) {
         self.caller.commit(self.work.finalise())
-    }
-}
-
-impl<'a, K: Clone + Ord + Debug, V: Clone> Extend<(K, V)> for BptreeMapWriteTxn<'a, K, V> {
-    fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
-        self.work.extend(iter);
     }
 }
 

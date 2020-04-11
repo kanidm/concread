@@ -17,6 +17,7 @@ crossbeam-epoch = "0.8"
 crossbeam-utils = "0.7"
 parking_lot = "0.10"
 num = "0.2.0"
+smallvec = "1.2"
 
 [dev-dependencies]
 time = "0.2"
