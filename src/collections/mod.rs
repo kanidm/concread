@@ -4,5 +4,6 @@
 //! to these structures.
 
 pub mod bptree;
+pub mod hashmap;
 // #[cfg(test)]
 // mod maple_tree;
