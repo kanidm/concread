@@ -27,9 +27,9 @@
 #![warn(unused_extern_crates)]
 #![warn(missing_docs)]
 
-extern crate smallvec;
 extern crate crossbeam_epoch;
 extern crate parking_lot;
+extern crate smallvec;
 
 #[cfg(test)]
 extern crate rand;
