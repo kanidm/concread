@@ -26,6 +26,7 @@ where
     K: Ord + Clone + Debug,
     V: Clone,
 {
+    txid: usize,
     length: usize,
     root: ABNode<K, V>,
 }
@@ -46,6 +47,8 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
     fn get_root_ref(&self) -> &ABNode<K, V>;
 
     fn len(&self) -> usize;
+
+    fn get_txid(&self) -> usize;
 
     fn get_tree_density(&self) -> (usize, usize) {
         // Walk the tree and calculate the packing effeciency.
@@ -327,7 +330,9 @@ impl<K: Clone + Ord + Debug, V: Clone> Extend<(K, V)> for CursorWrite<K, V> {
 
 impl<K: Clone + Ord + Debug, V: Clone> CursorRead<K, V> {
     pub(crate) fn new(root: ABNode<K, V>, length: usize) -> Self {
+        let txid = root.txid;
         CursorRead {
+            txid: txid,
             root: root,
             length: length,
         }
@@ -342,6 +347,10 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<K, V> 
     fn len(&self) -> usize {
         self.length
     }
+
+    fn get_txid(&self) -> usize {
+        self.txid
+    }
 }
 
 impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite<K, V> {
@@ -351,6 +360,10 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite<K, V>
 
     fn len(&self) -> usize {
         self.length
+    }
+
+    fn get_txid(&self) -> usize {
+        self.txid
     }
 }
 
@@ -555,7 +568,9 @@ fn path_clone<'a, K: Clone + Ord + Debug, V: Clone>(
         // We are in a branch, so locate our descendent and prepare
         // to clone if needed.
         let node_txid = node.txid;
-        let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
+        // println!("txid -> {:?} {:?}", node_txid, txid);
+        // let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
+        let nmref = arc_get_mut_unsafe!(node).as_mut_branch();
         let anode_idx = nmref.locate_node(&k);
         let mut anode = nmref.get_mut_idx(anode_idx);
         match path_clone(&mut anode, txid, k) {

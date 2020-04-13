@@ -22,6 +22,8 @@
 //! data views for a duration of time, cpu cache friendly behaviours and
 //! database like transaction properties (ACID).
 
+#[macro_use]
+mod macros;
 mod constants;
 mod cursor;
 pub mod iter;

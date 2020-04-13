@@ -209,6 +209,10 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
 
     // (adv) values
 
+    pub(crate) fn get_txid(&self) -> usize {
+        self.work.get_txid()
+    }
+
     // == RW methods
 
     /// Reset this tree to an empty state. As this is within the transaction this
@@ -369,6 +373,9 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapReadTxn<K, V> {
     }
 
     // (adv) range
+    pub(crate) fn get_txid(&self) -> usize {
+        self.work.get_txid()
+    }
 
     /// Iterator over `(&K, &V)` of the set
     pub fn iter(&self) -> Iter<K, V> {
@@ -484,6 +491,7 @@ mod tests {
             bpwrite.insert(1, 1);
             assert!(bpwrite.get(&0) == Some(&0));
             assert!(bpwrite.get(&1) == Some(&1));
+            bpwrite.insert(2, 2);
             bpwrite.commit();
         }
         {

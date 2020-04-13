@@ -34,6 +34,7 @@ extern crate smallvec;
 #[cfg(test)]
 extern crate rand;
 
+pub mod cache;
 pub mod collections;
 pub mod cowcell;
 pub mod ebrcell;
