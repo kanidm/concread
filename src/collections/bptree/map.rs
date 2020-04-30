@@ -132,6 +132,21 @@ impl<K: Clone + Ord + Debug, V: Clone> BptreeMap<K, V> {
         /* rguard dropped here */
     }
 
+    /// Attempt to create a new write, returns None if another writer
+    /// already exists.
+    pub fn try_write(&self) -> Option<BptreeMapWriteTxn<K, V>> {
+        self.write.try_lock().map(|mguard| {
+            let rguard = self.active.lock();
+            let (data, length): (ABNode<K, V>, usize) = rguard.clone();
+            let cursor = CursorWrite::new(data, length);
+            BptreeMapWriteTxn {
+                work: cursor,
+                caller: self,
+                _guard: mguard,
+            }
+        })
+    }
+
     fn commit(&self, newdata: (ABNode<K, V>, usize)) {
         let mut rwguard = self.active.lock();
         *rwguard = newdata;
@@ -208,6 +223,10 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     // (adv) keys
 
     // (adv) values
+
+    pub(crate) fn get_txid(&self) -> usize {
+        self.work.get_txid()
+    }
 
     // == RW methods
 
@@ -369,6 +388,9 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapReadTxn<K, V> {
     }
 
     // (adv) range
+    pub(crate) fn get_txid(&self) -> usize {
+        self.work.get_txid()
+    }
 
     /// Iterator over `(&K, &V)` of the set
     pub fn iter(&self) -> Iter<K, V> {
@@ -484,6 +506,7 @@ mod tests {
             bpwrite.insert(1, 1);
             assert!(bpwrite.get(&0) == Some(&0));
             assert!(bpwrite.get(&1) == Some(&1));
+            bpwrite.insert(2, 2);
             bpwrite.commit();
         }
         {
