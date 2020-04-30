@@ -10,6 +10,7 @@ to proceed while single writers can operate. A reader is guaranteed the content
 will remain the same for the duration of the read, and readers do not block writers.
 Writers are serialised, just like a mutex.
 
+This library contains concurrently readable Cell types and Map/Cache types.
 
 When do I want to use these?
 ----------------------------
@@ -31,8 +32,9 @@ Concurrently readable avoids this because readers never stall readers/writers, w
 never stall or block a readers. This means that you gain in parallel throughput
 as stalls are reduced.
 
-In the future, a concurrent BTree and HashTree will be added, that can be used inplace
-of a `RwLock<BTreeMap>` or `RwLock<HashMap>`. Stay tuned!
+This library also has a concurrently readable BTreeMap, HashMap and Adaptive Replacement Cache.
+These are best used when you have at least 512 bytes worth of data in your Cell, as they only copy
+what is required for an update.
 
 
 What is concurrently readable?
