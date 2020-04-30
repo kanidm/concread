@@ -282,22 +282,17 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
     }
 
     fn try_write(&self) -> Option<ArcWriteTxn<K, V>> {
-        self.cache.try_write()
-            .map(|cache| {
-                ArcWriteTxn {
-                    caller: &self,
-                    cache: cache,
-                    tlocal: BTreeMap::new(),
-                    hit: UnsafeCell::new(Vec::new()),
-                }
-            })
+        self.cache.try_write().map(|cache| ArcWriteTxn {
+            caller: &self,
+            cache: cache,
+            tlocal: BTreeMap::new(),
+            hit: UnsafeCell::new(Vec::new()),
+        })
     }
 
     pub fn try_quiesce(&self) {
         match self.try_write() {
-            Some(wr_txn) => {
-                wr_txn.commit()
-            }
+            Some(wr_txn) => wr_txn.commit(),
             None => {}
         }
     }
