@@ -281,6 +281,27 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         }
     }
 
+    fn try_write(&self) -> Option<ArcWriteTxn<K, V>> {
+        self.cache.try_write()
+            .map(|cache| {
+                ArcWriteTxn {
+                    caller: &self,
+                    cache: cache,
+                    tlocal: BTreeMap::new(),
+                    hit: UnsafeCell::new(Vec::new()),
+                }
+            })
+    }
+
+    pub fn try_quiesce(&self) {
+        match self.try_write() {
+            Some(wr_txn) => {
+                wr_txn.commit()
+            }
+            None => {}
+        }
+    }
+
     fn calc_p_freq(ghost_rec_len: usize, ghost_freq_len: usize, p: &mut usize) {
         let delta = if ghost_rec_len > ghost_freq_len {
             ghost_rec_len / ghost_freq_len
@@ -1171,8 +1192,6 @@ mod tests {
 
         // Setup the cache.
         let arc: Arc<usize, usize> = Arc::new(4);
-        let mut wr_txn = arc.write();
-
         // start a rd
         {
             let mut rd_txn = arc.read();
@@ -1183,8 +1202,7 @@ mod tests {
             rd_txn.insert(4, 4);
             // end the rd
         }
-        // end the wr
-        wr_txn.commit();
+        arc.try_quiesce();
         // What state is the cache now in?
         println!("== 2");
         let mut wr_txn = arc.write();

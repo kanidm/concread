@@ -132,6 +132,21 @@ impl<K: Clone + Ord + Debug, V: Clone> BptreeMap<K, V> {
         /* rguard dropped here */
     }
 
+    /// Attempt to create a new write, returns None if another writer
+    /// already exists.
+    pub fn try_write(&self) -> Option<BptreeMapWriteTxn<K, V>> {
+        self.write.try_lock().map(|mguard| {
+            let rguard = self.active.lock();
+            let (data, length): (ABNode<K, V>, usize) = rguard.clone();
+            let cursor = CursorWrite::new(data, length);
+            BptreeMapWriteTxn {
+                work: cursor,
+                caller: self,
+                _guard: mguard,
+            }
+        })
+    }
+
     fn commit(&self, newdata: (ABNode<K, V>, usize)) {
         let mut rwguard = self.active.lock();
         *rwguard = newdata;
