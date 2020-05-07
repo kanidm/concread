@@ -2,6 +2,7 @@ mod ll;
 
 use self::ll::{LLNode, LL};
 use crate::collections::bptree::*;
+use lru::{KeyRef, LruCache};
 use parking_lot::{Mutex, MutexGuard};
 use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
@@ -14,9 +15,12 @@ use std::hash::Hash;
 use std::mem;
 use std::time::Instant;
 
+const READ_THREAD_MIN: usize = 8;
+const READ_THREAD_RATIO: usize = 16;
+
 struct ThreadCacheItem<V> {
     v: V,
-    clean: bool,
+    // clean: bool,
 }
 
 enum CacheEvent<K, V> {
@@ -100,6 +104,8 @@ where
     cache: BptreeMap<K, CacheItem<K, V>>,
     // Max number of elements to cache.
     max: usize,
+    // Max number of elements for a reader per thread.
+    read_max: usize,
     // channels for readers.
     // tx (cloneable)
     tx: Sender<CacheEvent<K, V>>,
@@ -115,7 +121,7 @@ where
     cache: BptreeMapReadTxn<K, CacheItem<K, V>>,
     // cache of our missed items to send forward.
     // On drop we drain this to the channel
-    tlocal: BTreeMap<K, ThreadCacheItem<V>>,
+    tlocal: LruCache<K, ThreadCacheItem<V>>,
     // tx channel to send forward events.
     tx: Sender<CacheEvent<K, V>>,
     ts: Instant,
@@ -245,6 +251,12 @@ macro_rules! evict_to_haunted_len {
 
 impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
     pub fn new(max: usize) -> Self {
+        assert!(max > 0);
+        let read_max = if (max / READ_THREAD_RATIO) <= READ_THREAD_MIN {
+            READ_THREAD_MIN
+        } else {
+            max / READ_THREAD_RATIO
+        };
         let (tx, rx) = channel();
         let inner = Mutex::new(ArcInner {
             p: 0,
@@ -258,6 +270,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         Arc {
             cache: BptreeMap::new(),
             max,
+            read_max,
             tx,
             inner,
         }
@@ -266,7 +279,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
     pub fn read(&self) -> ArcReadTxn<K, V> {
         ArcReadTxn {
             cache: self.cache.read(),
-            tlocal: BTreeMap::new(),
+            tlocal: LruCache::new(self.read_max),
             tx: self.tx.clone(),
             ts: Instant::now(),
         }
@@ -786,7 +799,7 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
     // insert
     // Add this value to a cache. For us that just means the tlocal cache.
     pub fn insert(&mut self, k: K, v: V) {
-        self.tlocal.insert(k, ThreadCacheItem { v, clean: true });
+        self.tlocal.insert(k, ThreadCacheItem { v });
     }
 
     pub(crate) fn peek_hit(&self) -> &[K] {
@@ -831,8 +844,9 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
 }
 
 impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<K, V> {
-    pub fn get<'b, Q: ?Sized>(&'b self, k: &'b Q) -> Option<&'b V>
+    pub fn get<'b, Q: ?Sized>(&'b mut self, k: &'b Q) -> Option<&'b V>
     where
+        KeyRef<K>: Borrow<Q>,
         K: Borrow<Q> + From<Q>,
         Q: Hash + Eq + Ord + Clone,
     {
@@ -857,8 +871,9 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<K, V> {
         r
     }
 
-    pub fn contains_key<'b, Q: ?Sized>(&self, k: &'b Q) -> bool
+    pub fn contains_key<'b, Q: ?Sized>(&mut self, k: &'b Q) -> bool
     where
+        KeyRef<K>: Borrow<Q>,
         K: Borrow<Q> + From<Q>,
         Q: Hash + Eq + Ord + Clone,
     {
@@ -875,7 +890,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<K, V> {
                 self.cache.get_txid(),
             ))
             .expect("Invalid tx state!");
-        self.tlocal.insert(k, ThreadCacheItem { v, clean: true });
+        self.tlocal.put(k, ThreadCacheItem { v });
     }
 }
 
