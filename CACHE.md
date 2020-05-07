@@ -8,16 +8,20 @@ wbrown@suse.de
 # Concurrent Adaptive Replacement Cache
 
 Caching is a very important aspect of computing, helping to improve the performance of applications
-based on various work factors. Modern systems (especially servers)  are highly concurrent, so it is important that we are
-able to provide caching strategies for concurrent systems. However, to date the majority of work
-in concurrent data-structures has focused on lock free or systems that do not require transactional
-guarantees. While this is applicable in many cases, it does not suit all applications, limiting
-many applications to mutexs or read-write locks around existing data-structures.
+based on various work factors. Modern systems (especially servers)  are highly concurrent, so it is
+important that we are able to provide caching strategies for concurrent systems. However, to date
+the majority of work in concurrent data-structures has focused on lock free or systems that do not
+require transactional guarantees. While this is applicable in many cases, it does not suit all
+applications, limiting many applications to mutexs or read-write locks around existing
+data-structures.
 
 In this document, I will present a strategy to create a concurrently readable adaptive replacement
 cache. This cache guarantees temporal consistency, as well as providing ACID guarantees, and
 serialisable properties of the cache, while maintaining the invariants that define an adaptive
-replacement cache.
+replacement cache. Additionally, this cache is able to support multiple concurrent readers with isolated
+transactions, and serialised writers. This algorithm also has interested side effects with regard
+to observing cache interactions, allowing it to have more accurate retention behaviour
+of cached data.
 
 ## Concurrent Systems
 
