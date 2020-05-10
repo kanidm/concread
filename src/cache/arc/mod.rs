@@ -94,6 +94,7 @@ where
     rx: Receiver<CacheEvent<K, V>>,
 }
 
+
 pub struct Arc<K, V>
 where
     K: Hash + Eq + Ord + Clone + Debug,
@@ -112,6 +113,10 @@ where
     inner: Mutex<ArcInner<K, V>>,
 }
 
+unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Send for Arc<K, V> {}
+unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Sync for Arc<K, V> {}
+
+
 pub struct ArcReadTxn<K, V>
 where
     K: Hash + Eq + Ord + Clone + Debug,
@@ -121,7 +126,7 @@ where
     cache: BptreeMapReadTxn<K, CacheItem<K, V>>,
     // cache of our missed items to send forward.
     // On drop we drain this to the channel
-    tlocal: LruCache<K, ThreadCacheItem<V>>,
+    tlocal: LruCache<K, V>,
     // tx channel to send forward events.
     tx: Sender<CacheEvent<K, V>>,
     ts: Instant,
@@ -139,6 +144,7 @@ where
     // On COMMIT we drain this to the main cache
     tlocal: BTreeMap<K, ThreadCacheItem<V>>,
     hit: UnsafeCell<Vec<K>>,
+    clear: UnsafeCell<bool>,
 }
 
 /*
@@ -291,6 +297,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
             cache: self.cache.write(),
             tlocal: BTreeMap::new(),
             hit: UnsafeCell::new(Vec::new()),
+            clear: UnsafeCell::new(false),
         }
     }
 
@@ -341,12 +348,50 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         mut cache: BptreeMapWriteTxn<'a, K, CacheItem<K, V>>,
         tlocal: BTreeMap<K, ThreadCacheItem<V>>,
         hit: Vec<K>,
+        clear: bool,
     ) {
         // What is the time?
         let commit_ts = Instant::now();
         let commit_txid = cache.get_txid();
         // Copy p + init cache sizes for adjustment.
         let mut inner = self.inner.lock();
+
+        // Did we request to be cleared? If so, we move *all* items to haunted.
+        if clear {
+            cache.iter_mut()
+                .for_each(|(_, ref mut ci)| {
+                    // cut from it's current 
+                    let mut next_state = match ci.t {
+                        CacheType::Freq(n, _) => {
+                            inner.freq.extract(n);
+                            inner.ghost_freq.append_n(n);
+                            CacheType::GhostFreq(n)
+                        }
+                        CacheType::Rec(n, _) => {
+                            inner.rec.extract(n);
+                            inner.ghost_rec.append_n(n);
+                            CacheType::GhostRec(n)
+                        }
+                        CacheType::GhostFreq(n) => {
+                            inner.ghost_freq.extract(n);
+                            inner.haunted.append_n(n);
+                            CacheType::Haunted(n)
+                        }
+                        CacheType::GhostRec(n) => {
+                            inner.ghost_rec.extract(n);
+                            inner.haunted.append_n(n);
+                            CacheType::Haunted(n)
+                        }
+                        CacheType::Haunted(n) => {
+                            CacheType::Haunted(n)
+                        }
+                    };
+                    // change to the next state.
+                    mem::swap(&mut ci.t, &mut next_state);
+                    // And set the txid so that every older read is invalid to include
+                    ci.txid = commit_txid;
+                });
+        }
 
         // Why is it okay to drain the rx/tlocal and create the cache in a temporary
         // oversize? Because these values in the queue/tlocal are already in memory
@@ -753,7 +798,24 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
 impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K, V> {
     pub fn commit(self) {
         self.caller
-            .commit(self.cache, self.tlocal, self.hit.into_inner())
+            .commit(self.cache, self.tlocal, self.hit.into_inner(), self.clear.into_inner())
+    }
+
+    pub fn clear(&mut self) {
+        // Mark that we have been requested to clear the cache.
+        unsafe {
+            let clear_ptr = self.clear.get();
+            *clear_ptr = true;
+        }
+        // Dump the hit log.
+        unsafe {
+            let hit_ptr = self.hit.get();
+            (*hit_ptr).clear();
+        }
+        // Dump the thread local state.
+        self.tlocal.clear();
+        // From this point any get will miss on the main cache.
+        // Inserts are accepted.
     }
 
     // get
@@ -766,7 +828,13 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
             let v = &tci.v as *const _;
             unsafe { Some(&(*v)) }
         } else {
-            if let Some(v) = self.cache.get(k) {
+            // If we have been requested to clear, the main cache is "empty"
+            // but we can't do that until a commit, so we just flag it and avoid.
+            let is_cleared = unsafe {
+                    let clear_ptr = self.hit.get();
+                    *clear_ptr;
+                };
+            if !is_cleared and let Some(v) = self.cache.get(k) {
                 v as *const _;
                 unsafe { (*v).to_vref() }
             } else {
@@ -851,7 +919,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<K, V> {
         Q: Hash + Eq + Ord + Clone,
     {
         let r: Option<&V> = if let Some(tci) = self.tlocal.get(k) {
-            let v = &tci.v as *const _;
+            let v = tci as *const _;
             unsafe { Some(&(*v)) }
         } else {
             if let Some(v) = self.cache.get(k) {
@@ -890,7 +958,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<K, V> {
                 self.cache.get_txid(),
             ))
             .expect("Invalid tx state!");
-        self.tlocal.put(k, ThreadCacheItem { v });
+        self.tlocal.put(k, v);
     }
 }
 
