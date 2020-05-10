@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::marker::PhantomData;
 use std::ptr;
 
 #[derive(Clone, Debug)]
@@ -22,6 +23,15 @@ where
     prev: *mut LLNode<K>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct LLIterMut<'a, K>
+where
+    K: Hash + Eq + Ord + Clone + Debug,
+{
+    next: *mut LLNode<K>,
+    phantom: PhantomData<&'a K>,
+}
+
 impl<K> LL<K>
 where
     K: Hash + Eq + Ord + Clone + Debug,
@@ -31,6 +41,13 @@ where
             head: ptr::null_mut(),
             tail: ptr::null_mut(),
             size: 0,
+        }
+    }
+
+    pub(crate) fn iter_mut(&self) -> LLIterMut<K> {
+        LLIterMut {
+            next: self.head,
+            phantom: PhantomData,
         }
     }
 
@@ -78,6 +95,7 @@ where
     // remove this node from the ll, and return it's ptr.
     pub(crate) fn pop(&mut self) -> *mut LLNode<K> {
         let n = self.head;
+        debug_assert!(!n.is_null());
         self.extract(n);
         n
     }
@@ -173,6 +191,23 @@ where
     pub(crate) fn free(v: *mut Self) {
         debug_assert!(!v.is_null());
         let _ = unsafe { Box::from_raw(v) };
+    }
+}
+
+impl<'a, K> Iterator for LLIterMut<'a, K>
+where
+    K: Hash + Eq + Ord + Clone + Debug,
+{
+    type Item = &'a mut K;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next.is_null() {
+            None
+        } else {
+            let r = Some(unsafe { &mut (*self.next).k });
+            self.next = unsafe { (*self.next).next };
+            r
+        }
     }
 }
 
