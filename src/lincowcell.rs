@@ -273,7 +273,6 @@ mod tests {
 
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
     }
-
 }
 
 #[cfg(test)]

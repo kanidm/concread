@@ -411,8 +411,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapReadTxn<K, V> {
     /// As this is the read variant, it IS safe, and guaranteed the tree will not change.
     pub fn to_snapshot(&'a self) -> BptreeMapReadSnapshot<K, V> {
         BptreeMapReadSnapshot {
-            work: SnapshotType::R(&self.work)
-            // pin: PhantomData,
+            work: SnapshotType::R(&self.work), // pin: PhantomData,
         }
     }
 

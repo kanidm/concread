@@ -519,5 +519,4 @@ mod tests_linear {
         // gc count should be 2 (A + B, C is still live)
         assert!(GC_COUNT.load(Ordering::Acquire) <= 2);
     }
-
 }
