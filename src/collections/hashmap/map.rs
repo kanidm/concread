@@ -149,7 +149,7 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapWriteTxn<'a, K, V> {
         let k_hash = hash_key!(k);
         // Does it exist?
         match self.map.get_mut(&k_hash) {
-            Some(mut va) => {
+            Some(va) => {
                 // Does our k exist in va?
                 for (ki, vi) in va.as_mut_slice().iter_mut() {
                     if *ki == k {
@@ -176,7 +176,7 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapWriteTxn<'a, K, V> {
     pub fn remove(&mut self, k: &K) -> Option<V> {
         let k_hash = hash_key!(k);
         match self.map.get_mut(&k_hash) {
-            Some(mut va) => {
+            Some(va) => {
                 let mut idx = 0;
                 for (ki, _vi) in va.iter() {
                     if k.eq(ki.borrow()) {

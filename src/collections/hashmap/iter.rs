@@ -60,7 +60,7 @@ where
 }
 
 impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> KeyIter<'a, K, V> {
-    pub(crate) fn new(mut biter: BIter<'a, u64, vinner<K, V>>) -> Self {
+    pub(crate) fn new(biter: BIter<'a, u64, vinner<K, V>>) -> Self {
         KeyIter {
             iter: Iter::new(biter),
         }
@@ -89,7 +89,7 @@ where
 }
 
 impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> ValueIter<'a, K, V> {
-    pub(crate) fn new(mut biter: BIter<'a, u64, vinner<K, V>>) -> Self {
+    pub(crate) fn new(biter: BIter<'a, u64, vinner<K, V>>) -> Self {
         ValueIter {
             iter: Iter::new(biter),
         }
