@@ -1,3 +1,15 @@
+//! Arc - A concurrently readable adaptive replacement cache.
+//!
+//! An Arc is used in place of a `RwLock<LruCache>` or `Mutex<LruCache>`.
+//! This structure is transactional, meaning that readers have guaranteed
+//! point-in-time views of the cache and their items, while allowing writers
+//! to proceed with inclusions and cache state management in parallel.
+//!
+//! This means that unlike a `RwLock` which can have many readers OR one writer
+//! this cache is capable of many readers, over multiple data generations AND
+//! writers that are serialised. This formally means that this is an ACID
+//! compliant Cache.
+
 mod ll;
 
 use self::ll::{LLNode, LL};
@@ -7,8 +19,9 @@ use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-use std::borrow::{Borrow, ToOwned};
+use std::borrow::Borrow;
 use std::cell::UnsafeCell;
+use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem;
@@ -49,6 +62,7 @@ where
     Haunted(*mut LLNode<CacheItemInner<K>>),
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum CacheState {
     Freq,
@@ -59,6 +73,7 @@ pub(crate) enum CacheState {
     None,
 }
 
+#[cfg(test)]
 #[derive(Debug, PartialEq)]
 pub(crate) struct CStat {
     max: usize,
@@ -88,6 +103,8 @@ where
     min_txid: usize,
 }
 
+/// A concurrently readable adaptive replacement cache. Operations are performed on the
+/// cache via read and write operations.
 pub struct Arc<K, V>
 where
     K: Hash + Eq + Ord + Clone + Debug,
@@ -109,11 +126,15 @@ where
 unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Send for Arc<K, V> {}
 unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Sync for Arc<K, V> {}
 
-pub struct ArcReadTxn<K, V>
+/// An active read transaction over the cache. The data is this cache is guaranteed to be
+/// valid at the point in time the read is created. You may include items during a cache
+/// miss via the "insert" function.
+pub struct ArcReadTxn<'a, K, V>
 where
     K: Hash + Eq + Ord + Clone + Debug,
     V: Clone + Debug,
 {
+    caller: &'a Arc<K, V>,
     // ro_txn to cache
     cache: BptreeMapReadTxn<K, CacheItem<K, V>>,
     // cache of our missed items to send forward.
@@ -124,6 +145,10 @@ where
     ts: Instant,
 }
 
+/// An active write transaction over the cache. The data in this cache is isolated
+/// from readers, and may be rolled-back if an error occurs. Changes only become
+/// globally visible once you call "commit". Items may be added to the cache on
+/// a miss via "insert", and you can explicitly remove items by calling "remove".
 pub struct ArcWriteTxn<'a, K, V>
 where
     K: Hash + Eq + Ord + Clone + Debug,
@@ -154,6 +179,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> CacheItem<K, V> {
         }
     }
 
+    #[cfg(test)]
     fn to_state(&self) -> CacheState {
         match &self {
             CacheItem::Freq(_, _v) => CacheState::Freq,
@@ -296,13 +322,45 @@ macro_rules! evict_to_haunted_len {
 }
 
 impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
-    pub fn new(max: usize) -> Self {
+    /// Create a new Arc, that derives it's size based on your expected workload.
+    ///
+    /// The values are total number of items you want to have in memory, the number
+    /// of read threads you expect concurrently, the expected average number of cache
+    /// misses per read operation, and the expected average number of writes or write
+    /// cache misses per operation. The following formula is assumed:
+    ///
+    /// `max + (threads * (max/16))`
+    /// `    + (threads * avg number of misses per op)`
+    /// `    + avg number of writes per transaction`
+    ///
+    /// The cache may still exceed your provided total, and inaccurate tuning numbers
+    /// will yield a situation where you may use too-little ram, or too much. This could
+    /// be to your read misses exceeding your expected amount causing the queues to have
+    /// more items in them at a time, or your writes are larger than expected.
+    pub fn new(total: usize, threads: usize, ex_ro_miss: usize, ex_rw_miss: usize) -> Self {
+        let y = isize::try_from(total).unwrap();
+        let t = isize::try_from(threads).unwrap();
+        let m = isize::try_from(ex_ro_miss).unwrap();
+        let w = isize::try_from(ex_rw_miss).unwrap();
+        let r = isize::try_from(READ_THREAD_RATIO).unwrap();
+        // I'd like to thank wolfram alpha ... for this magic.
+        let max = -((r * ((m * t) + w - y)) / (r + t));
+        let read_max = max / r;
+
+        let max = usize::try_from(max).unwrap();
+        let read_max = usize::try_from(read_max).unwrap();
+
+        Self::new_size(max, read_max)
+    }
+
+    /// Create a new Arc, with a capacity of `max` main cache items and `read_max`
+    /// Note that due to the way the cache operates, the number of items can and
+    /// will exceed `max` on a regular basis, so you should consider using `new`
+    /// and specifying your expected workload parameters to have a better derived
+    /// cache size.
+    pub fn new_size(max: usize, read_max: usize) -> Self {
         assert!(max > 0);
-        let read_max = if (max / READ_THREAD_RATIO) <= READ_THREAD_MIN {
-            READ_THREAD_MIN
-        } else {
-            max / READ_THREAD_RATIO
-        };
+        assert!(read_max > 0);
         let (tx, rx) = channel();
         let inner = Mutex::new(ArcInner {
             p: 0,
@@ -323,8 +381,12 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         }
     }
 
+    /// Begin a read operation on the cache. This reader has a thread-local cache for items
+    /// that are localled included via `insert`, and can communicate back to the main cache
+    /// to safely include items.
     pub fn read(&self) -> ArcReadTxn<K, V> {
         ArcReadTxn {
+            caller: &self,
             cache: self.cache.read(),
             tlocal: LruCache::new(self.read_max),
             tx: self.tx.clone(),
@@ -332,6 +394,9 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         }
     }
 
+    /// Begin a write operation on the cache. This writer has a thread-local store
+    /// for all items that have been included or dirtied in the transactions, items
+    /// may be removed from this cache (ie deleted, invalidated).
     pub fn write(&self) -> ArcWriteTxn<K, V> {
         ArcWriteTxn {
             caller: &self,
@@ -352,7 +417,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         })
     }
 
-    pub fn try_quiesce(&self) {
+    fn try_quiesce(&self) {
         match self.try_write() {
             Some(wr_txn) => wr_txn.commit(),
             None => {}
@@ -450,7 +515,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
 
         // drain tlocal into the main cache.
         tlocal.into_iter().for_each(|(k, tcio)| {
-            let mut r = cache.get_mut(&k);
+            let r = cache.get_mut(&k);
             match (r, tcio) {
                 (None, ThreadCacheItem::Clean(tci)) => {
                     let llp = inner.rec.append_k(CacheItemInner {
@@ -624,7 +689,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                     match r {
                         Some(ref mut ci) => {
                             let mut next_state = match &ci {
-                                CacheItem::Freq(llp, v) => {
+                                CacheItem::Freq(llp, _v) => {
                                     inner.freq.touch(*llp);
                                     if unsafe { (**llp).k.txid >= txid } || inner.min_txid > txid {
                                         // println!("rxinc {:?} Freq -> Freq (touch only)", k);
@@ -637,7 +702,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                                         Some(CacheItem::Freq(*llp, iv))
                                     }
                                 }
-                                CacheItem::Rec(llp, v) => {
+                                CacheItem::Rec(llp, _v) => {
                                     inner.rec.extract(*llp);
                                     inner.freq.append_n(*llp);
                                     if unsafe { (**llp).k.txid >= txid } || inner.min_txid > txid {
@@ -896,6 +961,12 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
 }
 
 impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K, V> {
+    /// Commit the changes of this writer, making them globally visible. This causes
+    /// all items written to this thread's local store to become visible in the main
+    /// cache.
+    ///
+    /// To rollback (abort) and operation, just do not call commit (consider std::mem::drop
+    /// on the write transaction)
     pub fn commit(self) {
         self.caller.commit(
             self.cache,
@@ -905,6 +976,9 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
         )
     }
 
+    /// Clear all items of the cache. This operation does not take effect until you commit.
+    /// After calling "clear", you may then include new items which will be stored thread
+    /// locally until you commit.
     pub fn clear(&mut self) {
         // Mark that we have been requested to clear the cache.
         unsafe {
@@ -922,7 +996,10 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
         // Inserts are accepted.
     }
 
-    // get
+    /// Attempt to retieve a k-v pair from the cache. If it is present in the main cache OR
+    /// the thread local cache, a `Some` is returned, else you will recieve a `None`. On a
+    /// `None`, you must then consult the external data source that this structure is acting
+    /// as a cache for.
     pub fn get<'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
     where
         K: Borrow<Q> + From<Q>,
@@ -947,8 +1024,7 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
             };
             if !is_cleared {
                 if let Some(v) = self.cache.get(k) {
-                    v as *const _;
-                    unsafe { (*v).to_vref() }
+                    (*v).to_vref()
                 } else {
                     None
                 }
@@ -970,7 +1046,7 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
         r
     }
 
-    // contains
+    /// Determine if this cache contains the following key.
     pub fn contains_key<'b, Q: ?Sized>(&'a self, k: &'b Q) -> bool
     where
         K: Borrow<Q> + From<Q>,
@@ -979,8 +1055,9 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
         self.get(k).is_some()
     }
 
-    // insert
-    // Add this value to a cache. For us that just means the tlocal cache.
+    /// Add a value to the cache. This may be because you have had a cache miss and
+    /// now wish to include in the thread local storage, or because you have written
+    /// a new value and want it to be submitted for caching.
     pub fn insert(&mut self, k: K, v: V) {
         self.tlocal.insert(k, ThreadCacheItem::Clean(v));
     }
@@ -991,24 +1068,26 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
         self.tlocal.insert(k, ThreadCacheItem::Removed);
     }
 
+    #[cfg(test)]
     pub(crate) fn peek_hit(&self) -> &[K] {
         let hit_ptr = self.hit.get();
         unsafe { &(*hit_ptr) }
     }
 
+    #[cfg(test)]
     pub(crate) fn peek_cache<'b, Q: ?Sized>(&'a self, k: &'b Q) -> CacheState
     where
         K: Borrow<Q> + From<Q>,
         Q: Hash + Eq + Ord + Clone,
     {
         if let Some(v) = self.cache.get(k) {
-            v as *const _;
-            unsafe { (*v).to_state() }
+            (*v).to_state()
         } else {
             CacheState::None
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn peek_stat(&self) -> CStat {
         let inner = self.caller.inner.lock();
         CStat {
@@ -1032,7 +1111,11 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
     // to_snapshot
 }
 
-impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<K, V> {
+impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K, V> {
+    /// Attempt to retieve a k-v pair from the cache. If it is present in the main cache OR
+    /// the thread local cache, a `Some` is returned, else you will recieve a `None`. On a
+    /// `None`, you must then consult the external data source that this structure is acting
+    /// as a cache for.
     pub fn get<'b, Q: ?Sized>(&'b mut self, k: &'b Q) -> Option<&'b V>
     where
         KeyRef<K>: Borrow<Q>,
@@ -1044,8 +1127,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<K, V> {
             unsafe { Some(&(*v)) }
         } else {
             if let Some(v) = self.cache.get(k) {
-                v as *const _;
-                unsafe { (*v).to_vref() }
+                (*v).to_vref()
             } else {
                 None
             }
@@ -1060,6 +1142,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<K, V> {
         r
     }
 
+    /// Determine if this cache contains the following key.
     pub fn contains_key<'b, Q: ?Sized>(&mut self, k: &'b Q) -> bool
     where
         KeyRef<K>: Borrow<Q>,
@@ -1069,6 +1152,13 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<K, V> {
         self.get(k).is_some()
     }
 
+    /// Add a value to the cache. This may be because you have had a cache miss and
+    /// now wish to include in the thread local storage.
+    ///
+    /// Note that is invalid to insert an item who's key already exists in this cache,
+    /// and in debug builds this is asserted. It is also invalid for you to insert
+    /// a value that does not match the source-of-truth state, IE inserting a different
+    /// value than another thread may percieve.
     pub fn insert(&mut self, k: K, v: V) {
         // In debug, assert that we don't contain this key aready!
         debug_assert!(self.contains_key(&k) == false);
@@ -1085,6 +1175,12 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<K, V> {
     }
 }
 
+impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Drop for ArcReadTxn<'a, K, V> {
+    fn drop(&mut self) {
+        self.caller.try_quiesce();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::cache::arc::Arc;
@@ -1093,7 +1189,7 @@ mod tests {
 
     #[test]
     fn test_cache_arc_basic() {
-        let arc: Arc<usize, usize> = Arc::new(4);
+        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
         let mut wr_txn = arc.write();
 
         assert!(wr_txn.get(&1) == None);
@@ -1119,7 +1215,7 @@ mod tests {
     #[test]
     fn test_cache_evict() {
         println!("== 1");
-        let arc: Arc<usize, usize> = Arc::new(4);
+        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
         let mut wr_txn = arc.write();
         assert!(
             CStat {
@@ -1392,7 +1488,7 @@ mod tests {
         // Now we want to check some basic interactions of read and write together.
 
         // Setup the cache.
-        let arc: Arc<usize, usize> = Arc::new(4);
+        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
         // start a rd
         {
             let mut rd_txn = arc.read();
@@ -1503,7 +1599,7 @@ mod tests {
         // so that all keys and their eviction ids are always tracked for all of time
         // to ensure that we never incorrectly include a value that may have been updated
         // more recently.
-        let arc: Arc<usize, usize> = Arc::new(4);
+        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
 
         // Start a wr
         let mut wr_txn = arc.write();
@@ -1555,7 +1651,7 @@ mod tests {
 
     #[test]
     fn test_cache_clear() {
-        let arc: Arc<usize, usize> = Arc::new(4);
+        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
 
         // Start a wr
         let mut wr_txn = arc.write();
@@ -1606,7 +1702,7 @@ mod tests {
 
     #[test]
     fn test_cache_clear_rollback() {
-        let arc: Arc<usize, usize> = Arc::new(4);
+        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
 
         // Start a wr
         let mut wr_txn = arc.write();
@@ -1656,7 +1752,7 @@ mod tests {
 
     #[test]
     fn test_cache_clear_cursed() {
-        let arc: Arc<usize, usize> = Arc::new(4);
+        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
         // Setup for the test
         // --
         let mut wr_txn = arc.write();

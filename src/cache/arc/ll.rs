@@ -100,6 +100,7 @@ where
         n
     }
 
+    #[cfg(test)]
     pub(crate) fn peek_head(&self) -> Option<&LLNode<K>> {
         if self.head.is_null() {
             None
@@ -109,6 +110,7 @@ where
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn peek_tail(&self) -> Option<&LLNode<K>> {
         if self.tail.is_null() {
             None
