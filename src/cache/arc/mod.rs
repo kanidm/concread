@@ -15,7 +15,7 @@ mod ll;
 use self::ll::{LLNode, LL};
 use crate::collections::bptree::*;
 use lru::{KeyRef, LruCache};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::collections::BTreeMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
@@ -103,6 +103,20 @@ where
     min_txid: usize,
 }
 
+struct ArcShared<K, V>
+where
+    K: Hash + Eq + Ord + Clone + Debug,
+    V: Clone + Debug,
+{
+    // Max number of elements to cache.
+    max: usize,
+    // Max number of elements for a reader per thread.
+    read_max: usize,
+    // channels for readers.
+    // tx (cloneable)
+    tx: Sender<CacheEvent<K, V>>,
+}
+
 /// A concurrently readable adaptive replacement cache. Operations are performed on the
 /// cache via read and write operations.
 pub struct Arc<K, V>
@@ -113,13 +127,7 @@ where
     // Use a unified tree, allows simpler movement of items between the
     // cache types.
     cache: BptreeMap<K, CacheItem<K, V>>,
-    // Max number of elements to cache.
-    max: usize,
-    // Max number of elements for a reader per thread.
-    read_max: usize,
-    // channels for readers.
-    // tx (cloneable)
-    tx: Sender<CacheEvent<K, V>>,
+    shared: RwLock<ArcShared<K, V>>,
     inner: Mutex<ArcInner<K, V>>,
 }
 
@@ -362,6 +370,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         assert!(max > 0);
         assert!(read_max > 0);
         let (tx, rx) = channel();
+        let shared = RwLock::new(ArcShared { max, read_max, tx });
         let inner = Mutex::new(ArcInner {
             p: 0,
             freq: LL::new(),
@@ -374,9 +383,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         });
         Arc {
             cache: BptreeMap::new(),
-            max,
-            read_max,
-            tx,
+            shared,
             inner,
         }
     }
@@ -385,11 +392,12 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
     /// that are localled included via `insert`, and can communicate back to the main cache
     /// to safely include items.
     pub fn read(&self) -> ArcReadTxn<K, V> {
+        let rshared = self.shared.read();
         ArcReadTxn {
             caller: &self,
             cache: self.cache.read(),
-            tlocal: LruCache::new(self.read_max),
-            tx: self.tx.clone(),
+            tlocal: LruCache::new(rshared.read_max),
+            tx: rshared.tx.clone(),
             ts: Instant::now(),
         }
     }
@@ -462,6 +470,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         let commit_txid = cache.get_txid();
         // Copy p + init cache sizes for adjustment.
         let mut inner = self.inner.lock();
+        let shared = self.shared.read();
 
         // Did we request to be cleared? If so, we move everything to a ghost set
         // that was live.
@@ -612,7 +621,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                             // println!("tlocal {:?} GhostRec -> Rec", k);
                             // Ajdust p
                             Self::calc_p_rec(
-                                self.max,
+                                shared.max,
                                 inner.ghost_rec.len(),
                                 inner.ghost_freq.len(),
                                 &mut inner.p,
@@ -738,7 +747,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                                 CacheItem::GhostRec(llp) => {
                                     // Adjust p
                                     Self::calc_p_rec(
-                                        self.max,
+                                        shared.max,
                                         inner.ghost_rec.len(),
                                         inner.ghost_freq.len(),
                                         &mut inner.p,
@@ -851,11 +860,11 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         // * p has possibly changed width, causing a balance shift
         // * and ghost items have been included changing ghost list sizes.
         // so we need to do a clean up/balance of all the list lengths.
-        debug_assert!(inner.p <= self.max);
+        debug_assert!(inner.p <= shared.max);
         // Convince the compiler copying is okay.
         let p = inner.p;
 
-        if inner.rec.len() + inner.freq.len() > self.max {
+        if inner.rec.len() + inner.freq.len() > shared.max {
             // println!("Checking cache evict");
             /*
             println!(
@@ -864,7 +873,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                 inner.freq.len()
             );
             */
-            let delta = (inner.rec.len() + inner.freq.len()) - self.max;
+            let delta = (inner.rec.len() + inner.freq.len()) - shared.max;
             // We have overflowed by delta. As we are not "evicting as we go" we have to work out
             // what we should have evicted up to now.
             //
@@ -911,10 +920,10 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
             };
 
             // Now we can get the expected sizes;
-            debug_assert!(self.max >= rec_to_len);
-            let freq_to_len = self.max - rec_to_len;
+            debug_assert!(shared.max >= rec_to_len);
+            let freq_to_len = shared.max - rec_to_len;
             // println!("move to -> rec {:?}, freq {:?}", rec_to_len, freq_to_len);
-            debug_assert!(freq_to_len + rec_to_len <= self.max);
+            debug_assert!(freq_to_len + rec_to_len <= shared.max);
 
             evict_to_len!(
                 &mut cache,
@@ -933,7 +942,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
 
             // Finally, do an evict of the ghost sets if they are too long - these are weighted
             // inverse to the above sets.
-            if inner.ghost_rec.len() > (self.max - p) {
+            if inner.ghost_rec.len() > (shared.max - p) {
                 evict_to_haunted_len!(
                     &mut cache,
                     &mut inner.ghost_rec,
@@ -1090,8 +1099,9 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
     #[cfg(test)]
     pub(crate) fn peek_stat(&self) -> CStat {
         let inner = self.caller.inner.lock();
+        let shared = self.caller.shared.read();
         CStat {
-            max: self.caller.max,
+            max: shared.max,
             cache: self.cache.len(),
             tlocal: self.tlocal.len(),
             freq: inner.freq.len(),
