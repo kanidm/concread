@@ -155,7 +155,7 @@ where
         let head = self.head;
         let tail = self.tail;
         let mut n = unsafe { (*head).next };
-        while !n.is_null() && n != tail {
+        while n != tail {
             let next = unsafe { (*n).next };
             unsafe { ptr::drop_in_place((*n).k.as_mut_ptr()) };
             LLNode::free(n);
@@ -249,7 +249,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::cache::arc::ll::LL;
+    use crate::cache::arc::ll::{LL, LLNode};
 
     #[test]
     fn test_cache_arc_ll_basic() {
@@ -290,12 +290,12 @@ mod tests {
         assert!(ll.peek_tail().unwrap() == &1);
 
         // cut a node out from any (head, mid, tail)
-        let _n2 = ll.extract(n2);
+        ll.extract(n2);
         assert!(ll.len() == 2);
         assert!(ll.peek_head().unwrap() == &4);
         assert!(ll.peek_tail().unwrap() == &1);
 
-        let _n1 = ll.extract(n1);
+        ll.extract(n1);
         assert!(ll.len() == 1);
         assert!(ll.peek_head().unwrap() == &4);
         assert!(ll.peek_tail().unwrap() == &4);
@@ -310,5 +310,10 @@ mod tests {
         assert!(ll.len() == 0);
         assert!(ll.peek_head().is_none());
         assert!(ll.peek_tail().is_none());
+
+        LLNode::free(n1);
+        LLNode::free(n2);
+        LLNode::free(n3);
+        LLNode::free(n4);
     }
 }
