@@ -152,12 +152,17 @@ where
     K: Hash + Eq + Ord + Clone + Debug,
 {
     fn drop(&mut self) {
-        let mut n = self.head;
-        while !n.is_null() {
+        let head = self.head;
+        let tail = self.tail;
+        let mut n = unsafe { (*head).next };
+        while !n.is_null() && n != tail {
             let next = unsafe { (*n).next };
+            unsafe { ptr::drop_in_place((*n).k.as_mut_ptr()) };
             LLNode::free(n);
             n = next;
         }
+        LLNode::free(head);
+        LLNode::free(tail);
     }
 }
 
