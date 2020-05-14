@@ -14,7 +14,6 @@ mod ll;
 
 use self::ll::{LLNode, LL};
 use crate::collections::bptree::*;
-use lru::{KeyRef, LruCache};
 use parking_lot::{Mutex, RwLock};
 use std::collections::BTreeMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -147,7 +146,9 @@ where
     cache: BptreeMapReadTxn<K, CacheItem<K, V>>,
     // cache of our missed items to send forward.
     // On drop we drain this to the channel
-    tlocal: LruCache<K, V>,
+    tlocal: BTreeMap<K, *mut LLNode<(K, V)>>,
+    read_size: usize,
+    tlru: LL<(K, V)>,
     // tx channel to send forward events.
     tx: Sender<CacheEvent<K, V>>,
     ts: Instant,
@@ -396,7 +397,9 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         ArcReadTxn {
             caller: &self,
             cache: self.cache.read(),
-            tlocal: LruCache::new(rshared.read_max),
+            tlocal: BTreeMap::new(),
+            tlru: LL::new(),
+            read_size: rshared.read_max,
             tx: rshared.tx.clone(),
             ts: Instant::now(),
         }
@@ -1138,13 +1141,15 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K,
     /// as a cache for.
     pub fn get<'b, Q: ?Sized>(&'b mut self, k: &'b Q) -> Option<&'b V>
     where
-        KeyRef<K>: Borrow<Q>,
         K: Borrow<Q> + From<Q>,
         Q: Hash + Eq + Ord + Clone,
     {
         let r: Option<&V> = if let Some(tci) = self.tlocal.get(k) {
-            let v = tci as *const _;
-            unsafe { Some(&(*v)) }
+            unsafe {
+                let v = &(**tci).as_ref().1 as *const _;
+                // This discards the lifetime and repins it to &'b.
+                Some(&(*v))
+            }
         } else {
             if let Some(v) = self.cache.get(k) {
                 (*v).to_vref()
@@ -1165,7 +1170,6 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K,
     /// Determine if this cache contains the following key.
     pub fn contains_key<'b, Q: ?Sized>(&mut self, k: &'b Q) -> bool
     where
-        KeyRef<K>: Borrow<Q>,
         K: Borrow<Q> + From<Q>,
         Q: Hash + Eq + Ord + Clone,
     {
@@ -1179,7 +1183,7 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K,
     /// and in debug builds this is asserted. It is also invalid for you to insert
     /// a value that does not match the source-of-truth state, IE inserting a different
     /// value than another thread may percieve.
-    pub fn insert(&mut self, k: K, v: V) {
+    pub fn insert(&mut self, k: K, mut v: V) {
         // In debug, assert that we don't contain this key aready!
         debug_assert!(self.contains_key(&k) == false);
         // Send a copy forward through time and space.
@@ -1191,7 +1195,23 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K,
                 self.cache.get_txid(),
             ))
             .expect("Invalid tx state!");
-        self.tlocal.put(k, v);
+
+        let n = if self.tlru.len() >= self.read_size {
+            let n = self.tlru.pop();
+            // swap the old_key/old_val out
+            let mut k_clone = k.clone();
+            unsafe {
+                mem::swap(&mut k_clone, &mut (*n).as_mut().0);
+                mem::swap(&mut v, &mut (*n).as_mut().1);
+            }
+            // remove old K from the tree:
+            self.tlocal.remove(&k_clone);
+            n
+        } else {
+            // Just add it!
+            self.tlru.append_k((k.clone(), v))
+        };
+        self.tlocal.insert(k, n);
     }
 }
 

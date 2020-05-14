@@ -1,5 +1,4 @@
 use std::fmt::Debug;
-use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ptr;
@@ -7,7 +6,7 @@ use std::ptr;
 #[derive(Clone, Debug)]
 pub(crate) struct LL<K>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
+    K: Clone + Debug,
 {
     head: *mut LLNode<K>,
     tail: *mut LLNode<K>,
@@ -17,7 +16,7 @@ where
 #[derive(Debug)]
 pub(crate) struct LLNode<K>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
+    K: Clone + Debug,
 {
     pub(crate) k: MaybeUninit<K>,
     next: *mut LLNode<K>,
@@ -27,7 +26,7 @@ where
 #[derive(Clone, Debug)]
 pub(crate) struct LLIterMut<'a, K>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
+    K: Clone + Debug,
 {
     next: *mut LLNode<K>,
     end: *mut LLNode<K>,
@@ -36,7 +35,7 @@ where
 
 impl<K> LL<K>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
+    K: Clone + Debug,
 {
     pub(crate) fn new() -> Self {
         let (head, tail) = LLNode::create_markers();
@@ -149,7 +148,7 @@ where
 
 impl<K> Drop for LL<K>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
+    K: Clone + Debug,
 {
     fn drop(&mut self) {
         let head = self.head;
@@ -168,7 +167,7 @@ where
 
 impl<K> LLNode<K>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
+    K: Clone + Debug,
 {
     #[inline]
     pub(crate) fn create_markers() -> (*mut Self, *mut Self) {
@@ -207,7 +206,7 @@ where
 
 impl<K> AsRef<K> for LLNode<K>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
+    K: Clone + Debug,
 {
     fn as_ref(&self) -> &K {
         unsafe {
@@ -219,7 +218,7 @@ where
 
 impl<K> AsMut<K> for LLNode<K>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
+    K: Clone + Debug,
 {
     fn as_mut(&mut self) -> &mut K {
         unsafe {
@@ -231,7 +230,7 @@ where
 
 impl<'a, K> Iterator for LLIterMut<'a, K>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
+    K: Clone + Debug,
 {
     type Item = &'a mut K;
 
