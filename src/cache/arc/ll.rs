@@ -199,7 +199,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn free(v: *mut Self) {
+    fn free(v: *mut Self) {
         debug_assert!(!v.is_null());
         let _ = unsafe { Box::from_raw(v) };
     }
@@ -249,71 +249,73 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::cache::arc::ll::{LL, LLNode};
+    use crate::cache::arc::ll::{LLNode, LL};
 
     #[test]
     fn test_cache_arc_ll_basic() {
-        let mut ll: LL<usize> = LL::new();
+        // We test with box so that we leak on error
+        let mut ll: LL<Box<usize>> = LL::new();
         assert!(ll.len() == 0);
         // Allocate new nodes
-        let n1 = ll.append_k(1);
-        let n2 = ll.append_k(2);
-        let n3 = ll.append_k(3);
-        let n4 = ll.append_k(4);
+        let n1 = ll.append_k(Box::new(1));
+        let n2 = ll.append_k(Box::new(2));
+        let n3 = ll.append_k(Box::new(3));
+        let n4 = ll.append_k(Box::new(4));
         // Check that n1 is the head, n3 is tail.
         assert!(ll.len() == 4);
-        assert!(ll.peek_head().unwrap() == &1);
-        assert!(ll.peek_tail().unwrap() == &4);
+        assert!(ll.peek_head().unwrap().as_ref() == &1);
+        assert!(ll.peek_tail().unwrap().as_ref() == &4);
 
         // Touch 2, it's now tail.
         ll.touch(n2);
         assert!(ll.len() == 4);
-        assert!(ll.peek_head().unwrap() == &1);
-        assert!(ll.peek_tail().unwrap() == &2);
+        assert!(ll.peek_head().unwrap().as_ref() == &1);
+        assert!(ll.peek_tail().unwrap().as_ref() == &2);
 
         // Touch 1 (head), it's the tail now.
         ll.touch(n1);
         assert!(ll.len() == 4);
-        assert!(ll.peek_head().unwrap() == &3);
-        assert!(ll.peek_tail().unwrap() == &1);
+        assert!(ll.peek_head().unwrap().as_ref() == &3);
+        assert!(ll.peek_tail().unwrap().as_ref() == &1);
 
         // Touch 1 (tail), it stays as tail.
         ll.touch(n1);
         assert!(ll.len() == 4);
-        assert!(ll.peek_head().unwrap() == &3);
-        assert!(ll.peek_tail().unwrap() == &1);
+        assert!(ll.peek_head().unwrap().as_ref() == &3);
+        assert!(ll.peek_tail().unwrap().as_ref() == &1);
 
         // pop from head
         let _n3 = ll.pop();
         assert!(ll.len() == 3);
-        assert!(ll.peek_head().unwrap() == &4);
-        assert!(ll.peek_tail().unwrap() == &1);
+        assert!(ll.peek_head().unwrap().as_ref() == &4);
+        assert!(ll.peek_tail().unwrap().as_ref() == &1);
 
         // cut a node out from any (head, mid, tail)
         ll.extract(n2);
         assert!(ll.len() == 2);
-        assert!(ll.peek_head().unwrap() == &4);
-        assert!(ll.peek_tail().unwrap() == &1);
+        assert!(ll.peek_head().unwrap().as_ref() == &4);
+        assert!(ll.peek_tail().unwrap().as_ref() == &1);
 
         ll.extract(n1);
         assert!(ll.len() == 1);
-        assert!(ll.peek_head().unwrap() == &4);
-        assert!(ll.peek_tail().unwrap() == &4);
+        assert!(ll.peek_head().unwrap().as_ref() == &4);
+        assert!(ll.peek_tail().unwrap().as_ref() == &4);
 
         // test touch on ll of size 1
         ll.touch(n4);
         assert!(ll.len() == 1);
-        assert!(ll.peek_head().unwrap() == &4);
-        assert!(ll.peek_tail().unwrap() == &4);
+        assert!(ll.peek_head().unwrap().as_ref() == &4);
+        assert!(ll.peek_tail().unwrap().as_ref() == &4);
         // Remove last
         let _n4 = ll.pop();
         assert!(ll.len() == 0);
         assert!(ll.peek_head().is_none());
         assert!(ll.peek_tail().is_none());
 
-        LLNode::free(n1);
-        LLNode::free(n2);
-        LLNode::free(n3);
-        LLNode::free(n4);
+        // Add them all back so they are dropped.
+        ll.append_n(n1);
+        ll.append_n(n2);
+        ll.append_n(n3);
+        ll.append_n(n4);
     }
 }
