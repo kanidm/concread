@@ -212,9 +212,9 @@ macro_rules! drain_ll_to_ghost {
             debug_assert!(!n.is_null());
             unsafe {
                 // Set the item's evict txid.
-                (*n).k.txid = $txid;
+                (*n).as_mut().txid = $txid;
             }
-            let mut r = $cache.get_mut(unsafe { &(*n).k.k });
+            let mut r = $cache.get_mut(unsafe { &(*n).as_mut().k });
             match r {
                 Some(ref mut ci) => {
                     let mut next_state = match &ci {
@@ -256,10 +256,10 @@ macro_rules! evict_to_len {
         while $ll.len() > $size {
             let n = $ll.pop();
             debug_assert!(!n.is_null());
-            let mut r = $cache.get_mut(unsafe { &(*n).k.k });
+            let mut r = $cache.get_mut(unsafe { &(*n).as_mut().k });
             unsafe {
                 // Set the item's evict txid.
-                (*n).k.txid = $txid;
+                (*n).as_mut().txid = $txid;
             }
             match r {
                 Some(ref mut ci) => {
@@ -309,10 +309,10 @@ macro_rules! evict_to_haunted_len {
             let n = $ll.pop();
             debug_assert!(!n.is_null());
             $to_ll.append_n(n);
-            let mut r = $cache.get_mut(unsafe { &(*n).k.k });
+            let mut r = $cache.get_mut(unsafe { &(*n).as_mut().k });
             unsafe {
                 // Set the item's evict txid.
-                (*n).k.txid = $txid;
+                (*n).as_mut().txid = $txid;
             }
             match r {
                 Some(ref mut ci) => {
@@ -546,7 +546,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                     let mut next_state = match ci {
                         CacheItem::Freq(llp, _v) => {
                             // println!("tlocal {:?} Freq -> Freq", k);
-                            unsafe { (**llp).k.txid = commit_txid };
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.freq.extract(*llp);
                             inner.haunted.append_n(*llp);
                             CacheItem::Haunted(*llp)
@@ -554,28 +554,28 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                         CacheItem::Rec(llp, _v) => {
                             // println!("tlocal {:?} Rec -> Freq", k);
                             // Remove the node and put it into freq.
-                            unsafe { (**llp).k.txid = commit_txid };
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.rec.extract(*llp);
                             inner.haunted.append_n(*llp);
                             CacheItem::Haunted(*llp)
                         }
                         CacheItem::GhostFreq(llp) => {
                             // println!("tlocal {:?} GhostFreq -> Freq", k);
-                            unsafe { (**llp).k.txid = commit_txid };
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.ghost_freq.extract(*llp);
                             inner.haunted.append_n(*llp);
                             CacheItem::Haunted(*llp)
                         }
                         CacheItem::GhostRec(llp) => {
                             // println!("tlocal {:?} GhostRec -> Rec", k);
-                            unsafe { (**llp).k.txid = commit_txid };
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.ghost_rec.extract(*llp);
                             inner.haunted.append_n(*llp);
                             CacheItem::Haunted(*llp)
                         }
                         CacheItem::Haunted(llp) => {
                             // println!("tlocal {:?} Haunted -> Rec", k);
-                            unsafe { (**llp).k.txid = commit_txid };
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             CacheItem::Haunted(*llp)
                         }
                     };
@@ -589,7 +589,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                     // It's in the cache - what action must we take?
                     let mut next_state = match ci {
                         CacheItem::Freq(llp, _v) => {
-                            unsafe { (**llp).k.txid = commit_txid };
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             // println!("tlocal {:?} Freq -> Freq", k);
                             // Move the list item to it's head.
                             inner.freq.touch(*llp);
@@ -599,7 +599,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                         CacheItem::Rec(llp, _v) => {
                             // println!("tlocal {:?} Rec -> Freq", k);
                             // Remove the node and put it into freq.
-                            unsafe { (**llp).k.txid = commit_txid };
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.rec.extract(*llp);
                             inner.freq.append_n(*llp);
                             CacheItem::Freq(*llp, (*tci).clone())
@@ -612,7 +612,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                                 inner.ghost_freq.len(),
                                 &mut inner.p,
                             );
-                            unsafe { (**llp).k.txid = commit_txid };
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.ghost_freq.extract(*llp);
                             inner.freq.append_n(*llp);
                             CacheItem::Freq(*llp, (*tci).clone())
@@ -626,14 +626,14 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                                 inner.ghost_freq.len(),
                                 &mut inner.p,
                             );
-                            unsafe { (**llp).k.txid = commit_txid };
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.ghost_rec.extract(*llp);
                             inner.rec.append_n(*llp);
                             CacheItem::Rec(*llp, (*tci).clone())
                         }
                         CacheItem::Haunted(llp) => {
                             // println!("tlocal {:?} Haunted -> Rec", k);
-                            unsafe { (**llp).k.txid = commit_txid };
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.haunted.extract(*llp);
                             inner.rec.append_n(*llp);
                             CacheItem::Rec(*llp, (*tci).clone())
@@ -700,26 +700,30 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                             let mut next_state = match &ci {
                                 CacheItem::Freq(llp, _v) => {
                                     inner.freq.touch(*llp);
-                                    if unsafe { (**llp).k.txid >= txid } || inner.min_txid > txid {
+                                    if unsafe { (**llp).as_ref().txid >= txid }
+                                        || inner.min_txid > txid
+                                    {
                                         // println!("rxinc {:?} Freq -> Freq (touch only)", k);
                                         // Our cache already has a newer value, keep it.
                                         None
                                     } else {
                                         // println!("rxinc {:?} Freq -> Freq (update)", k);
                                         // The value is newer, update.
-                                        unsafe { (**llp).k.txid = txid };
+                                        unsafe { (**llp).as_mut().txid = txid };
                                         Some(CacheItem::Freq(*llp, iv))
                                     }
                                 }
                                 CacheItem::Rec(llp, _v) => {
                                     inner.rec.extract(*llp);
                                     inner.freq.append_n(*llp);
-                                    if unsafe { (**llp).k.txid >= txid } || inner.min_txid > txid {
+                                    if unsafe { (**llp).as_ref().txid >= txid }
+                                        || inner.min_txid > txid
+                                    {
                                         // println!("rxinc {:?} Rec -> Freq (touch only)", k);
                                         None
                                     } else {
                                         // println!("rxinc {:?} Rec -> Freq (update)", k);
-                                        unsafe { (**llp).k.txid = txid };
+                                        unsafe { (**llp).as_mut().txid = txid };
                                         Some(CacheItem::Freq(*llp, iv))
                                     }
                                 }
@@ -731,7 +735,9 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                                         &mut inner.p,
                                     );
                                     inner.ghost_freq.extract(*llp);
-                                    if unsafe { (**llp).k.txid > txid } || inner.min_txid > txid {
+                                    if unsafe { (**llp).as_ref().txid > txid }
+                                        || inner.min_txid > txid
+                                    {
                                         // println!("rxinc {:?} GhostFreq -> GhostFreq", k);
                                         // The cache version is newer, this is just a hit.
                                         inner.ghost_freq.append_n(*llp);
@@ -740,7 +746,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                                         // This item is newer, so we can include it.
                                         // println!("rxinc {:?} GhostFreq -> Rec", k);
                                         inner.freq.append_n(*llp);
-                                        unsafe { (**llp).k.txid = txid };
+                                        unsafe { (**llp).as_mut().txid = txid };
                                         Some(CacheItem::Freq(*llp, iv))
                                     }
                                 }
@@ -753,26 +759,30 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                                         &mut inner.p,
                                     );
                                     inner.ghost_rec.extract(*llp);
-                                    if unsafe { (**llp).k.txid > txid } || inner.min_txid > txid {
+                                    if unsafe { (**llp).as_ref().txid > txid }
+                                        || inner.min_txid > txid
+                                    {
                                         // println!("rxinc {:?} GhostRec -> GhostRec", k);
                                         inner.ghost_rec.append_n(*llp);
                                         None
                                     } else {
                                         // println!("rxinc {:?} GhostRec -> Rec", k);
                                         inner.rec.append_n(*llp);
-                                        unsafe { (**llp).k.txid = txid };
+                                        unsafe { (**llp).as_mut().txid = txid };
                                         Some(CacheItem::Rec(*llp, iv))
                                     }
                                 }
                                 CacheItem::Haunted(llp) => {
-                                    if unsafe { (**llp).k.txid > txid } || inner.min_txid > txid {
+                                    if unsafe { (**llp).as_ref().txid > txid }
+                                        || inner.min_txid > txid
+                                    {
                                         // println!("rxinc {:?} Haunted -> Haunted", k);
                                         None
                                     } else {
                                         // println!("rxinc {:?} Haunted -> Rec", k);
                                         inner.haunted.extract(*llp);
                                         inner.rec.append_n(*llp);
-                                        unsafe { (**llp).k.txid = txid };
+                                        unsafe { (**llp).as_mut().txid = txid };
                                         Some(CacheItem::Rec(*llp, iv))
                                     }
                                 }
@@ -819,7 +829,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                     // anything that was included in a write.
                     let mut next_state = match &ci {
                         CacheItem::Freq(llp, v) => {
-                            if unsafe { (**llp).k.txid != commit_txid } {
+                            if unsafe { (**llp).as_ref().txid != commit_txid } {
                                 // println!("hit {:?} Freq -> Freq", k);
                                 inner.freq.touch(*llp);
                                 Some(CacheItem::Freq(*llp, v.clone()))
@@ -828,7 +838,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                             }
                         }
                         CacheItem::Rec(llp, v) => {
-                            if unsafe { (**llp).k.txid != commit_txid } {
+                            if unsafe { (**llp).as_ref().txid != commit_txid } {
                                 // println!("hit {:?} Rec -> Freq", k);
                                 inner.rec.extract(*llp);
                                 inner.freq.append_n(*llp);
