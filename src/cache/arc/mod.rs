@@ -33,17 +33,17 @@ const READ_THREAD_RATIO: usize = 16;
 /// Statistics related to the Arc
 #[derive(Clone, Debug, PartialEq)]
 pub struct CacheStats {
-    reader_hits: usize,
-    reader_includes: usize,
-    write_hits: usize,
-    write_inc_or_mod: usize,
-    shared_max: usize,
-    freq: usize,
-    recent: usize,
-    freq_evicts: usize,
-    recent_evicts: usize,
-    p_weight: usize,
-    all_seen_keys: usize,
+    pub reader_hits: usize,
+    pub reader_includes: usize,
+    pub write_hits: usize,
+    pub write_inc_or_mod: usize,
+    pub shared_max: usize,
+    pub freq: usize,
+    pub recent: usize,
+    pub freq_evicts: usize,
+    pub recent_evicts: usize,
+    pub p_weight: usize,
+    pub all_seen_keys: usize,
 }
 
 enum ThreadCacheItem<V> {
@@ -1226,13 +1226,14 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K,
     /// Add a value to the cache. This may be because you have had a cache miss and
     /// now wish to include in the thread local storage.
     ///
-    /// Note that is invalid to insert an item who's key already exists in this cache,
-    /// and in debug builds this is asserted. It is also invalid for you to insert
+    /// Note that is invalid to insert an item who's key already exists in this thread local cache,
+    /// and this is asserted IE will panic if you attempt this. It is also invalid for you to insert
     /// a value that does not match the source-of-truth state, IE inserting a different
-    /// value than another thread may percieve.
+    /// value than another thread may percieve. This is a *read* thread, so you should only be adding
+    /// values that are relevant to this read transaction and this point in time. If you do not
+    /// heed this warning, you may alter the fabric of time and space and have some interesting
+    /// distortions in your data over time.
     pub fn insert(&mut self, k: K, mut v: V) {
-        // In debug, assert that we don't contain this key aready!
-        debug_assert!(self.contains_key(&k) == false);
         // Send a copy forward through time and space.
         self.tx
             .send(CacheEvent::Include(
@@ -1258,7 +1259,9 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K,
             // Just add it!
             self.tlru.append_k((k.clone(), v))
         };
-        self.tlocal.insert(k, n);
+        let r = self.tlocal.insert(k, n);
+        // There should never be a previous value.
+        assert!(r.is_none());
     }
 }
 
