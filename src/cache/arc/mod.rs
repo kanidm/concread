@@ -14,6 +14,7 @@ mod ll;
 
 use self::ll::{LLNode, LL};
 use crate::collections::bptree::*;
+use crate::cowcell::{CowCell, CowCellReadTxn};
 use parking_lot::{Mutex, RwLock};
 use std::collections::BTreeMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -28,6 +29,22 @@ use std::time::Instant;
 
 const READ_THREAD_MIN: usize = 8;
 const READ_THREAD_RATIO: usize = 16;
+
+/// Statistics related to the Arc
+#[derive(Clone, Debug, PartialEq)]
+pub struct CacheStats {
+    pub reader_hits: usize,
+    pub reader_includes: usize,
+    pub write_hits: usize,
+    pub write_inc_or_mod: usize,
+    pub shared_max: usize,
+    pub freq: usize,
+    pub recent: usize,
+    pub freq_evicts: usize,
+    pub recent_evicts: usize,
+    pub p_weight: usize,
+    pub all_seen_keys: usize,
+}
 
 enum ThreadCacheItem<V> {
     Clean(V),
@@ -126,8 +143,12 @@ where
     // Use a unified tree, allows simpler movement of items between the
     // cache types.
     cache: BptreeMap<K, CacheItem<K, V>>,
+    // This is normally only ever taken in "read" mode, so it's effectively
+    // an uncontended barrier.
     shared: RwLock<ArcShared<K, V>>,
+    // These are only taken during a quiesce
     inner: Mutex<ArcInner<K, V>>,
+    stats: CowCell<CacheStats>,
 }
 
 unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Send for Arc<K, V> {}
@@ -382,10 +403,24 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
             rx,
             min_txid: 0,
         });
+        let stats = CowCell::new(CacheStats {
+            reader_hits: 0,
+            reader_includes: 0,
+            write_hits: 0,
+            write_inc_or_mod: 0,
+            shared_max: 0,
+            freq: 0,
+            recent: 0,
+            freq_evicts: 0,
+            recent_evicts: 0,
+            p_weight: 0,
+            all_seen_keys: 0,
+        });
         Arc {
             cache: BptreeMap::new(),
             shared,
             inner,
+            stats,
         }
     }
 
@@ -416,6 +451,10 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
             hit: UnsafeCell::new(Vec::new()),
             clear: UnsafeCell::new(false),
         }
+    }
+
+    pub fn view_stats(&self) -> CowCellReadTxn<CacheStats> {
+        self.stats.read()
     }
 
     fn try_write(&self) -> Option<ArcWriteTxn<K, V>> {
@@ -474,6 +513,8 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         // Copy p + init cache sizes for adjustment.
         let mut inner = self.inner.lock();
         let shared = self.shared.read();
+        let mut stat_guard = self.stats.write();
+        let stats = stat_guard.get_mut();
 
         // Did we request to be cleared? If so, we move everything to a ghost set
         // that was live.
@@ -484,22 +525,11 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
             // Set the watermark of this txn.
             inner.min_txid = commit_txid;
 
-            // mark the txid's of everything else.
-            /*
-            inner.ghost_freq.iter_mut().for_each(|n| {
-                unsafe { (*n).txid = commit_txid };
-            });
+            // Indicate that we evicted all to ghost/freq
+            stats.freq_evicts += inner.freq.len();
+            stats.recent_evicts += inner.rec.len();
 
-            inner.ghost_rec.iter_mut().for_each(|n| {
-                unsafe { (*n).txid = commit_txid };
-            });
-
-            inner.haunted.iter_mut().for_each(|n| {
-                unsafe { (*n).txid = commit_txid };
-            });
-            */
-
-            // And then move the active into ghost sets.
+            // Move everything active into ghost sets.
             drain_ll_to_ghost!(
                 &mut cache,
                 inner.freq,
@@ -524,6 +554,8 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         // was used. This gives us an advantage over other cache types - we can see
         // patterns based on temporal usage that other caches can't, at the expense that
         // it may take some moments for that cache pattern to sync to the main thread.
+
+        stats.write_inc_or_mod += tlocal.len();
 
         // drain tlocal into the main cache.
         tlocal.into_iter().for_each(|(k, tcio)| {
@@ -654,6 +686,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
             let t = match ce {
                 // Update if it was hit.
                 CacheEvent::Hit(t, k) => {
+                    stats.reader_hits += 1;
                     let mut r = cache.get_mut(&k);
                     match r {
                         Some(ref mut ci) => {
@@ -697,6 +730,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                 }
                 // Update if it was inc
                 CacheEvent::Include(t, k, iv, txid) => {
+                    stats.reader_includes += 1;
                     let mut r = cache.get_mut(&k);
                     match r {
                         Some(ref mut ci) => {
@@ -812,6 +846,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
             }
         }
 
+        stats.write_hits += hit.len();
         // drain the tlocal hits into the main cache.
         hit.into_iter().for_each(|k| {
             // * everything hit must be in main cache now, so bring these
@@ -876,6 +911,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         debug_assert!(inner.p <= shared.max);
         // Convince the compiler copying is okay.
         let p = inner.p;
+        stats.p_weight = p;
 
         if inner.rec.len() + inner.freq.len() > shared.max {
             // println!("Checking cache evict");
@@ -938,6 +974,9 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
             // println!("move to -> rec {:?}, freq {:?}", rec_to_len, freq_to_len);
             debug_assert!(freq_to_len + rec_to_len <= shared.max);
 
+            stats.freq_evicts += inner.freq.len() - freq_to_len;
+            stats.recent_evicts += inner.rec.len() - rec_to_len;
+
             evict_to_len!(
                 &mut cache,
                 &mut inner.rec,
@@ -954,7 +993,8 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
             );
 
             // Finally, do an evict of the ghost sets if they are too long - these are weighted
-            // inverse to the above sets.
+            // inverse to the above sets. Note the freq to len in ghost rec, and rec to len in
+            // ghost freq!
             if inner.ghost_rec.len() > (shared.max - p) {
                 evict_to_haunted_len!(
                     &mut cache,
@@ -976,6 +1016,13 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
             }
         }
 
+        stats.shared_max = shared.max;
+        stats.freq = inner.freq.len();
+        stats.recent = inner.rec.len();
+        stats.all_seen_keys = cache.len();
+
+        // Commit the stats
+        stat_guard.commit();
         // commit on the wr txn.
         cache.commit();
         // done!
@@ -1179,13 +1226,14 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K,
     /// Add a value to the cache. This may be because you have had a cache miss and
     /// now wish to include in the thread local storage.
     ///
-    /// Note that is invalid to insert an item who's key already exists in this cache,
-    /// and in debug builds this is asserted. It is also invalid for you to insert
+    /// Note that is invalid to insert an item who's key already exists in this thread local cache,
+    /// and this is asserted IE will panic if you attempt this. It is also invalid for you to insert
     /// a value that does not match the source-of-truth state, IE inserting a different
-    /// value than another thread may percieve.
+    /// value than another thread may percieve. This is a *read* thread, so you should only be adding
+    /// values that are relevant to this read transaction and this point in time. If you do not
+    /// heed this warning, you may alter the fabric of time and space and have some interesting
+    /// distortions in your data over time.
     pub fn insert(&mut self, k: K, mut v: V) {
-        // In debug, assert that we don't contain this key aready!
-        debug_assert!(self.contains_key(&k) == false);
         // Send a copy forward through time and space.
         self.tx
             .send(CacheEvent::Include(
@@ -1211,7 +1259,9 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K,
             // Just add it!
             self.tlru.append_k((k.clone(), v))
         };
-        self.tlocal.insert(k, n);
+        let r = self.tlocal.insert(k, n);
+        // There should never be a previous value.
+        assert!(r.is_none());
     }
 }
 
@@ -1521,6 +1571,9 @@ mod tests {
 
         // And done!
         wr_txn.commit();
+        // See what stats did
+        let stats = arc.view_stats();
+        println!("{:?}", *stats);
     }
 
     #[test]
@@ -1627,6 +1680,9 @@ mod tests {
         assert!(wr_txn.peek_cache(&4) == CacheState::Freq);
         assert!(wr_txn.peek_cache(&5) == CacheState::GhostRec);
         assert!(wr_txn.peek_cache(&6) == CacheState::GhostRec);
+        // See what stats did
+        let stats = arc.view_stats();
+        println!("{:?}", *stats);
     }
 
     // Test edge cases that are horrifying and could destroy peoples lives
@@ -1738,6 +1794,9 @@ mod tests {
         assert!(wr_txn.peek_cache(&15) == CacheState::GhostRec);
         assert!(wr_txn.peek_cache(&16) == CacheState::GhostFreq);
         assert!(wr_txn.peek_cache(&17) == CacheState::GhostFreq);
+        // See what stats did
+        let stats = arc.view_stats();
+        println!("{:?}", *stats);
     }
 
     #[test]
