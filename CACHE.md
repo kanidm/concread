@@ -95,6 +95,14 @@ cache max. As p increases, ghost-frequent and recent are increased in size, whil
 decrease. This way as items are evicted and `p` shifts, we do not have a set of infinite items that
 may cause evictions or `p` shifts unexpectedly.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/arc_1.png" width="60%" height="auto" />
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/arc_2.png" width="60%" height="auto" />
+</p>
+
 With the cache always adapting `p` between recent inclusions and high frequency accesses, the
 cache is able to satisfy a variety of workloads, and other research [r 7] has shown it has a better hit
 rate then many other cache strategies, for a low overhead of administration. Additionally, it is
@@ -133,6 +141,18 @@ This means that on a tree with a large number of nodes, a single write only requ
 of a minimal set of nodes. For example, given a tree where each node has 7 descendants, and the
 tree has 823543 nodes (4941258 key value pairs), to update a single node only requires 6 nodes
 to be copied.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_1.png" width="60%" height="auto" />
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_2.png" width="60%" height="auto" />
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_3.png" width="60%" height="auto" />
+</p>
 
 This copy on write property as previously described has a valuable property that if we preserve
 previous tree roots, they remain valid and whole trees, where new roots point to their own complete
@@ -219,6 +239,10 @@ the set. This creates the following pseudo structures:
 The majority of the challenge is during the writer commit. To understand this we need to understand
 what the readers and writers are doing and how they communicate to the commit phase.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_1.png" width="60%" height="auto" />
+</p>
+
 A reader acts like a normal cache - on a request it attempts to find the item in its thread local
 set. If it is found, we return the item. If it is not found, we attempt to search the
 read only cache set. Again if found we return, else we indicate we do not have the item. On a hit
@@ -231,6 +255,10 @@ thread local set of items relevant to that operation. In addition, when an item 
 thread local set, an inclusion message is sent to the channel, consisting of `Inc(K, V, transaction_id, timestamp)`.
 This transaction id is from the read only cache transaction that is occurring.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_2.png" width="60%" height="auto" />
+</p>
+
 At the end of the read operation, the thread local set is discarded - any included items have been
 sent via the channel already. This allows long running readers to influence the commits of
 shorter reader cycles, so that other readers that may spawn can benefit from the inclusions of
@@ -241,6 +269,10 @@ the thread local set, and hit's are store in the hit array. Dirty items (new, or
 be stored in the thread local set. By searching the thread local set first, we will always
 return items that are relevant to this operation that may have been dirtied by the current
 thread.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_3.png" width="60%" height="auto" />
+</p>
 
 A writer does *not* alter the properties of the Arc during its operation - this is critical, as
 it allows the writer to be rolled back at any time, without affecting the state of the cache
@@ -260,12 +292,20 @@ The commit then drains the complete writer thread local state into the main cach
 cache item states as each item is implied as a hit or inclusion event. Each item's transaction
 id is updated to the transaction id of the writer.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_4.png" width="60%" height="auto" />
+</p>
+
 Next the commit drains from the mpsc channel until it is empty or the hit or include items timestamp
 exceeds the timestamp from the start of the commit operation. This exists so that a commit will not
 drain forever on a busy read cache, only updating the cache to the point in time at which the
 commit phase began. Items from the channel are included only if their transaction id is equal to
 or greater than the transaction id of the item existing in the cache. If the transaction id is
 lower, this acts as a hit instead of an inclusion to affect the weightings of the caches.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_5.png" width="60%" height="auto" />
+</p>
 
 This detail, where items are only updated if their transaction id is greater or equal is one of
 the most important to maintain temporal consistency, and is the reason for the existence of the
@@ -298,9 +338,25 @@ The commit then drains the writer hit set into the cache. This is because the wr
 somewhat in time after the readers, so it's an approximation of temporal ordering of events, and
 gives weight to the written items in the cache from being evicted suddenly.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_6.png" width="60%" height="auto" />
+</p>
+
 Finally, the caches are evicted to their relevant sizes based on the updates to the p weight
 factor. All items that are evicted are sent to the haunted set with the current transaction id
 to protect them from incorrect inclusion in the future.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_7.png" width="60%" height="auto" />
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_8.png" width="60%" height="auto" />
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_9.png" width="60%" height="auto" />
+</p>
 
 ## Side Effects of this Algorithm
 
