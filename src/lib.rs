@@ -27,6 +27,7 @@
 #![warn(unused_extern_crates)]
 #![warn(missing_docs)]
 
+extern crate crossbeam;
 extern crate crossbeam_epoch;
 extern crate parking_lot;
 extern crate smallvec;

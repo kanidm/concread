@@ -17,7 +17,7 @@ use crate::collections::bptree::*;
 use crate::cowcell::{CowCell, CowCellReadTxn};
 use parking_lot::{Mutex, RwLock};
 use std::collections::BTreeMap;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use crossbeam::channel::{unbounded, Receiver, Sender};
 
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -391,7 +391,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
     pub fn new_size(max: usize, read_max: usize) -> Self {
         assert!(max > 0);
         assert!(read_max > 0);
-        let (tx, rx) = channel();
+        let (tx, rx) = unbounded();
         let shared = RwLock::new(ArcShared { max, read_max, tx });
         let inner = Mutex::new(ArcInner {
             p: 0,
