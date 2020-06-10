@@ -11,6 +11,7 @@ where
     head: *mut LLNode<K>,
     tail: *mut LLNode<K>,
     size: usize,
+    // tag: usize,
 }
 
 #[derive(Debug)]
@@ -21,6 +22,7 @@ where
     pub(crate) k: MaybeUninit<K>,
     next: *mut LLNode<K>,
     prev: *mut LLNode<K>,
+    // tag: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -37,12 +39,15 @@ impl<K> LL<K>
 where
     K: Clone + Debug,
 {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(// tag: usize
+    ) -> Self {
+        // assert!(tag > 0);
         let (head, tail) = LLNode::create_markers();
         LL {
             head,
             tail,
             size: 0,
+            // tag,
         }
     }
 
@@ -64,7 +69,10 @@ where
     // Append an arbitrary node into this set.
     pub(crate) fn append_n(&mut self, n: *mut LLNode<K>) {
         // Who is to the left of tail?
+        self.size += 1;
         unsafe {
+            // must be untagged
+            // assert!((*n).tag == 0);
             debug_assert!((*self.tail).next.is_null());
             debug_assert!(!(*self.tail).prev.is_null());
             let pred = (*self.tail).prev;
@@ -72,10 +80,18 @@ where
             debug_assert!((*pred).next == self.tail);
             (*n).prev = pred;
             (*n).next = self.tail;
+            // (*n).tag = self.tag;
             (*pred).next = n;
             (*self.tail).prev = n;
+            // We should have a prev and next
+            debug_assert!(!(*n).prev.is_null());
+            debug_assert!(!(*n).next.is_null());
+            // And that prev's next is us, and next's prev is us.
+            debug_assert!(!(*(*n).prev).next.is_null());
+            debug_assert!(!(*(*n).next).prev.is_null());
+            debug_assert!((*(*n).prev).next == n);
+            debug_assert!((*(*n).next).prev == n);
         }
-        self.size += 1;
     }
 
     // Given a node ptr, extract and put it at the tail. IE hit.
@@ -92,9 +108,48 @@ where
     // remove this node from the ll, and return it's ptr.
     pub(crate) fn pop(&mut self) -> *mut LLNode<K> {
         let n = unsafe { (*self.head).next };
-        debug_assert!(!n.is_null());
         self.extract(n);
+        debug_assert!(!n.is_null());
+        debug_assert!(n != self.head);
+        debug_assert!(n != self.tail);
         n
+    }
+
+    // Cut a node out from this list from any location.
+    pub(crate) fn extract(&mut self, n: *mut LLNode<K>) {
+        assert!(self.size > 0);
+        assert!(!n.is_null());
+        unsafe {
+            // We should have a prev and next
+            debug_assert!(!(*n).prev.is_null());
+            debug_assert!(!(*n).next.is_null());
+            // And that prev's next is us, and next's prev is us.
+            debug_assert!(!(*(*n).prev).next.is_null());
+            debug_assert!(!(*(*n).next).prev.is_null());
+            debug_assert!((*(*n).prev).next == n);
+            debug_assert!((*(*n).next).prev == n);
+            // And we belong to this set
+            // assert!((*n).tag == self.tag);
+        }
+
+        self.size -= 1;
+        unsafe {
+            let prev = (*n).prev;
+            let next = (*n).next;
+            // prev <-> n <-> next
+            (*next).prev = prev;
+            (*prev).next = next;
+            // Null things for paranoia.
+            if cfg!(test) || cfg!(debug_assertions) {
+                (*n).prev = ptr::null_mut();
+                (*n).next = ptr::null_mut();
+            }
+            // (*n).tag = 0;
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.size
     }
 
     #[cfg(test)]
@@ -125,24 +180,6 @@ where
             };
             Some(l)
         }
-    }
-
-    // Cut a node out from this list from any location.
-    pub(crate) fn extract(&mut self, n: *mut LLNode<K>) {
-        debug_assert!(!n.is_null());
-
-        unsafe {
-            let prev = (*n).prev;
-            let next = (*n).next;
-            // prev <-> n <-> next
-            (*next).prev = prev;
-            (*prev).next = next;
-        }
-        self.size -= 1;
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.size
     }
 }
 
@@ -175,11 +212,13 @@ where
             k: MaybeUninit::uninit(),
             next: ptr::null_mut(),
             prev: ptr::null_mut(),
+            // tag: 0,
         }));
         let tail = Box::into_raw(Box::new(LLNode {
             k: MaybeUninit::uninit(),
             next: ptr::null_mut(),
             prev: head,
+            // tag: 0,
         }));
         unsafe {
             (*head).next = tail;
@@ -188,11 +227,15 @@ where
     }
 
     #[inline]
-    pub(crate) fn new(k: K) -> *mut Self {
+    pub(crate) fn new(
+        k: K,
+        // tag: usize
+    ) -> *mut Self {
         let b = Box::new(LLNode {
             k: MaybeUninit::new(k),
             next: ptr::null_mut(),
             prev: ptr::null_mut(),
+            // tag,
         });
         Box::into_raw(b)
     }

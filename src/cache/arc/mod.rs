@@ -15,9 +15,9 @@ mod ll;
 use self::ll::{LLNode, LL};
 use crate::collections::bptree::*;
 use crate::cowcell::{CowCell, CowCellReadTxn};
+use crossbeam::channel::{unbounded, Receiver, Sender};
 use parking_lot::{Mutex, RwLock};
 use std::collections::BTreeMap;
-use crossbeam::channel::{unbounded, Receiver, Sender};
 
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -570,7 +570,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                 }
                 (None, ThreadCacheItem::Removed) => {
                     // Mark this as haunted
-                    let llp = inner.rec.append_k(CacheItemInner {
+                    let llp = inner.haunted.append_k(CacheItemInner {
                         k: k.clone(),
                         txid: commit_txid,
                     });
@@ -750,14 +750,14 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                                         Some(CacheItem::Freq(*llp, iv))
                                     }
                                 }
-                                CacheItem::Rec(llp, _v) => {
+                                CacheItem::Rec(llp, v) => {
                                     inner.rec.extract(*llp);
                                     inner.freq.append_n(*llp);
                                     if unsafe { (**llp).as_ref().txid >= txid }
                                         || inner.min_txid > txid
                                     {
                                         // println!("rxinc {:?} Rec -> Freq (touch only)", k);
-                                        None
+                                        Some(CacheItem::Freq(*llp, v.clone()))
                                     } else {
                                         // println!("rxinc {:?} Rec -> Freq (update)", k);
                                         unsafe { (**llp).as_mut().txid = txid };
@@ -795,15 +795,15 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                                         inner.ghost_freq.len(),
                                         &mut inner.p,
                                     );
-                                    inner.ghost_rec.extract(*llp);
                                     if unsafe { (**llp).as_ref().txid > txid }
                                         || inner.min_txid > txid
                                     {
                                         // println!("rxinc {:?} GhostRec -> GhostRec", k);
-                                        inner.ghost_rec.append_n(*llp);
+                                        inner.ghost_rec.touch(*llp);
                                         None
                                     } else {
                                         // println!("rxinc {:?} GhostRec -> Rec", k);
+                                        inner.ghost_rec.extract(*llp);
                                         inner.rec.append_n(*llp);
                                         unsafe { (**llp).as_mut().txid = txid };
                                         Some(CacheItem::Rec(*llp, iv))
