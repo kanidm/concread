@@ -47,9 +47,8 @@ pub struct CacheStats {
 }
 
 enum ThreadCacheItem<V> {
-    Clean(V),
-    // Dirty(V),
-    Removed,
+    Present(V, bool),
+    Removed(bool),
 }
 
 enum CacheEvent<K, V> {
@@ -561,14 +560,16 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         tlocal.into_iter().for_each(|(k, tcio)| {
             let r = cache.get_mut(&k);
             match (r, tcio) {
-                (None, ThreadCacheItem::Clean(tci)) => {
+                (None, ThreadCacheItem::Present(tci, clean)) => {
+                    assert!(clean);
                     let llp = inner.rec.append_k(CacheItemInner {
                         k: k.clone(),
                         txid: commit_txid,
                     });
                     cache.insert(k, CacheItem::Rec(llp, tci));
                 }
-                (None, ThreadCacheItem::Removed) => {
+                (None, ThreadCacheItem::Removed(clean)) => {
+                    assert!(clean);
                     // Mark this as haunted
                     let llp = inner.haunted.append_k(CacheItemInner {
                         k: k.clone(),
@@ -576,7 +577,8 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                     });
                     cache.insert(k, CacheItem::Haunted(llp));
                 }
-                (Some(ref mut ci), ThreadCacheItem::Removed) => {
+                (Some(ref mut ci), ThreadCacheItem::Removed(clean)) => {
+                    assert!(clean);
                     // From whatever set we were in, pop and move to haunted.
                     let mut next_state = match ci {
                         CacheItem::Freq(llp, _v) => {
@@ -619,7 +621,8 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                 }
                 // TODO: https://github.com/rust-lang/rust/issues/68354 will stabilise
                 // in 1.44 so we can prevent a need for a clone.
-                (Some(ref mut ci), ThreadCacheItem::Clean(ref tci)) => {
+                (Some(ref mut ci), ThreadCacheItem::Present(ref tci, clean)) => {
+                    assert!(clean);
                     //   * as we include each item, what state was it in before?
                     // It's in the cache - what action must we take?
                     let mut next_state = match ci {
@@ -1076,11 +1079,11 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
     {
         let r: Option<&V> = if let Some(tci) = self.tlocal.get(k) {
             match tci {
-                ThreadCacheItem::Clean(v) => {
+                ThreadCacheItem::Present(v, _clean) => {
                     let v = v as *const _;
                     unsafe { Some(&(*v)) }
                 }
-                ThreadCacheItem::Removed => {
+                ThreadCacheItem::Removed(_clean) => {
                     return None;
                 }
             }
@@ -1126,15 +1129,62 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
 
     /// Add a value to the cache. This may be because you have had a cache miss and
     /// now wish to include in the thread local storage, or because you have written
-    /// a new value and want it to be submitted for caching.
+    /// a new value and want it to be submitted for caching. This item is marked as
+    /// clean, IE you have synced it to whatever associated store exists.
     pub fn insert(&mut self, k: K, v: V) {
-        self.tlocal.insert(k, ThreadCacheItem::Clean(v));
+        self.tlocal.insert(k, ThreadCacheItem::Present(v, true));
     }
 
     /// Remove this value from the thread local cache IE mask from from being
-    /// returned until this thread performs an insert.
+    /// returned until this thread performs an insert. This item is marked as clean
+    /// IE you have synced it to whatever associated store exists.
     pub fn remove(&mut self, k: K) {
-        self.tlocal.insert(k, ThreadCacheItem::Removed);
+        self.tlocal.insert(k, ThreadCacheItem::Removed(true));
+    }
+
+    /// Add a value to the cache. This may be because you have had a cache miss and
+    /// now wish to include in the thread local storage, or because you have written
+    /// a new value and want it to be submitted for caching. This item is marked as
+    /// dirty, because you have *not* synced it. You MUST call iter_mut_mark_clean before calling
+    /// `commit` on this transaction, or a panic will occur.
+    pub fn insert_dirty(&mut self, k: K, v: V) {
+        self.tlocal.insert(k, ThreadCacheItem::Present(v, false));
+    }
+
+    /// Remove this value from the thread local cache IE mask from from being
+    /// returned until this thread performs an insert. This item is marked as
+    /// dirty, because you have *not* synced it. You MUST call iter_mut_mark_clean before calling
+    /// `commit` on this transaction, or a panic will occur.
+    pub fn remove_dirty(&mut self, k: K) {
+        self.tlocal.insert(k, ThreadCacheItem::Removed(false));
+    }
+
+    /// Yields an iterator over all values that are currently dirty. As the iterator
+    /// progresses, items will be marked clean. This is where you should sync dirty
+    /// cache content to your associated store. The iterator is K, Option<V>, where
+    /// the Option<V> indicates if the item has been remove (None) or is updated (Some).
+    pub fn iter_mut_mark_clean<'b>(&'b mut self) -> impl Iterator<Item = (&'b K, Option<&'b mut V>)>
+    {
+        self.tlocal.iter_mut()
+            .filter(|(k, v)| {
+                match v {
+                    ThreadCacheItem::Present(_v, c) => !c,
+                    ThreadCacheItem::Removed(c) => !c,
+                }
+            })
+            .map(|(k, v)| {
+                // Mark it clean.
+                match v {
+                    ThreadCacheItem::Present(_v, c) => *c = true,
+                    ThreadCacheItem::Removed(c) => *c = true,
+                }
+                // Get the data.
+                let data = match v {
+                    ThreadCacheItem::Present(v, c) => Some(v),
+                    ThreadCacheItem::Removed(c) => None,
+                };
+                (k, data)
+            })
     }
 
     #[cfg(test)]
@@ -1887,5 +1937,14 @@ mod tests {
         assert!(wr_txn.peek_cache(&10) == CacheState::GhostRec);
         println!("--> {:?}", wr_txn.peek_cache(&11));
         assert!(wr_txn.peek_cache(&11) == CacheState::None);
+    }
+
+    #[test]
+    fn test_cache_dirty_write() {
+        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
+        let mut wr_txn = arc.write();
+        wr_txn.insert_dirty(10, 1);
+        wr_txn.iter_mut_mark_clean().for_each(|(_k, _v)| {});
+        wr_txn.commit();
     }
 }
