@@ -153,6 +153,18 @@ where
 unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Send for Arc<K, V> {}
 unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Sync for Arc<K, V> {}
 
+struct ReadCache<K, V>
+where
+    K: Hash + Eq + Ord + Clone + Debug,
+    V: Clone + Debug,
+{
+    // cache of our missed items to send forward.
+    // On drop we drain this to the channel
+    set: BTreeMap<K, *mut LLNode<(K, V)>>,
+    read_size: usize,
+    tlru: LL<(K, V)>,
+}
+
 /// An active read transaction over the cache. The data is this cache is guaranteed to be
 /// valid at the point in time the read is created. You may include items during a cache
 /// miss via the "insert" function.
@@ -164,11 +176,7 @@ where
     caller: &'a Arc<K, V>,
     // ro_txn to cache
     cache: BptreeMapReadTxn<K, CacheItem<K, V>>,
-    // cache of our missed items to send forward.
-    // On drop we drain this to the channel
-    tlocal: BTreeMap<K, *mut LLNode<(K, V)>>,
-    read_size: usize,
-    tlru: LL<(K, V)>,
+    tlocal: Option<ReadCache<K, V>>,
     // tx channel to send forward events.
     tx: Sender<CacheEvent<K, V>>,
     ts: Instant,
@@ -366,7 +374,16 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
     /// will yield a situation where you may use too-little ram, or too much. This could
     /// be to your read misses exceeding your expected amount causing the queues to have
     /// more items in them at a time, or your writes are larger than expected.
-    pub fn new(total: usize, threads: usize, ex_ro_miss: usize, ex_rw_miss: usize) -> Self {
+    ///
+    /// If you set ex_ro_miss to zero, no read thread local cache will be configured, but
+    /// space will still be reserved for channel communication.
+    pub fn new(
+        total: usize,
+        threads: usize,
+        ex_ro_miss: usize,
+        ex_rw_miss: usize,
+        read_cache: bool,
+    ) -> Self {
         let y = isize::try_from(total).unwrap();
         let t = isize::try_from(threads).unwrap();
         let m = isize::try_from(ex_ro_miss).unwrap();
@@ -374,7 +391,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         let r = isize::try_from(READ_THREAD_RATIO).unwrap();
         // I'd like to thank wolfram alpha ... for this magic.
         let max = -((r * ((m * t) + w - y)) / (r + t));
-        let read_max = max / r;
+        let read_max = if read_cache { max / r } else { 0 };
 
         let max = usize::try_from(max).unwrap();
         let read_max = usize::try_from(read_max).unwrap();
@@ -389,7 +406,6 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
     /// cache size.
     pub fn new_size(max: usize, read_max: usize) -> Self {
         assert!(max > 0);
-        assert!(read_max > 0);
         let (tx, rx) = unbounded();
         let shared = RwLock::new(ArcShared { max, read_max, tx });
         let inner = Mutex::new(ArcInner {
@@ -428,12 +444,19 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
     /// to safely include items.
     pub fn read(&self) -> ArcReadTxn<K, V> {
         let rshared = self.shared.read();
+        let tlocal = if rshared.read_max > 0 {
+            Some(ReadCache {
+                set: BTreeMap::new(),
+                read_size: rshared.read_max,
+                tlru: LL::new(),
+            })
+        } else {
+            None
+        };
         ArcReadTxn {
             caller: &self,
             cache: self.cache.read(),
-            tlocal: BTreeMap::new(),
-            tlru: LL::new(),
-            read_size: rshared.read_max,
+            tlocal,
             tx: rshared.tx.clone(),
             ts: Instant::now(),
         }
@@ -1163,14 +1186,14 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
     /// progresses, items will be marked clean. This is where you should sync dirty
     /// cache content to your associated store. The iterator is K, Option<V>, where
     /// the Option<V> indicates if the item has been remove (None) or is updated (Some).
-    pub fn iter_mut_mark_clean<'b>(&'b mut self) -> impl Iterator<Item = (&'b K, Option<&'b mut V>)>
-    {
-        self.tlocal.iter_mut()
-            .filter(|(k, v)| {
-                match v {
-                    ThreadCacheItem::Present(_v, c) => !c,
-                    ThreadCacheItem::Removed(c) => !c,
-                }
+    pub fn iter_mut_mark_clean<'b>(
+        &'b mut self,
+    ) -> impl Iterator<Item = (&'b K, Option<&'b mut V>)> {
+        self.tlocal
+            .iter_mut()
+            .filter(|(k, v)| match v {
+                ThreadCacheItem::Present(_v, c) => !c,
+                ThreadCacheItem::Removed(c) => !c,
             })
             .map(|(k, v)| {
                 // Mark it clean.
@@ -1236,24 +1259,29 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K,
     /// the thread local cache, a `Some` is returned, else you will recieve a `None`. On a
     /// `None`, you must then consult the external data source that this structure is acting
     /// as a cache for.
-    pub fn get<'b, Q: ?Sized>(&'b mut self, k: &'b Q) -> Option<&'b V>
+    pub fn get<'b, Q: ?Sized>(&'b self, k: &'b Q) -> Option<&'b V>
     where
         K: Borrow<Q> + From<Q>,
         Q: Hash + Eq + Ord + Clone,
     {
-        let r: Option<&V> = if let Some(tci) = self.tlocal.get(k) {
-            unsafe {
-                let v = &(**tci).as_ref().1 as *const _;
-                // This discards the lifetime and repins it to &'b.
-                Some(&(*v))
-            }
-        } else {
-            if let Some(v) = self.cache.get(k) {
-                (*v).to_vref()
-            } else {
-                None
-            }
-        };
+        let r: Option<&V> = self
+            .tlocal
+            .as_ref()
+            .and_then(|cache| {
+                cache.set.get(k).and_then(|v| unsafe {
+                    let v = &(**v).as_ref().1 as *const _;
+                    // This discards the lifetime and repins it to &'b.
+                    Some(&(*v))
+                })
+            })
+            .or_else(|| {
+                self.cache.get(k).and_then(|v| unsafe {
+                    (*v).to_vref().map(|vin| unsafe {
+                        let vin = vin as *const _;
+                        &(*vin)
+                    })
+                })
+            });
 
         if r.is_some() {
             let hk: K = k.to_owned().into();
@@ -1294,24 +1322,27 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K,
             ))
             .expect("Invalid tx state!");
 
-        let n = if self.tlru.len() >= self.read_size {
-            let n = self.tlru.pop();
-            // swap the old_key/old_val out
-            let mut k_clone = k.clone();
-            unsafe {
-                mem::swap(&mut k_clone, &mut (*n).as_mut().0);
-                mem::swap(&mut v, &mut (*n).as_mut().1);
-            }
-            // remove old K from the tree:
-            self.tlocal.remove(&k_clone);
-            n
-        } else {
-            // Just add it!
-            self.tlru.append_k((k.clone(), v))
-        };
-        let r = self.tlocal.insert(k, n);
-        // There should never be a previous value.
-        assert!(r.is_none());
+        // We have a cache, so lets update it.
+        if let Some(ref mut cache) = self.tlocal {
+            let n = if cache.tlru.len() >= cache.read_size {
+                let n = cache.tlru.pop();
+                // swap the old_key/old_val out
+                let mut k_clone = k.clone();
+                unsafe {
+                    mem::swap(&mut k_clone, &mut (*n).as_mut().0);
+                    mem::swap(&mut v, &mut (*n).as_mut().1);
+                }
+                // remove old K from the tree:
+                cache.set.remove(&k_clone);
+                n
+            } else {
+                // Just add it!
+                cache.tlru.append_k((k.clone(), v))
+            };
+            let r = cache.set.insert(k, n);
+            // There should never be a previous value.
+            assert!(r.is_none());
+        }
     }
 }
 
@@ -1640,12 +1671,18 @@ mod tests {
             rd_txn.insert(2, 2);
             rd_txn.insert(3, 3);
             rd_txn.insert(4, 4);
+            // Should be in the tlocal
+            // assert!(rd_txn.get(&1).is_some());
+            // assert!(rd_txn.get(&2).is_some());
+            // assert!(rd_txn.get(&3).is_some());
+            // assert!(rd_txn.get(&4).is_some());
             // end the rd
         }
         arc.try_quiesce();
         // What state is the cache now in?
         println!("== 2");
         let mut wr_txn = arc.write();
+        println!("{:?}", wr_txn.peek_stat());
         assert!(
             CStat {
                 max: 4,
@@ -1946,5 +1983,48 @@ mod tests {
         wr_txn.insert_dirty(10, 1);
         wr_txn.iter_mut_mark_clean().for_each(|(_k, _v)| {});
         wr_txn.commit();
+    }
+
+    #[test]
+    fn test_cache_read_no_tlocal() {
+        // Check a cache with no read local thread capacity
+        // Setup the cache.
+        let arc: Arc<usize, usize> = Arc::new_size(4, 0);
+        // start a rd
+        {
+            let mut rd_txn = arc.read();
+            // add items to the rd
+            rd_txn.insert(1, 1);
+            rd_txn.insert(2, 2);
+            rd_txn.insert(3, 3);
+            rd_txn.insert(4, 4);
+            // end the rd
+            // Everything should be missing frm the tlocal.
+            assert!(rd_txn.get(&1).is_none());
+            assert!(rd_txn.get(&2).is_none());
+            assert!(rd_txn.get(&3).is_none());
+            assert!(rd_txn.get(&4).is_none());
+        }
+        arc.try_quiesce();
+        // What state is the cache now in?
+        println!("== 2");
+        let mut wr_txn = arc.write();
+        assert!(
+            CStat {
+                max: 4,
+                cache: 4,
+                tlocal: 0,
+                freq: 0,
+                rec: 4,
+                ghost_freq: 0,
+                ghost_rec: 0,
+                haunted: 0,
+                p: 0
+            } == wr_txn.peek_stat()
+        );
+        assert!(wr_txn.peek_cache(&1) == CacheState::Rec);
+        assert!(wr_txn.peek_cache(&2) == CacheState::Rec);
+        assert!(wr_txn.peek_cache(&3) == CacheState::Rec);
+        assert!(wr_txn.peek_cache(&4) == CacheState::Rec);
     }
 }
