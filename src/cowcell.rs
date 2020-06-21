@@ -71,7 +71,8 @@ pub struct CowCell<T> {
 /// to proceed.
 pub struct CowCellWriteTxn<'a, T: 'a> {
     // Hold open the guard, and initiate the copy to here.
-    work: T,
+    work: Option<T>,
+    read: Arc<T>,
     // This way we know who to contact for updating our data ....
     caller: &'a CowCell<T>,
     _guard: MutexGuard<'a, ()>,
@@ -118,13 +119,15 @@ where
     pub fn write(&self) -> CowCellWriteTxn<T> {
         /* Take the exclusive write lock first */
         let mguard = self.write.lock();
-        /* Now take a ro-txn to get the data copied */
-        let rwguard = self.active.lock();
-        /* This copies the data */
-        let data: T = (**rwguard).clone();
+        // We delay copying until the first get_mut.
+        let read = {
+            let rwguard = self.active.lock();
+            rwguard.clone()
+        };
         /* Now build the write struct */
         CowCellWriteTxn {
-            work: data,
+            work: None,
+            read,
             caller: self,
             _guard: mguard,
         }
@@ -136,25 +139,30 @@ where
     pub fn try_write(&self) -> Option<CowCellWriteTxn<T>> {
         /* Take the exclusive write lock first */
         self.write.try_lock().map(|mguard| {
-            /* Now take a ro-txn to get the data copied */
-            let rwguard = self.active.lock();
-            /* This copies the data */
-            let data: T = (**rwguard).clone();
+            // We delay copying until the first get_mut.
+            let read = {
+                let rwguard = self.active.lock();
+                rwguard.clone()
+            };
             /* Now build the write struct */
             CowCellWriteTxn {
-                work: data,
+                work: None,
+                read,
                 caller: self,
                 _guard: mguard,
             }
         })
     }
 
-    fn commit(&self, newdata: T) {
-        let mut rwguard = self.active.lock();
-        let new_inner = Arc::new(newdata);
-        // now over-write the last value in the mutex.
-
-        *rwguard = new_inner;
+    fn commit(&self, newdata: Option<T>) {
+        if let Some(nd) = newdata {
+            let mut rwguard = self.active.lock();
+            let new_inner = Arc::new(nd);
+            // now over-write the last value in the mutex.
+            *rwguard = new_inner;
+        }
+        // If not some, we do nothing.
+        // Done
     }
 }
 
@@ -174,9 +182,15 @@ where
     /// Access a mutable pointer of the data in the `CowCell`. This data is only
     /// visible to the write transaction object in this thread, until you call
     /// `commit()`.
-    #[inline]
+    #[inline(always)]
     pub fn get_mut(&mut self) -> &mut T {
-        &mut self.work
+        if self.work.is_none() {
+            let mut data: Option<T> = Some((*self.read).clone());
+            std::mem::swap(&mut data, &mut self.work);
+            // Should be the none we previously had.
+            debug_assert!(data.is_none())
+        }
+        self.work.as_mut().expect("can not fail")
     }
 
     /// Commit the changes made in this write transactions to the `CowCell`.
@@ -189,18 +203,28 @@ where
     }
 }
 
-impl<'a, T> Deref for CowCellWriteTxn<'a, T> {
+impl<'a, T> Deref for CowCellWriteTxn<'a, T>
+where
+    T: Clone,
+{
     type Target = T;
 
-    #[inline]
+    #[inline(always)]
     fn deref(&self) -> &T {
-        &self.work
+        match &self.work {
+            Some(v) => &v,
+            None => &(*self.read),
+        }
     }
 }
 
-impl<'a, T> DerefMut for CowCellWriteTxn<'a, T> {
+impl<'a, T> DerefMut for CowCellWriteTxn<'a, T>
+where
+    T: Clone,
+{
+    #[inline(always)]
     fn deref_mut(&mut self) -> &mut T {
-        &mut self.work
+        self.get_mut()
     }
 }
 
