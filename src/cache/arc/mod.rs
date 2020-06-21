@@ -17,7 +17,7 @@ use crate::collections::bptree::*;
 use crate::cowcell::{CowCell, CowCellReadTxn};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use parking_lot::{Mutex, RwLock};
-use std::collections::BTreeMap;
+use std::collections::HashMap as Map;
 
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -160,7 +160,7 @@ where
 {
     // cache of our missed items to send forward.
     // On drop we drain this to the channel
-    set: BTreeMap<K, *mut LLNode<(K, V)>>,
+    set: Map<K, *mut LLNode<(K, V)>>,
     read_size: usize,
     tlru: LL<(K, V)>,
 }
@@ -196,7 +196,7 @@ where
     cache: BptreeMapWriteTxn<'a, K, CacheItem<K, V>>,
     // Cache of missed items (w_ dirty/clean)
     // On COMMIT we drain this to the main cache
-    tlocal: BTreeMap<K, ThreadCacheItem<V>>,
+    tlocal: Map<K, ThreadCacheItem<V>>,
     hit: UnsafeCell<Vec<K>>,
     clear: UnsafeCell<bool>,
 }
@@ -204,7 +204,7 @@ where
 /*
 pub struct ArcReadSnapshot<K, V> {
     // How to communicate back to the caller the loads we did?
-    tlocal: &mut BTreeMap<K, ThreadCacheItem<K, V>>,
+    tlocal: &mut Map<K, ThreadCacheItem<K, V>>,
 }
 */
 
@@ -446,7 +446,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         let rshared = self.shared.read();
         let tlocal = if rshared.read_max > 0 {
             Some(ReadCache {
-                set: BTreeMap::new(),
+                set: Map::new(),
                 read_size: rshared.read_max,
                 tlru: LL::new(),
             })
@@ -469,7 +469,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         ArcWriteTxn {
             caller: &self,
             cache: self.cache.write(),
-            tlocal: BTreeMap::new(),
+            tlocal: Map::new(),
             hit: UnsafeCell::new(Vec::new()),
             clear: UnsafeCell::new(false),
         }
@@ -483,7 +483,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         self.cache.try_write().map(|cache| ArcWriteTxn {
             caller: &self,
             cache: cache,
-            tlocal: BTreeMap::new(),
+            tlocal: Map::new(),
             hit: UnsafeCell::new(Vec::new()),
             clear: UnsafeCell::new(false),
         })
@@ -525,7 +525,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
     fn commit<'a>(
         &'a self,
         mut cache: BptreeMapWriteTxn<'a, K, CacheItem<K, V>>,
-        tlocal: BTreeMap<K, ThreadCacheItem<V>>,
+        tlocal: Map<K, ThreadCacheItem<V>>,
         hit: Vec<K>,
         clear: bool,
     ) {
