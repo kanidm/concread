@@ -4,66 +4,21 @@
 // Additionally, the cursor also is responsible for general movement
 // throughout the structure and how to handle that effectively
 
-use super::node::*;
+use super::node::{ABNode, Node};
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
 
+// use super::branch::Branch;
 use super::iter::{Iter, KeyIter, ValueIter};
-use super::states::*;
-use parking_lot::Mutex;
+use super::states::CRCloneState;
+use super::states::{
+    BLInsertState, BLRemoveState, BRInsertState, BRShrinkState, BRTrimState, CRInsertState,
+    CRRemoveState, CRTrimState,
+};
+// CRPruneState
 use std::iter::Extend;
-
-/// The internal root of the tree, with associated garbage lists etc.
-#[derive(Debug)]
-pub(crate) struct SuperBlock<K, V>
-where
-    K: Ord + Clone + Debug,
-    V: Clone,
-{
-    root: *mut Node<K, V>,
-    size: usize,
-    txid: u64,
-    /// Last seen has a mutex to allow descendant transactions to push back
-    /// last_seen into older transactions. Because this is arced, we know
-    ///  it will exist, and the mutex is ONLY locked/dropped when the
-    /// superblock itself is dropping.
-    pub(crate) last_seen: Mutex<Option<Vec<*mut Node<K, V>>>>,
-    /// This is the SUPERBLOCKCHAIN that let's us pin future
-    /// nodes so that we drop IN ORDER.
-    pub(crate) pin_next: Mutex<Option<Arc<SuperBlock<K, V>>>>,
-}
-
-impl<K: Clone + Ord + Debug, V: Clone> SuperBlock<K, V> {
-    pub(crate) fn commit_prep(&self, older: &Self) {
-        // println!("commit_prep {:?} -> {:?}", self.txid, older.txid);
-        let mut active_last_seen = older.last_seen.lock();
-        let mut new_last_seen = self.last_seen.lock();
-        debug_assert!((*active_last_seen).is_none());
-        debug_assert!((*new_last_seen).is_some());
-        // Now swap the two.
-        std::mem::swap(&mut (*active_last_seen), &mut (*new_last_seen));
-        debug_assert!((*active_last_seen).is_some());
-        debug_assert!((*new_last_seen).is_none());
-        // Done, unlock the guards.
-        // std::mem::drop(new_last_seen);
-        // std::mem::drop(active_last_seen);
-    }
-}
-
-impl<K: Clone + Ord + Debug, V: Clone> Default for SuperBlock<K, V> {
-    fn default() -> Self {
-        let leaf: *mut Leaf<K, V> = Node::new_leaf(1);
-        SuperBlock {
-            root: leaf as *mut Node<K, V>,
-            size: 0,
-            txid: 1,
-            last_seen: Mutex::new(None),
-            pin_next: Mutex::new(None),
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub(crate) struct CursorRead<K, V>
@@ -73,7 +28,7 @@ where
 {
     txid: u64,
     length: usize,
-    root: *mut Node<K, V>,
+    root: ABNode<K, V>,
 }
 
 #[derive(Debug)]
@@ -85,15 +40,11 @@ where
     // Need to build a stack as we go - of what, I'm not sure ...
     txid: u64,
     length: usize,
-    root: *mut Node<K, V>,
-    last_seen: Vec<*mut Node<K, V>>,
-    first_seen: Vec<*mut Node<K, V>>,
+    root: ABNode<K, V>,
 }
 
 pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
-    fn get_root_ref(&self) -> &Node<K, V>;
-
-    fn get_root(&self) -> *mut Node<K, V>;
+    fn get_root_ref(&self) -> &ABNode<K, V>;
 
     fn len(&self) -> usize;
 
@@ -131,124 +82,51 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
     }
 
     fn kv_iter(&self) -> Iter<K, V> {
-        Iter::new(self.get_root(), self.len())
+        Iter::new(self.get_root_ref(), self.len())
     }
 
     fn k_iter(&self) -> KeyIter<K, V> {
-        KeyIter::new(self.get_root(), self.len())
+        KeyIter::new(self.get_root_ref(), self.len())
     }
 
     fn v_iter(&self) -> ValueIter<K, V> {
-        ValueIter::new(self.get_root(), self.len())
+        ValueIter::new(self.get_root_ref(), self.len())
     }
 
     #[cfg(test)]
     fn verify(&self) -> bool {
-        self.get_root_ref().no_cycles() && self.get_root_ref().verify() && {
-            let (l, _) = self.get_tree_density();
-            l == self.len()
-        }
+        let (l, _) = self.get_tree_density();
+        assert!(l == self.len());
+        self.get_root_ref().verify()
     }
 }
 
 impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
-    pub(crate) fn new(sblock: &SuperBlock<K, V>) -> Self {
-        let txid = sblock.txid + 1;
-        assert!(txid < (TXID_MASK >> TXID_SHF));
-        // println!("starting wr txid -> {:?}", txid);
-        let length = sblock.size;
-        let root = sblock.root;
-        // TODO: Could optimise how big these are based
-        // on past trends? Or based on % tree size?
-        let last_seen = Vec::with_capacity(16);
-        let first_seen = Vec::with_capacity(16);
+    pub(crate) fn new(root: ABNode<K, V>, length: usize) -> Self {
+        let txid = root.txid + 1;
+        // TODO: Check that txid < usize max.
+        assert!(txid < u64::max_value());
 
-        CursorWrite {
-            txid,
-            length,
-            root,
-            last_seen,
-            first_seen,
-        }
+        CursorWrite { txid, length, root }
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_test(txid: u64, root: *mut Node<K, V>) -> Self {
-        assert!(txid < (TXID_MASK >> TXID_SHF));
-        assert!(txid > 0);
-        let last_seen = Vec::with_capacity(16);
-        let mut first_seen = Vec::with_capacity(16);
-        // Do a pre-verify to be sure it's sane.
-        assert!(unsafe { (*root).verify() });
-        // Collect anythinng from root into this txid if needed.
-        // Set txid to txid on all tree nodes from the root.
-        first_seen.push(root);
-        unsafe { (*root).sblock_collect(&mut first_seen) };
-        // Lock them all
-        first_seen.iter().for_each(|n| unsafe {
-            (**n).make_ro();
-        });
-        // Determine our count internally.
-        let (length, _) = unsafe { (*root).tree_density() };
-        // Good to go!
-        CursorWrite {
-            txid,
-            length,
-            root,
-            last_seen,
-            first_seen,
-        }
-    }
-
-    pub(crate) fn finalise(mut self) -> SuperBlock<K, V> {
+    pub(crate) fn finalise(self) -> (ABNode<K, V>, usize) {
         // Return the new root for replacement into the txn manager.
-        // We are done, time to seal everything.
-        self.first_seen.iter().for_each(|n| unsafe {
-            (**n).make_ro();
-        });
-        // first_seen is cleared.
-        self.first_seen.clear();
-        // We put in a dummy to last_seen.
-        // We have to do this because CursorWrite is drop we can't destructure
-        // so we need to swap it out to prevent the rollback handler triggering.
-        let mut dummy = Vec::with_capacity(0);
-        mem::swap(&mut dummy, &mut self.last_seen);
-
-        SuperBlock {
-            root: self.root,
-            size: self.length,
-            txid: self.txid,
-            last_seen: Mutex::new(Some(dummy)),
-            pin_next: Mutex::new(None),
-        }
+        (self.root, self.length)
     }
 
     pub(crate) fn clear(&mut self) {
         // Reset the values in this tree.
-        // We need to mark everything as disposable, and create a new root!
-        unsafe { (*self.root).sblock_collect(&mut self.last_seen) };
-        let nroot: *mut Leaf<K, V> = Node::new_leaf(self.txid);
-        let mut nroot = nroot as *mut Node<K, V>;
-        self.first_seen.push(nroot);
+        let mut nroot = Node::new_ableaf(self.txid);
         mem::swap(&mut self.root, &mut nroot);
-        self.length = 0;
     }
 
     // Functions as insert_or_update
     pub(crate) fn insert(&mut self, k: K, v: V) -> Option<V> {
-        let r = match clone_and_insert(
-            self.root,
-            self.txid,
-            k,
-            v,
-            &mut self.last_seen,
-            &mut self.first_seen,
-        ) {
+        let r = match clone_and_insert(&mut self.root, self.txid, k, v) {
             CRInsertState::NoClone(res) => res,
             CRInsertState::Clone(res, mut nnode) => {
                 // We have a new root node, swap it in.
-                // !!! It's already been cloned and marked for cleaning by the clone_and_insert
-                // call.
                 mem::swap(&mut self.root, &mut nnode);
                 // Return the insert result
                 res
@@ -256,10 +134,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
             CRInsertState::CloneSplit(lnode, rnode) => {
                 // The previous root had to split - make a new
                 // root now and put it inplace.
-                let mut nroot = Node::new_branch(self.txid, lnode, rnode) as *mut Node<K, V>;
-                self.first_seen.push(nroot);
-                // The root was cloned as part of clone split
-                // This swaps the POINTERS not the content!
+                let mut nroot = Node::new_branch(self.txid, lnode, rnode);
                 mem::swap(&mut self.root, &mut nroot);
                 // As we split, there must NOT have been an existing
                 // key to overwrite.
@@ -271,31 +146,19 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                 //
                 // Note, that we have to briefly take an extra RC on the root so
                 // that we can get it into the branch.
-                let mut nroot =
-                    Node::new_branch(self.txid, self.root.clone(), rnode) as *mut Node<K, V>;
-                self.first_seen.push(nroot);
-                // println!("ls push 2");
-                // self.last_seen.push(self.root);
+                let mut nroot = Node::new_branch(self.txid, self.root.clone(), rnode);
                 mem::swap(&mut self.root, &mut nroot);
                 // As we split, there must NOT have been an existing
                 // key to overwrite.
                 None
             }
             CRInsertState::RevSplit(lnode) => {
-                let mut nroot =
-                    Node::new_branch(self.txid, lnode, self.root.clone()) as *mut Node<K, V>;
-                self.first_seen.push(nroot);
-                // println!("ls push 3");
-                // self.last_seen.push(self.root);
+                let mut nroot = Node::new_branch(self.txid, lnode, self.root.clone());
                 mem::swap(&mut self.root, &mut nroot);
                 None
             }
             CRInsertState::CloneRevSplit(rnode, lnode) => {
-                let mut nroot = Node::new_branch(self.txid, lnode, rnode) as *mut Node<K, V>;
-                self.first_seen.push(nroot);
-                // root was cloned in the rev split
-                // println!("ls push 4");
-                // self.last_seen.push(self.root);
+                let mut nroot = Node::new_branch(self.txid, lnode, rnode);
                 mem::swap(&mut self.root, &mut nroot);
                 None
             }
@@ -308,41 +171,33 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
     }
 
     pub(crate) fn remove(&mut self, k: &K) -> Option<V> {
-        let r = match clone_and_remove(
-            self.root,
-            self.txid,
-            k,
-            &mut self.last_seen,
-            &mut self.first_seen,
-        ) {
+        let r = match clone_and_remove(&mut self.root, self.txid, k) {
             CRRemoveState::NoClone(res) => res,
             CRRemoveState::Clone(res, mut nnode) => {
                 mem::swap(&mut self.root, &mut nnode);
                 res
             }
             CRRemoveState::Shrink(res) => {
-                if self_meta!(self.root).is_leaf() {
+                if self.root.is_leaf() {
                     // No action - we have an empty tree.
                     res
                 } else {
                     // Root is being demoted, get the last branch and
                     // promote it to the root.
-                    self.last_seen.push(self.root);
-                    let rmut = branch_ref!(self.root, K, V);
+                    let rmut = Arc::get_mut(&mut self.root).unwrap().as_mut_branch();
                     let mut pnode = rmut.extract_last_node();
                     mem::swap(&mut self.root, &mut pnode);
                     res
                 }
             }
             CRRemoveState::CloneShrink(res, mut nnode) => {
-                if self_meta!(nnode).is_leaf() {
+                if nnode.is_leaf() {
                     // The tree is empty, but we cloned the root to get here.
                     mem::swap(&mut self.root, &mut nnode);
                     res
                 } else {
                     // Our root is getting demoted here, get the remaining branch
-                    self.last_seen.push(nnode);
-                    let rmut = branch_ref!(nnode, K, V);
+                    let rmut = Arc::get_mut(&mut nnode).unwrap().as_mut_branch();
                     let mut pnode = rmut.extract_last_node();
                     // Promote it to the new root
                     mem::swap(&mut self.root, &mut pnode);
@@ -358,13 +213,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
 
     #[cfg(test)]
     pub(crate) fn path_clone(&mut self, k: &K) {
-        match path_clone(
-            self.root,
-            self.txid,
-            k,
-            &mut self.last_seen,
-            &mut self.first_seen,
-        ) {
+        match path_clone(&mut self.root, self.txid, k) {
             CRCloneState::Clone(mut nroot) => {
                 // We cloned the root, so swap it.
                 mem::swap(&mut self.root, &mut nroot);
@@ -374,13 +223,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
     }
 
     pub(crate) fn get_mut_ref(&mut self, k: &K) -> Option<&mut V> {
-        match path_clone(
-            self.root,
-            self.txid,
-            k,
-            &mut self.last_seen,
-            &mut self.first_seen,
-        ) {
+        match path_clone(&mut self.root, self.txid, k) {
             CRCloneState::Clone(mut nroot) => {
                 // We cloned the root, so swap it.
                 mem::swap(&mut self.root, &mut nroot);
@@ -388,26 +231,19 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
             CRCloneState::NoClone => {}
         };
         // Now get the ref.
-        path_get_mut_ref(self.root, k)
+        path_get_mut_ref(&mut self.root, k)
     }
 
     pub(crate) fn split_off_lt(&mut self, k: &K) {
-        /*
         // Remove all the values less than from the top of the tree.
         loop {
-            let result = clone_and_split_off_trim_lt(
-                self.root,
-                self.txid,
-                k,
-                &mut self.last_seen,
-                &mut self.first_seen,
-            );
+            let result = clone_and_split_off_trim_lt(&mut self.root, self.txid, k);
             // println!("clone_and_split_off_trim_lt -> {:?}", result);
             match result {
                 CRTrimState::Complete => break,
                 CRTrimState::Clone(mut nroot) => {
                     // We cloned the root as we changed it, but don't need
-                    // to recurse so we break the loop.
+                    // to recurse.
                     mem::swap(&mut self.root, &mut nroot);
                     break;
                 }
@@ -417,7 +253,6 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                 }
             }
         }
-        */
 
         /*
         // Now work up the tree and clean up the remaining path inbetween
@@ -471,11 +306,11 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
 
     #[cfg(test)]
     pub(crate) fn root_txid(&self) -> u64 {
-        self.get_root_ref().get_txid()
+        self.root.txid
     }
 
     pub(crate) fn tree_density(&self) -> (usize, usize) {
-        self.get_root_ref().tree_density()
+        self.root.tree_density()
     }
 }
 
@@ -487,78 +322,16 @@ impl<K: Clone + Ord + Debug, V: Clone> Extend<(K, V)> for CursorWrite<K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> Drop for CursorWrite<K, V> {
-    fn drop(&mut self) {
-        // If there is content in first_seen, this means we aborted and must rollback
-        // of these items!
-        // println!("Releasing CW FS -> {:?}", self.first_seen);
-        self.first_seen.iter().for_each(|n| Node::free(*n))
-    }
-}
-
-/*
-impl<K: Clone + Ord + Debug, V: Clone> SuperBlock<K, V> {
-    pub(crate) fn drop_tree(self) {
-        // This will drop this super block *and* the full tree.
-        let mut first_seen = Vec::with_capacity(16);
-        first_seen.push(self.root);
-        unsafe { (*self.root).sblock_collect(&mut first_seen) };
-        first_seen.iter().for_each(|n| Node::free(*n));
-    }
-}
-*/
-
-impl<K: Clone + Ord + Debug, V: Clone> Drop for SuperBlock<K, V> {
-    fn drop(&mut self) {
-        // println!("dropping txid -> {:?}", self.txid);
-        // If a superblock is dropped, we need to remove anything that was
-        // last seen in this generation.
-        let last_seen_guard = self
-            .last_seen
-            .try_lock()
-            .expect("Unable to lock, something is horridly wrong!");
-
-        if let Some(ls) = &(*last_seen_guard) {
-            // println!("Releasing prev SB LS -> {:?}", ls);
-            // Releasing prev txn
-            ls.iter().for_each(|n| Node::free(*n))
-        } else {
-            // println!("Releasing active SB LS -> None");
-            // We must be the last SB. Drop the tree now.
-            let mut first_seen = Vec::with_capacity(16);
-            first_seen.push(self.root);
-            unsafe { (*self.root).sblock_collect(&mut first_seen) };
-            first_seen.iter().for_each(|n| Node::free(*n));
-        }
-    }
-}
-
 impl<K: Clone + Ord + Debug, V: Clone> CursorRead<K, V> {
-    pub(crate) fn new(sblock: &SuperBlock<K, V>) -> Self {
-        // println!("starting rd txid -> {:?}", sblock.txid);
-        CursorRead {
-            txid: sblock.txid,
-            length: sblock.size,
-            root: sblock.root,
-        }
+    pub(crate) fn new(root: ABNode<K, V>, length: usize) -> Self {
+        let txid = root.txid;
+        CursorRead { txid, root, length }
     }
 }
-
-/*
-impl<K: Clone + Ord + Debug, V: Clone> Drop for CursorRead<K, V> {
-    fn drop(&mut self) {
-        unimplemented!();
-    }
-}
-*/
 
 impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<K, V> {
-    fn get_root_ref(&self) -> &Node<K, V> {
-        unsafe { &*(self.root) }
-    }
-
-    fn get_root(&self) -> *mut Node<K, V> {
-        self.root
+    fn get_root_ref(&self) -> &ABNode<K, V> {
+        &self.root
     }
 
     fn len(&self) -> usize {
@@ -571,12 +344,8 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<K, V> 
 }
 
 impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite<K, V> {
-    fn get_root_ref(&self) -> &Node<K, V> {
-        unsafe { &*(self.root) }
-    }
-
-    fn get_root(&self) -> *mut Node<K, V> {
-        self.root
+    fn get_root_ref(&self) -> &ABNode<K, V> {
+        &self.root
     }
 
     fn len(&self) -> usize {
@@ -589,12 +358,10 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite<K, V>
 }
 
 fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
-    node: *mut Node<K, V>,
+    node: &mut ABNode<K, V>,
     txid: u64,
     k: K,
     v: V,
-    last_seen: &mut Vec<*mut Node<K, V>>,
-    first_seen: &mut Vec<*mut Node<K, V>>,
 ) -> CRInsertState<K, V> {
     /*
      * Let's talk about the magic of this function. Come, join
@@ -612,53 +379,36 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
      * thus keeping them alive.
      */
 
-    if self_meta!(node).is_leaf() {
-        // NOTE: We have to match, rather than map here, as rust tries to
-        // move k:v into both closures!
-
+    if node.is_leaf() {
         // Leaf path
-        match leaf_ref!(node, K, V).req_clone(txid) {
-            Some(cnode) => {
-                // println!();
-                first_seen.push(cnode);
-                // println!("ls push 5");
-                last_seen.push(node);
-                // Clone was required.
-                let mref = leaf_ref!(cnode, K, V);
-                // insert to the new node.
-                match mref.insert_or_update(k, v) {
-                    LeafInsertState::Ok(res) => CRInsertState::Clone(res, cnode),
-                    LeafInsertState::Split(rnode) => {
-                        first_seen.push(rnode as *mut Node<K, V>);
-                        // let rnode = Node::new_leaf_ins(txid, sk, sv);
-                        CRInsertState::CloneSplit(cnode, rnode as *mut Node<K, V>)
-                    }
-                    LeafInsertState::RevSplit(lnode) => {
-                        first_seen.push(lnode as *mut Node<K, V>);
-                        CRInsertState::CloneRevSplit(cnode, lnode as *mut Node<K, V>)
-                    }
+        if node.txid == txid {
+            // No clone required.
+            // simply do the insert.
+            let mref = Arc::get_mut(node).unwrap();
+            match mref.as_mut_leaf().insert_or_update(txid, k, v) {
+                BLInsertState::Ok(res) => CRInsertState::NoClone(res),
+                BLInsertState::Split(rnode) => {
+                    // We split, but left is already part of the txn group, so lets
+                    // just return what's new.
+                    // let rnode = Node::new_leaf_ins(txid, sk, sv);
+                    CRInsertState::Split(rnode)
                 }
+                BLInsertState::RevSplit(lnode) => CRInsertState::RevSplit(lnode),
             }
-            None => {
-                // No clone required.
-                // simply do the insert.
-                let mref = leaf_ref!(node, K, V);
-                match mref.insert_or_update(k, v) {
-                    LeafInsertState::Ok(res) => CRInsertState::NoClone(res),
-                    LeafInsertState::Split(rnode) => {
-                        // We split, but left is already part of the txn group, so lets
-                        // just return what's new.
-                        // let rnode = Node::new_leaf_ins(txid, sk, sv);
-                        first_seen.push(rnode as *mut Node<K, V>);
-                        CRInsertState::Split(rnode as *mut Node<K, V>)
-                    }
-                    LeafInsertState::RevSplit(lnode) => {
-                        first_seen.push(lnode as *mut Node<K, V>);
-                        CRInsertState::RevSplit(lnode as *mut Node<K, V>)
-                    }
+        } else {
+            // Clone required.
+            let mut cnode = node.req_clone(txid);
+            let mref = Arc::get_mut(&mut cnode).unwrap();
+            // insert to the new node.
+            match mref.as_mut_leaf().insert_or_update(txid, k, v) {
+                BLInsertState::Ok(res) => CRInsertState::Clone(res, cnode),
+                BLInsertState::Split(rnode) => {
+                    // let rnode = Node::new_leaf_ins(txid, sk, sv);
+                    CRInsertState::CloneSplit(cnode, rnode)
                 }
+                BLInsertState::RevSplit(lnode) => CRInsertState::CloneRevSplit(cnode, lnode),
             }
-        } // end match
+        }
     } else {
         // Branch path
         // Decide if we need to clone - we do this as we descend due to a quirk in Arc
@@ -666,194 +416,170 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
         // never be stabilised anyway). When we change this to *mut + garbage lists we
         // could consider restoring the reactive behaviour that clones up, rather than
         // cloning down the path.
-        //
-        // NOTE: We have to match, rather than map here, as rust tries to
-        // move k:v into both closures!
-        match branch_ref!(node, K, V).req_clone(txid) {
-            Some(cnode) => {
-                //
-                first_seen.push(cnode as *mut Node<K, V>);
-                // println!("ls push 6");
-                last_seen.push(node as *mut Node<K, V>);
-                // Not same txn, clone instead.
-                let nmref = branch_ref!(cnode, K, V);
-                let anode_idx = nmref.locate_node(&k);
-                let anode = nmref.get_idx_unchecked(anode_idx);
 
-                match clone_and_insert(anode, txid, k, v, last_seen, first_seen) {
-                    CRInsertState::Clone(res, lnode) => {
-                        nmref.replace_by_idx(anode_idx, lnode);
-                        // Pass back up that we cloned.
-                        CRInsertState::Clone(res, cnode)
-                    }
-                    CRInsertState::CloneSplit(lnode, rnode) => {
-                        // CloneSplit here, would have already updated lnode/rnode into the
-                        // gc lists.
-                        // Second, we update anode_idx node with our lnode as the new clone.
-                        nmref.replace_by_idx(anode_idx, lnode);
+        if node.txid == txid {
+            let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
+            let anode_idx = nmref.locate_node(&k);
+            let mut anode = nmref.get_mut_idx(anode_idx);
 
-                        // Third we insert rnode - perfect world it's at anode_idx + 1, but
-                        // we use the normal insert routine for now.
-                        match nmref.add_node(rnode) {
-                            BranchInsertState::Ok => CRInsertState::Clone(None, cnode),
-                            BranchInsertState::Split(clnode, crnode) => {
-                                // Create a new branch to hold these children.
-                                let nrnode = Node::new_branch(txid, clnode, crnode);
-                                first_seen.push(nrnode as *mut Node<K, V>);
-                                // Return it
-                                CRInsertState::CloneSplit(cnode, nrnode as *mut Node<K, V>)
-                            }
-                        }
-                    }
-                    CRInsertState::CloneRevSplit(nnode, lnode) => {
-                        nmref.replace_by_idx(anode_idx, nnode);
-                        match nmref.add_node_left(lnode, anode_idx) {
-                            BranchInsertState::Ok => CRInsertState::Clone(None, cnode),
-                            BranchInsertState::Split(clnode, crnode) => {
-                                let nrnode = Node::new_branch(txid, clnode, crnode);
-                                first_seen.push(nrnode as *mut Node<K, V>);
-                                CRInsertState::CloneSplit(cnode, nrnode as *mut Node<K, V>)
-                            }
-                        }
-                    }
-                    CRInsertState::NoClone(_res) => {
-                        // If our descendant did not clone, then we don't have to either.
-                        unreachable!("Shoud never be possible.");
-                        // CRInsertState::NoClone(res)
-                    }
-                    CRInsertState::Split(_rnode) => {
-                        // I think
-                        unreachable!("This represents a corrupt tree state");
-                    }
-                    CRInsertState::RevSplit(_lnode) => {
-                        unreachable!("This represents a corrupt tree state");
-                    }
-                } // end match
-            } // end Some,
-            None => {
-                let nmref = branch_ref!(node, K, V);
-                let anode_idx = nmref.locate_node(&k);
-                let anode = nmref.get_idx_unchecked(anode_idx);
-
-                match clone_and_insert(anode, txid, k, v, last_seen, first_seen) {
-                    CRInsertState::Clone(res, lnode) => {
-                        nmref.replace_by_idx(anode_idx, lnode);
-                        // We did not clone, and no further work needed.
-                        CRInsertState::NoClone(res)
-                    }
-                    CRInsertState::NoClone(res) => {
-                        // If our descendant did not clone, then we don't have to do any adjustments
-                        // or further work.
-                        CRInsertState::NoClone(res)
-                    }
-                    CRInsertState::Split(rnode) => {
-                        match nmref.add_node(rnode) {
-                            // Similar to CloneSplit - we are either okay, and the insert was happy.
-                            BranchInsertState::Ok => CRInsertState::NoClone(None),
-                            // Or *we* split as well, and need to return a new sibling branch.
-                            BranchInsertState::Split(clnode, crnode) => {
-                                // Create a new branch to hold these children.
-                                let nrnode = Node::new_branch(txid, clnode, crnode);
-                                first_seen.push(nrnode as *mut Node<K, V>);
-                                // Return it
-                                CRInsertState::Split(nrnode as *mut Node<K, V>)
-                            }
-                        }
-                    }
-                    CRInsertState::CloneSplit(lnode, rnode) => {
-                        // work inplace.
-                        // Second, we update anode_idx node with our lnode as the new clone.
-                        nmref.replace_by_idx(anode_idx, lnode);
-
-                        // Third we insert rnode - perfect world it's at anode_idx + 1, but
-                        // we use the normal insert routine for now.
-                        match nmref.add_node(rnode) {
-                            // Similar to CloneSplit - we are either okay, and the insert was happy.
-                            BranchInsertState::Ok => CRInsertState::NoClone(None),
-                            // Or *we* split as well, and need to return a new sibling branch.
-                            BranchInsertState::Split(clnode, crnode) => {
-                                // Create a new branch to hold these children.
-                                let nrnode = Node::new_branch(txid, clnode, crnode);
-                                first_seen.push(nrnode as *mut Node<K, V>);
-                                // Return it
-                                CRInsertState::Split(nrnode as *mut Node<K, V>)
-                            }
-                        }
-                    }
-                    CRInsertState::RevSplit(lnode) => match nmref.add_node_left(lnode, anode_idx) {
-                        BranchInsertState::Ok => CRInsertState::NoClone(None),
-                        BranchInsertState::Split(clnode, crnode) => {
+            match clone_and_insert(&mut anode, txid, k, v) {
+                CRInsertState::Clone(res, lnode) => {
+                    nmref.replace_by_idx(anode_idx, lnode);
+                    // We did not clone, and no further work needed.
+                    CRInsertState::NoClone(res)
+                }
+                CRInsertState::NoClone(res) => {
+                    // If our descendant did not clone, then we don't have to do any adjustments
+                    // or further work.
+                    debug_assert!(txid == node.txid);
+                    CRInsertState::NoClone(res)
+                }
+                CRInsertState::Split(rnode) => {
+                    match nmref.add_node(rnode) {
+                        // Similar to CloneSplit - we are either okay, and the insert was happy.
+                        BRInsertState::Ok => CRInsertState::NoClone(None),
+                        // Or *we* split as well, and need to return a new sibling branch.
+                        BRInsertState::Split(clnode, crnode) => {
+                            // Create a new branch to hold these children.
                             let nrnode = Node::new_branch(txid, clnode, crnode);
-                            first_seen.push(nrnode as *mut Node<K, V>);
-                            CRInsertState::Split(nrnode as *mut Node<K, V>)
-                        }
-                    },
-                    CRInsertState::CloneRevSplit(nnode, lnode) => {
-                        nmref.replace_by_idx(anode_idx, nnode);
-                        match nmref.add_node_left(lnode, anode_idx) {
-                            BranchInsertState::Ok => CRInsertState::NoClone(None),
-                            BranchInsertState::Split(clnode, crnode) => {
-                                let nrnode = Node::new_branch(txid, clnode, crnode);
-                                first_seen.push(nrnode as *mut Node<K, V>);
-                                CRInsertState::Split(nrnode as *mut Node<K, V>)
-                            }
+                            // Return it
+                            CRInsertState::Split(nrnode)
                         }
                     }
-                } // end match
+                }
+                CRInsertState::CloneSplit(lnode, rnode) => {
+                    // work inplace.
+                    // Second, we update anode_idx node with our lnode as the new clone.
+                    nmref.replace_by_idx(anode_idx, lnode);
+
+                    // Third we insert rnode - perfect world it's at anode_idx + 1, but
+                    // we use the normal insert routine for now.
+                    match nmref.add_node(rnode) {
+                        // Similar to CloneSplit - we are either okay, and the insert was happy.
+                        BRInsertState::Ok => CRInsertState::NoClone(None),
+                        // Or *we* split as well, and need to return a new sibling branch.
+                        BRInsertState::Split(clnode, crnode) => {
+                            // Create a new branch to hold these children.
+                            let nrnode = Node::new_branch(txid, clnode, crnode);
+                            // Return it
+                            CRInsertState::Split(nrnode)
+                        }
+                    }
+                }
+                CRInsertState::RevSplit(lnode) => match nmref.add_left_node(lnode, anode_idx) {
+                    BRInsertState::Ok => CRInsertState::NoClone(None),
+                    BRInsertState::Split(clnode, crnode) => {
+                        let nrnode = Node::new_branch(txid, clnode, crnode);
+                        CRInsertState::Split(nrnode)
+                    }
+                },
+                CRInsertState::CloneRevSplit(nnode, lnode) => {
+                    nmref.replace_by_idx(anode_idx, nnode);
+                    match nmref.add_left_node(lnode, anode_idx) {
+                        BRInsertState::Ok => CRInsertState::NoClone(None),
+                        BRInsertState::Split(clnode, crnode) => {
+                            let nrnode = Node::new_branch(txid, clnode, crnode);
+                            CRInsertState::Split(nrnode)
+                        }
+                    }
+                }
             }
-        } // end match branch ref clone
+        } else {
+            // Not same txn, clone instead.
+            let mut cnode = node.req_clone(txid);
+            let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
+            let anode_idx = nmref.locate_node(&k);
+            let mut anode = nmref.get_mut_idx(anode_idx);
+
+            match clone_and_insert(&mut anode, txid, k, v) {
+                CRInsertState::Clone(res, lnode) => {
+                    nmref.replace_by_idx(anode_idx, lnode);
+                    // Pass back up that we cloned.
+                    CRInsertState::Clone(res, cnode)
+                }
+                CRInsertState::NoClone(_res) => {
+                    // If our descendant did not clone, then we don't have to either.
+                    debug_assert!(txid == node.txid);
+                    unreachable!("Shoud never be possible.");
+                    // CRInsertState::NoClone(res)
+                }
+                CRInsertState::Split(_rnode) => {
+                    // I think
+                    unreachable!("This represents a corrupt tree state");
+                }
+                CRInsertState::CloneSplit(lnode, rnode) => {
+                    // Second, we update anode_idx node with our lnode as the new clone.
+                    nmref.replace_by_idx(anode_idx, lnode);
+
+                    // Third we insert rnode - perfect world it's at anode_idx + 1, but
+                    // we use the normal insert routine for now.
+                    match nmref.add_node(rnode) {
+                        BRInsertState::Ok => CRInsertState::Clone(None, cnode),
+                        BRInsertState::Split(clnode, crnode) => {
+                            // Create a new branch to hold these children.
+                            let nrnode = Node::new_branch(txid, clnode, crnode);
+                            // Return it
+                            CRInsertState::CloneSplit(cnode, nrnode)
+                        }
+                    }
+                }
+                CRInsertState::RevSplit(_lnode) => {
+                    unreachable!("This represents a corrupt tree state");
+                }
+                CRInsertState::CloneRevSplit(nnode, lnode) => {
+                    nmref.replace_by_idx(anode_idx, nnode);
+                    match nmref.add_left_node(lnode, anode_idx) {
+                        BRInsertState::Ok => CRInsertState::Clone(None, cnode),
+                        BRInsertState::Split(clnode, crnode) => {
+                            let nrnode = Node::new_branch(txid, clnode, crnode);
+                            CRInsertState::CloneSplit(cnode, nrnode)
+                        }
+                    }
+                }
+            } // end match
+        } // end if node txn
     } // end if leaf
 }
 
 fn path_clone<'a, K: Clone + Ord + Debug, V: Clone>(
-    node: *mut Node<K, V>,
+    node: &'a mut ABNode<K, V>,
     txid: u64,
     k: &K,
-    last_seen: &mut Vec<*mut Node<K, V>>,
-    first_seen: &mut Vec<*mut Node<K, V>>,
 ) -> CRCloneState<K, V> {
-    if unsafe { (*node).is_leaf() } {
-        unsafe {
-            (*(node as *mut Leaf<K, V>))
-                .req_clone(txid)
-                .map(|cnode| {
-                    // Track memory
-                    last_seen.push(node);
-                    // println!("ls push 7 {:?}", node);
-                    first_seen.push(cnode);
-                    CRCloneState::Clone(cnode)
-                })
-                .unwrap_or(CRCloneState::NoClone)
+    if node.is_leaf() {
+        if txid == node.txid {
+            // No clone, just return.
+            CRCloneState::NoClone
+        } else {
+            let cnode = node.req_clone(txid);
+            CRCloneState::Clone(cnode)
         }
     } else {
         // We are in a branch, so locate our descendent and prepare
         // to clone if needed.
+        let node_txid = node.txid;
         // println!("txid -> {:?} {:?}", node_txid, txid);
-        let nmref = branch_ref!(node, K, V);
+        // let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
+        let nmref = arc_get_mut_unsafe!(node).as_mut_branch();
         let anode_idx = nmref.locate_node(&k);
-        let anode = nmref.get_idx_unchecked(anode_idx);
-        match path_clone(anode, txid, k, last_seen, first_seen) {
+        let mut anode = nmref.get_mut_idx(anode_idx);
+        match path_clone(&mut anode, txid, k) {
             CRCloneState::Clone(cnode) => {
                 // Do we need to clone?
-                nmref
-                    .req_clone(txid)
-                    .map(|acnode| {
-                        // We require to be cloned.
-                        last_seen.push(node);
-                        // println!("ls push 8");
-                        first_seen.push(acnode);
-                        let nmref = branch_ref!(acnode, K, V);
-                        nmref.replace_by_idx(anode_idx, cnode);
-                        CRCloneState::Clone(acnode)
-                    })
-                    .unwrap_or_else(|| {
-                        // Nope, just insert and unwind.
-                        nmref.replace_by_idx(anode_idx, cnode);
-                        CRCloneState::NoClone
-                    })
+                if txid == node_txid {
+                    // Nope, just insert and unwind.
+                    nmref.replace_by_idx(anode_idx, cnode);
+                    CRCloneState::NoClone
+                } else {
+                    // We require to be cloned.
+                    let mut acnode = node.req_clone(txid);
+                    let nmref = Arc::get_mut(&mut acnode).unwrap().as_mut_branch();
+                    nmref.replace_by_idx(anode_idx, cnode);
+                    CRCloneState::Clone(acnode)
+                }
             }
             CRCloneState::NoClone => {
-                // Did not clone, unwind.
+                // Did not clone, move on.
                 CRCloneState::NoClone
             }
         }
@@ -861,190 +587,147 @@ fn path_clone<'a, K: Clone + Ord + Debug, V: Clone>(
 }
 
 fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
-    node: *mut Node<K, V>,
+    node: &'a mut ABNode<K, V>,
     txid: u64,
     k: &K,
-    last_seen: &mut Vec<*mut Node<K, V>>,
-    first_seen: &mut Vec<*mut Node<K, V>>,
 ) -> CRRemoveState<K, V> {
-    if self_meta!(node).is_leaf() {
-        leaf_ref!(node, K, V)
-            .req_clone(txid)
-            .map(|cnode| {
-                first_seen.push(cnode);
-                // println!("ls push 10 {:?}", node);
-                last_seen.push(node);
-                let mref = leaf_ref!(cnode, K, V);
-                match mref.remove(k) {
-                    LeafRemoveState::Ok(res) => CRRemoveState::Clone(res, cnode),
-                    LeafRemoveState::Shrink(res) => CRRemoveState::CloneShrink(res, cnode),
-                }
-            })
-            .unwrap_or_else(|| {
-                let mref = leaf_ref!(node, K, V);
-                match mref.remove(k) {
-                    LeafRemoveState::Ok(res) => CRRemoveState::NoClone(res),
-                    LeafRemoveState::Shrink(res) => CRRemoveState::Shrink(res),
-                }
-            })
+    if node.is_leaf() {
+        if node.txid == txid {
+            let mref = Arc::get_mut(node).unwrap();
+            match mref.as_mut_leaf().remove(k) {
+                BLRemoveState::Ok(res) => CRRemoveState::NoClone(res),
+                BLRemoveState::Shrink(res) => CRRemoveState::Shrink(res),
+            }
+        } else {
+            let mut cnode = node.req_clone(txid);
+            let mref = Arc::get_mut(&mut cnode).unwrap();
+            match mref.as_mut_leaf().remove(k) {
+                BLRemoveState::Ok(res) => CRRemoveState::Clone(res, cnode),
+                BLRemoveState::Shrink(res) => CRRemoveState::CloneShrink(res, cnode),
+            }
+        }
     } else {
         // Locate the node we need to work on and then react if it
         // requests a shrink.
-        branch_ref!(node, K, V)
-            .req_clone(txid)
-            .map(|cnode| {
-                first_seen.push(cnode);
-                // println!("ls push 11 {:?}", node);
-                last_seen.push(node);
-                // Done mm
-                let nmref = branch_ref!(cnode, K, V);
-                let anode_idx = nmref.locate_node(&k);
-                let anode = nmref.get_idx_unchecked(anode_idx);
-                match clone_and_remove(anode, txid, k, last_seen, first_seen) {
-                    CRRemoveState::NoClone(_res) => {
-                        unreachable!("Should never occur");
-                        // CRRemoveState::NoClone(res)
-                    }
-                    CRRemoveState::Clone(res, lnode) => {
-                        nmref.replace_by_idx(anode_idx, lnode);
-                        CRRemoveState::Clone(res, cnode)
-                    }
-                    CRRemoveState::Shrink(_res) => {
-                        unreachable!("This represents a corrupt tree state");
-                    }
-                    CRRemoveState::CloneShrink(res, nnode) => {
-                        // Put our cloned child into the tree at the correct location, don't worry,
-                        // the shrink_decision will deal with it.
-                        nmref.replace_by_idx(anode_idx, nnode);
 
-                        // Now setup the sibling, to the left *or* right.
-                        let right_idx =
-                            nmref.clone_sibling_idx(txid, anode_idx, last_seen, first_seen);
-                        // Okay, now work out what we need to do.
-                        match nmref.shrink_decision(right_idx) {
-                            BranchShrinkState::Balanced => {
-                                // K:V were distributed through left and right,
-                                // so no further action needed.
-                                CRRemoveState::Clone(res, cnode)
-                            }
-                            BranchShrinkState::Merge(dnode) => {
-                                // Right was merged to left, and we remain
-                                // valid
-                                // println!("ls push 20 {:?}", dnode);
-                                debug_assert!(!last_seen.contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::Clone(res, cnode)
-                            }
-                            BranchShrinkState::Shrink(dnode) => {
-                                // Right was merged to left, but we have now falled under the needed
-                                // amount of values.
-                                // println!("ls push 21 {:?}", dnode);
-                                debug_assert!(!last_seen.contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::CloneShrink(res, cnode)
-                            }
+        if node.txid == txid {
+            let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
+            let anode_idx = nmref.locate_node(&k);
+            let mut anode = nmref.get_mut_idx(anode_idx);
+            match clone_and_remove(&mut anode, txid, k) {
+                CRRemoveState::NoClone(res) => {
+                    debug_assert!(txid == node.txid);
+                    CRRemoveState::NoClone(res)
+                }
+                CRRemoveState::Clone(res, lnode) => {
+                    nmref.replace_by_idx(anode_idx, lnode);
+                    CRRemoveState::NoClone(res)
+                }
+                CRRemoveState::Shrink(res) => {
+                    let right_idx = nmref.clone_sibling_idx(txid, anode_idx);
+                    match nmref.shrink_decision(right_idx) {
+                        BRShrinkState::Balanced | BRShrinkState::Merge => {
+                            // K:V were distributed through left and right,
+                            // so no further action needed.
+                            // -- OR --
+                            // Right was merged to left, and we remain
+                            // valid
+                            CRRemoveState::NoClone(res)
+                        }
+                        BRShrinkState::Shrink => {
+                            // Right was merged to left, but we have now falled under the needed
+                            // amount of values, so we begin to shrink up.
+                            CRRemoveState::Shrink(res)
                         }
                     }
                 }
-            })
-            .unwrap_or_else(|| {
-                // We are already part of this txn
-                let nmref = branch_ref!(node, K, V);
-                let anode_idx = nmref.locate_node(&k);
-                let anode = nmref.get_idx_unchecked(anode_idx);
-                match clone_and_remove(anode, txid, k, last_seen, first_seen) {
-                    CRRemoveState::NoClone(res) => CRRemoveState::NoClone(res),
-                    CRRemoveState::Clone(res, lnode) => {
-                        nmref.replace_by_idx(anode_idx, lnode);
-                        CRRemoveState::NoClone(res)
-                    }
-                    CRRemoveState::Shrink(res) => {
-                        let right_idx =
-                            nmref.clone_sibling_idx(txid, anode_idx, last_seen, first_seen);
-                        match nmref.shrink_decision(right_idx) {
-                            BranchShrinkState::Balanced => {
-                                // K:V were distributed through left and right,
-                                // so no further action needed.
-                                CRRemoveState::NoClone(res)
-                            }
-                            BranchShrinkState::Merge(dnode) => {
-                                // Right was merged to left, and we remain
-                                // valid
-                                //
-                                // A quirk here is based on how clone_sibling_idx works. We may actually
-                                // start with anode_idx of 0, which triggers a right clone, so it's
-                                // *already* in the mm lists. But here right is "last seen" now if
-                                //
-                                // println!("ls push 22 {:?}", dnode);
-                                debug_assert!(!last_seen.contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::NoClone(res)
-                            }
-                            BranchShrinkState::Shrink(dnode) => {
-                                // Right was merged to left, but we have now falled under the needed
-                                // amount of values, so we begin to shrink up.
-                                // println!("ls push 23 {:?}", dnode);
-                                debug_assert!(!last_seen.contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::Shrink(res)
-                            }
+                CRRemoveState::CloneShrink(res, nnode) => {
+                    // We don't need to clone, just work on the nmref we have.
+                    //
+                    // Swap in the cloned node to the correct location.
+                    nmref.replace_by_idx(anode_idx, nnode);
+                    // Now setup the sibling, to the left *or* right.
+                    let right_idx = nmref.clone_sibling_idx(txid, anode_idx);
+                    match nmref.shrink_decision(right_idx) {
+                        BRShrinkState::Balanced | BRShrinkState::Merge => {
+                            // K:V were distributed through left and right,
+                            // so no further action needed.
+                            // -- OR --
+                            // Right was merged to left, and we remain
+                            // valid
+                            CRRemoveState::NoClone(res)
                         }
-                    }
-                    CRRemoveState::CloneShrink(res, nnode) => {
-                        // We don't need to clone, just work on the nmref we have.
-                        //
-                        // Swap in the cloned node to the correct location.
-                        nmref.replace_by_idx(anode_idx, nnode);
-                        // Now setup the sibling, to the left *or* right.
-                        let right_idx =
-                            nmref.clone_sibling_idx(txid, anode_idx, last_seen, first_seen);
-                        match nmref.shrink_decision(right_idx) {
-                            BranchShrinkState::Balanced => {
-                                // K:V were distributed through left and right,
-                                // so no further action needed.
-                                CRRemoveState::NoClone(res)
-                            }
-                            BranchShrinkState::Merge(dnode) => {
-                                // Right was merged to left, and we remain
-                                // valid
-                                // println!("ls push 24 {:?}", dnode);
-                                debug_assert!(!last_seen.contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::NoClone(res)
-                            }
-                            BranchShrinkState::Shrink(dnode) => {
-                                // Right was merged to left, but we have now falled under the needed
-                                // amount of values.
-                                // println!("ls push 25 {:?}", dnode);
-                                debug_assert!(!last_seen.contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::Shrink(res)
-                            }
+                        BRShrinkState::Shrink => {
+                            // Right was merged to left, but we have now falled under the needed
+                            // amount of values.
+                            CRRemoveState::Shrink(res)
                         }
                     }
                 }
-            }) // end unwrap_or_else
+            }
+        } else {
+            let mut cnode = node.req_clone(txid);
+            let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
+            let anode_idx = nmref.locate_node(&k);
+            let mut anode = nmref.get_mut_idx(anode_idx);
+            match clone_and_remove(&mut anode, txid, k) {
+                CRRemoveState::NoClone(_res) => {
+                    debug_assert!(txid == node.txid);
+                    unreachable!("Should never occur");
+                    // CRRemoveState::NoClone(res)
+                }
+                CRRemoveState::Clone(res, lnode) => {
+                    nmref.replace_by_idx(anode_idx, lnode);
+                    CRRemoveState::Clone(res, cnode)
+                }
+                CRRemoveState::Shrink(_res) => {
+                    unreachable!("This represents a corrupt tree state");
+                }
+                CRRemoveState::CloneShrink(res, nnode) => {
+                    // Put our cloned child into the tree at the correct location, don't worry,
+                    // the shrink_decision will deal with it.
+                    nmref.replace_by_idx(anode_idx, nnode);
+
+                    // Now setup the sibling, to the left *or* right.
+                    let right_idx = nmref.clone_sibling_idx(txid, anode_idx);
+
+                    // Okay, now work out what we need to do.
+                    match nmref.shrink_decision(right_idx) {
+                        BRShrinkState::Balanced | BRShrinkState::Merge => {
+                            // K:V were distributed through left and right,
+                            // so no further action needed.
+                            // -- OR --
+                            // Right was merged to left, and we remain
+                            // valid
+                            CRRemoveState::Clone(res, cnode)
+                        }
+                        BRShrinkState::Shrink => {
+                            // Right was merged to left, but we have now falled under the needed
+                            // amount of values.
+                            CRRemoveState::CloneShrink(res, cnode)
+                        }
+                    }
+                }
+            }
+        } // end node.txid
     }
 }
 
 fn path_get_mut_ref<'a, K: Clone + Ord + Debug, V: Clone>(
-    node: *mut Node<K, V>,
+    node: &'a mut ABNode<K, V>,
     k: &K,
-) -> Option<&'a mut V>
-where
-    K: 'a,
-{
-    if self_meta!(node).is_leaf() {
-        leaf_ref!(node, K, V).get_mut_ref(k)
+) -> Option<&'a mut V> {
+    if node.is_leaf() {
+        Arc::get_mut(node).unwrap().as_mut_leaf().get_mut_ref(k)
     } else {
         // This nmref binds the life of the reference ...
-        let nmref = branch_ref!(node, K, V);
+        let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
         let anode_idx = nmref.locate_node(&k);
-        let anode = nmref.get_idx_unchecked(anode_idx);
+        let mut anode = nmref.get_mut_idx(anode_idx);
         // That we get here. So we can't just return it, and we need to 'strip' the
         // lifetime so that it's bound to the lifetime of the outer node
         // rather than the nmref.
-        let r: Option<*mut V> = path_get_mut_ref(anode, k).map(|v| v as *mut V);
+        let r: Option<*mut V> = path_get_mut_ref(&mut anode, k).map(|v| v as *mut V);
 
         // I solemly swear I am up to no good.
         r.map(|v| unsafe { &mut *v as &mut V })
@@ -1052,43 +735,31 @@ where
 }
 
 fn clone_and_split_off_trim_lt<'a, K: Clone + Ord + Debug, V: Clone>(
-    node: *mut Node<K, V>,
+    node: &'a mut ABNode<K, V>,
     txid: u64,
     k: &K,
-    last_seen: &mut Vec<*mut Node<K, V>>,
-    first_seen: &mut Vec<*mut Node<K, V>>,
 ) -> CRTrimState<K, V> {
-    if self_meta!(node).is_leaf() {
+    if node.is_leaf() {
         // No action, it's a leaf. Prune will do it.
         CRTrimState::Complete
     } else {
-        branch_ref!(node, K, V)
-            .req_clone(txid)
-            .map(|cnode| {
-                let nmref = branch_ref!(cnode, K, V);
-                first_seen.push(cnode as *mut Node<K, V>);
-                last_seen.push(node as *mut Node<K, V>);
-                match nmref.trim_lt_key(k, last_seen, first_seen) {
-                    BranchTrimState::Complete => CRTrimState::Clone(cnode),
-                    BranchTrimState::Promote(pnode) => {
-                        // We just cloned it but oh well, away you go ...
-                        last_seen.push(cnode as *mut Node<K, V>);
-                        CRTrimState::Promote(pnode)
-                    }
-                }
-            })
-            .unwrap_or_else(|| {
-                let nmref = branch_ref!(node, K, V);
+        // remove_lt_idx
+        if node.txid == txid {
+            let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
 
-                match nmref.trim_lt_key(k, last_seen, first_seen) {
-                    BranchTrimState::Complete => CRTrimState::Complete,
-                    BranchTrimState::Promote(pnode) => {
-                        // We are about to remove our node, so mark it as the last time.
-                        last_seen.push(node);
-                        CRTrimState::Promote(pnode)
-                    }
-                }
-            })
+            match nmref.trim_lt_key(k) {
+                BRTrimState::Complete => CRTrimState::Complete,
+                BRTrimState::Promote(node) => CRTrimState::Promote(node),
+            }
+        } else {
+            let mut cnode = node.req_clone(txid);
+            let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
+
+            match nmref.trim_lt_key(k) {
+                BRTrimState::Complete => CRTrimState::Clone(cnode),
+                BRTrimState::Promote(nnode) => CRTrimState::Promote(nnode),
+            }
+        }
     }
 }
 
@@ -1103,22 +774,22 @@ fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
         if node.txid == txid {
             let nmref = Arc::get_mut(node).unwrap().as_mut_leaf();
             match nmref.remove_lt(k) {
-                LeafPruneState::Ok => CRPruneState::OkNoClone,
-                LeafPruneState::Prune => CRPruneState::Prune,
+                BLPruneState::Ok => CRPruneState::OkNoClone,
+                BLPruneState::Prune => CRPruneState::Prune,
             }
         } else {
             let mut cnode = node.req_clone(txid);
             let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_leaf();
             match nmref.remove_lt(k) {
-                LeafPruneState::Ok => CRPruneState::OkClone(cnode),
-                LeafPruneState::Prune => CRPruneState::ClonePrune(cnode),
+                BLPruneState::Ok => CRPruneState::OkClone(cnode),
+                BLPruneState::Prune => CRPruneState::ClonePrune(cnode),
             }
         }
     } else {
         if node.txid == txid {
             let nmref = Arc::get_mut(node).unwrap().as_mut_branch();
             let anode_idx = nmref.locate_node(&k);
-            let anode = nmref.get_idx_unchecked(anode_idx);
+            let anode = nmref.get_mut_idx(anode_idx);
             let result = clone_and_split_off_prune_lt(anode, txid, k);
             // println!("== clone_and_split_off_prune_lt --> {:?}", result);
             match result {
@@ -1173,7 +844,7 @@ fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
             let mut cnode = node.req_clone(txid);
             let nmref = Arc::get_mut(&mut cnode).unwrap().as_mut_branch();
             let anode_idx = nmref.locate_node(&k);
-            let anode = nmref.get_idx_unchecked(anode_idx);
+            let anode = nmref.get_mut_idx(anode_idx);
             let result = clone_and_split_off_prune_lt(anode, txid, k);
             // println!("!= clone_and_split_off_prune_lt --> {:?}", result);
             match result {
@@ -1218,58 +889,59 @@ fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::node::*;
-    use super::super::states::*;
-    use super::super::SuperBlock;
+    use super::super::constants::{BK_CAPACITY, BV_CAPACITY, CAPACITY, L_CAPACITY};
+    use super::super::node::{check_drop_count, ABNode, Node};
+    use super::super::states::BRInsertState;
     use super::{CursorReadOps, CursorWrite};
+    // use rand::prelude::*;
     use rand::seq::SliceRandom;
     use std::mem;
+    use std::sync::Arc;
 
-    fn create_leaf_node(v: usize) -> *mut Node<usize, usize> {
-        let node = Node::new_leaf(0);
+    fn create_leaf_node(v: usize) -> ABNode<usize, usize> {
+        let mut node = Arc::new(Node::new_leaf(0));
         {
-            let nmut: &mut Leaf<_, _> = leaf_ref!(node, usize, usize);
-            nmut.insert_or_update(v, v);
+            let nmut = Arc::get_mut(&mut node).unwrap().as_mut_leaf();
+            nmut.insert_or_update(0, v, v);
         }
-        node as *mut Node<usize, usize>
+        node
     }
 
-    fn create_leaf_node_full(vbase: usize) -> *mut Node<usize, usize> {
+    fn create_leaf_node_full(vbase: usize) -> ABNode<usize, usize> {
         assert!(vbase % 10 == 0);
-        let node = Node::new_leaf(0);
+        let mut node = Arc::new(Node::new_leaf(0));
         {
-            let nmut = leaf_ref!(node, usize, usize);
+            let nmut = Arc::get_mut(&mut node).unwrap().as_mut_leaf();
             for idx in 0..L_CAPACITY {
                 let v = vbase + idx;
-                nmut.insert_or_update(v, v);
+                nmut.insert_or_update(0, v, v);
             }
-            // println!("lnode full {:?} -> {:?}", vbase, nmut);
         }
-        node as *mut Node<usize, usize>
+        node
     }
 
-    fn create_branch_node_full(vbase: usize) -> *mut Node<usize, usize> {
+    fn create_branch_node_full(vbase: usize) -> ABNode<usize, usize> {
         let l1 = create_leaf_node(vbase);
         let l2 = create_leaf_node(vbase + 10);
-        let lbranch = Node::new_branch(0, l1, l2);
-        let bref = branch_ref!(lbranch, usize, usize);
+        let mut lbranch = Node::new_branch(0, l1, l2);
+        let bref = Arc::get_mut(&mut lbranch).unwrap().as_mut_branch();
         for i in 2..BV_CAPACITY {
             let l = create_leaf_node(vbase + (10 * i));
             let r = bref.add_node(l);
             match r {
-                BranchInsertState::Ok => {}
-                _ => debug_assert!(false),
+                BRInsertState::Ok => {}
+                _ => panic!(),
             }
         }
-        assert!(bref.count() == L_CAPACITY);
-        lbranch as *mut Node<usize, usize>
+        assert!(bref.len() == BK_CAPACITY);
+        lbranch
     }
 
     #[test]
-    fn test_bptree2_cursor_insert_leaf() {
+    fn test_bptree_cursor_insert_leaf() {
         // First create the node + cursor
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let mut wcurs = CursorWrite::new(node, 1);
         let prev_txid = wcurs.root_txid();
 
         // Now insert - the txid should be different.
@@ -1288,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree2_cursor_insert_split_1() {
+    fn test_bptree_cursor_insert_split_1() {
         // Given a leaf at max, insert such that:
         //
         // leaf
@@ -1304,7 +976,7 @@ mod tests {
         // as leaf needs a clone AND to split to achieve the new root.
 
         let node = create_leaf_node_full(10);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let mut wcurs = CursorWrite::new(node, L_CAPACITY);
         let prev_txid = wcurs.root_txid();
 
         let r = wcurs.insert(1, 1);
@@ -1315,16 +987,16 @@ mod tests {
         // println!("{:?}", wcurs);
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_insert_split_2() {
+    fn test_bptree_cursor_insert_split_2() {
         // Similar to split_1, but test the Split only path. This means
         // leaf needs to be below max to start, and we insert enough in-txn
         // to trigger a clone of leaf AND THEN to cause the split.
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         for v in 1..(L_CAPACITY + 1) {
             // println!("ITER v {}", v);
@@ -1335,11 +1007,11 @@ mod tests {
         // println!("{:?}", wcurs);
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_insert_split_3() {
+    fn test_bptree_cursor_insert_split_3() {
         //      root
         //     /    \
         //  leaf    split leaf
@@ -1350,7 +1022,7 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = CursorWrite::new(root, L_CAPACITY * 2);
         assert!(wcurs.verify());
         // println!("{:?}", wcurs);
 
@@ -1361,11 +1033,11 @@ mod tests {
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_insert_split_4() {
+    fn test_bptree_cursor_insert_split_4() {
         //      root
         //     /    \
         //  leaf    split leaf
@@ -1377,7 +1049,7 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = CursorWrite::new(root, L_CAPACITY * 2);
         assert!(wcurs.verify());
 
         let r = wcurs.insert(29, 29);
@@ -1387,11 +1059,11 @@ mod tests {
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_insert_split_5() {
+    fn test_bptree_cursor_insert_split_5() {
         //      root
         //     /    \
         //  leaf    split leaf
@@ -1403,7 +1075,7 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = CursorWrite::new(root, 2);
         assert!(wcurs.verify());
 
         // Now insert to trigger the needed actions.
@@ -1419,11 +1091,11 @@ mod tests {
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_insert_split_6() {
+    fn test_bptree_cursor_insert_split_6() {
         //      root
         //     /    \
         //  leaf    split leaf
@@ -1435,7 +1107,7 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = CursorWrite::new(root, 2);
         assert!(wcurs.verify());
 
         // Now insert to trigger the needed actions.
@@ -1451,11 +1123,11 @@ mod tests {
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_insert_split_7() {
+    fn test_bptree_cursor_insert_split_7() {
         //      root
         //     /    \
         //  leaf    split leaf
@@ -1464,7 +1136,7 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = CursorWrite::new(root, 2);
         assert!(wcurs.verify());
 
         let r = wcurs.insert(11, 11);
@@ -1479,11 +1151,11 @@ mod tests {
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_insert_split_8() {
+    fn test_bptree_cursor_insert_split_8() {
         //      root
         //     /    \
         //  leaf    split leaf
@@ -1497,7 +1169,7 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = CursorWrite::new(root, L_CAPACITY * 2);
         assert!(wcurs.verify());
 
         let r = wcurs.insert(19, 19);
@@ -1512,15 +1184,15 @@ mod tests {
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_insert_stress_1() {
+    fn test_bptree_cursor_insert_stress_1() {
         // Insert ascending - we want to ensure the tree is a few levels deep
         // so we do this to a reasonable number.
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         for v in 1..(L_CAPACITY << 4) {
             // println!("ITER v {}", v);
@@ -1532,14 +1204,14 @@ mod tests {
         // println!("DENSITY -> {:?}", wcurs.get_tree_density());
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_insert_stress_2() {
+    fn test_bptree_cursor_insert_stress_2() {
         // Insert descending
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         for v in (1..(L_CAPACITY << 4)).rev() {
             // println!("ITER v {}", v);
@@ -1551,18 +1223,18 @@ mod tests {
         // println!("DENSITY -> {:?}", wcurs.get_tree_density());
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_insert_stress_3() {
+    fn test_bptree_cursor_insert_stress_3() {
         // Insert random
         let mut rng = rand::thread_rng();
         let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         for v in ins.into_iter() {
             let r = wcurs.insert(v, v);
@@ -1573,81 +1245,84 @@ mod tests {
         // println!("DENSITY -> {:?}", wcurs.get_tree_density());
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     // Add transaction-ised versions.
     #[test]
-    fn test_bptree2_cursor_insert_stress_4() {
+    fn test_bptree_cursor_insert_stress_4() {
         // Insert ascending - we want to ensure the tree is a few levels deep
         // so we do this to a reasonable number.
-        let mut sblock = SuperBlock::default();
+        let mut node = create_leaf_node(0);
+        let mut count = 1;
 
         for v in 1..(L_CAPACITY << 4) {
-            let mut wcurs = CursorWrite::new(&sblock);
+            let mut wcurs = CursorWrite::new(node, count);
             // println!("ITER v {}", v);
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
-            let new_sblock = wcurs.finalise();
-            new_sblock.commit_prep(&sblock);
-            sblock = new_sblock;
+            let (n, c) = wcurs.finalise();
+            node = n;
+            count = c;
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
-        std::mem::drop(sblock);
-        assert_released();
+        mem::drop(node);
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_insert_stress_5() {
+    fn test_bptree_cursor_insert_stress_5() {
         // Insert descending
-        let mut sblock = SuperBlock::default();
+        let mut node = create_leaf_node(0);
+        let mut count = 1;
 
         for v in (1..(L_CAPACITY << 4)).rev() {
-            let mut wcurs = CursorWrite::new(&sblock);
+            let mut wcurs = CursorWrite::new(node, count);
             // println!("ITER v {}", v);
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
-            let new_sblock = wcurs.finalise();
-            new_sblock.commit_prep(&sblock);
-            sblock = new_sblock;
+            let (n, c) = wcurs.finalise();
+            node = n;
+            count = c;
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
-        std::mem::drop(sblock);
-        assert_released();
+        mem::drop(node);
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_insert_stress_6() {
+    fn test_bptree_cursor_insert_stress_6() {
         // Insert random
         let mut rng = rand::thread_rng();
         let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
-        let mut sblock = SuperBlock::default();
+        let mut node = create_leaf_node(0);
+        let mut count = 1;
 
         for v in ins.into_iter() {
-            let mut wcurs = CursorWrite::new(&sblock);
+            let mut wcurs = CursorWrite::new(node, count);
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
-            let new_sblock = wcurs.finalise();
-            new_sblock.commit_prep(&sblock);
-            sblock = new_sblock;
+            let (n, c) = wcurs.finalise();
+            node = n;
+            count = c;
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
-        std::mem::drop(sblock);
-        assert_released();
+        mem::drop(node);
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_search_1() {
+    fn test_bptree_cursor_search_1() {
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         for v in 1..(L_CAPACITY << 4) {
             let r = wcurs.insert(v, v);
@@ -1662,14 +1337,14 @@ mod tests {
         }
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_length_1() {
+    fn test_bptree_cursor_length_1() {
         // Check the length is consistent on operations.
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         for v in 1..(L_CAPACITY << 4) {
             let r = wcurs.insert(v, v);
@@ -1680,7 +1355,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_01_p0() {
+    fn test_bptree_cursor_remove_01_p0() {
         // Check that a single value can be removed correctly without change.
         // Check that a missing value is removed as "None".
         // Check that emptying the root is ok.
@@ -1688,7 +1363,7 @@ mod tests {
         //
         //
         let lnode = create_leaf_node_full(0);
-        let mut wcurs = CursorWrite::new_test(1, lnode);
+        let mut wcurs = CursorWrite::new(lnode, L_CAPACITY);
         // println!("{:?}", wcurs);
 
         for v in 0..L_CAPACITY {
@@ -1703,23 +1378,23 @@ mod tests {
         }
 
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_01_p1() {
+    fn test_bptree_cursor_remove_01_p1() {
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         let _ = wcurs.remove(&0);
         // println!("{:?}", wcurs);
 
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_02() {
+    fn test_bptree_cursor_remove_02() {
         // Given the tree:
         //
         //      root
@@ -1730,21 +1405,24 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let znode = create_leaf_node(0);
-        let root = Node::new_branch(0, znode, lnode);
+        let mut root = Node::new_branch(0, znode, lnode);
         // Prevent the tree shrinking.
-        unsafe { (*root).add_node(rnode) };
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        Arc::get_mut(&mut root)
+            .unwrap()
+            .as_mut_branch()
+            .add_node(rnode);
+        let mut wcurs = CursorWrite::new(root, 3);
         // println!("{:?}", wcurs);
         assert!(wcurs.verify());
 
         wcurs.remove(&20);
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_03() {
+    fn test_bptree_cursor_remove_03() {
         // Given the tree:
         //
         //      root
@@ -1755,20 +1433,23 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let znode = create_leaf_node(30);
-        let root = Node::new_branch(0, lnode, rnode);
+        let mut root = Node::new_branch(0, lnode, rnode);
         // Prevent the tree shrinking.
-        unsafe { (*root).add_node(znode) };
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        Arc::get_mut(&mut root)
+            .unwrap()
+            .as_mut_branch()
+            .add_node(znode);
+        let mut wcurs = CursorWrite::new(root, 3);
         assert!(wcurs.verify());
 
         wcurs.remove(&10);
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_04p0() {
+    fn test_bptree_cursor_remove_04p0() {
         // Given the tree:
         //
         //      root
@@ -1779,10 +1460,13 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let znode = create_leaf_node(0);
-        let root = Node::new_branch(0, znode, lnode);
+        let mut root = Node::new_branch(0, znode, lnode);
         // Prevent the tree shrinking.
-        unsafe { (*root).add_node(rnode) };
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        Arc::get_mut(&mut root)
+            .unwrap()
+            .as_mut_branch()
+            .add_node(rnode);
+        let mut wcurs = CursorWrite::new(root, 3);
         assert!(wcurs.verify());
 
         // Setup sibling leaf to already be cloned.
@@ -1792,11 +1476,11 @@ mod tests {
         wcurs.remove(&20);
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_04p1() {
+    fn test_bptree_cursor_remove_04p1() {
         // Given the tree:
         //
         //      root
@@ -1807,10 +1491,13 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let znode = create_leaf_node(0);
-        let root = Node::new_branch(0, znode, lnode);
+        let mut root = Node::new_branch(0, znode, lnode);
         // Prevent the tree shrinking.
-        unsafe { (*root).add_node(rnode) };
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        Arc::get_mut(&mut root)
+            .unwrap()
+            .as_mut_branch()
+            .add_node(rnode);
+        let mut wcurs = CursorWrite::new(root, 3);
         assert!(wcurs.verify());
 
         // Setup leaf to already be cloned.
@@ -1820,11 +1507,11 @@ mod tests {
         wcurs.remove(&20);
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_05() {
+    fn test_bptree_cursor_remove_05() {
         // Given the tree:
         //
         //      root
@@ -1835,10 +1522,13 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let znode = create_leaf_node(30);
-        let root = Node::new_branch(0, lnode, rnode);
+        let mut root = Node::new_branch(0, lnode, rnode);
         // Prevent the tree shrinking.
-        unsafe { (*root).add_node(znode) };
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        Arc::get_mut(&mut root)
+            .unwrap()
+            .as_mut_branch()
+            .add_node(znode);
+        let mut wcurs = CursorWrite::new(root, 3);
         assert!(wcurs.verify());
 
         // Setup leaf to already be cloned.
@@ -1847,11 +1537,11 @@ mod tests {
         wcurs.remove(&10);
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_06() {
+    fn test_bptree_cursor_remove_06() {
         // Given the tree:
         //
         //          root
@@ -1873,21 +1563,19 @@ mod tests {
         let r2 = create_leaf_node(30);
         let lbranch = Node::new_branch(0, l1, l2);
         let rbranch = Node::new_branch(0, r1, r2);
-        let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
-        let mut wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
-
+        let root = Node::new_branch(0, lbranch, rbranch);
+        let mut wcurs = CursorWrite::new(root, 4);
         assert!(wcurs.verify());
 
         wcurs.remove(&30);
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_07() {
+    fn test_bptree_cursor_remove_07() {
         // Given the tree:
         //
         //          root
@@ -1909,20 +1597,19 @@ mod tests {
         let r2 = create_leaf_node(30);
         let lbranch = Node::new_branch(0, l1, l2);
         let rbranch = Node::new_branch(0, r1, r2);
-        let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
-        let mut wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
+        let root = Node::new_branch(0, lbranch, rbranch);
+        let mut wcurs = CursorWrite::new(root, 4);
         assert!(wcurs.verify());
 
         wcurs.remove(&10);
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_08() {
+    fn test_bptree_cursor_remove_08() {
         // Given the tree:
         //
         //          root
@@ -1944,20 +1631,19 @@ mod tests {
         let r2 = create_leaf_node(90);
         let rbranch = Node::new_branch(0, r1, r2);
 
-        let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
-        let mut wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
+        let root = Node::new_branch(0, lbranch, rbranch);
+        let mut wcurs = CursorWrite::new(root, L_CAPACITY + 2);
         assert!(wcurs.verify());
 
         wcurs.remove(&80);
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_09() {
+    fn test_bptree_cursor_remove_09() {
         // Given the tree:
         //
         //          root
@@ -1979,20 +1665,19 @@ mod tests {
 
         let rbranch = create_branch_node_full(100);
 
-        let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
-        let mut wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
+        let root = Node::new_branch(0, lbranch, rbranch);
+        let mut wcurs = CursorWrite::new(root, L_CAPACITY + 2);
         assert!(wcurs.verify());
 
         wcurs.remove(&10);
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_10() {
+    fn test_bptree_cursor_remove_10() {
         // Given the tree:
         //
         //          root
@@ -2014,10 +1699,8 @@ mod tests {
         let r2 = create_leaf_node(30);
         let lbranch = Node::new_branch(0, l1, l2);
         let rbranch = Node::new_branch(0, r1, r2);
-        let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
-        let mut wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
-
+        let root = Node::new_branch(0, lbranch, rbranch);
+        let mut wcurs = CursorWrite::new(root, 4);
         assert!(wcurs.verify());
 
         wcurs.path_clone(&0);
@@ -2027,11 +1710,11 @@ mod tests {
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_11() {
+    fn test_bptree_cursor_remove_11() {
         // Given the tree:
         //
         //          root
@@ -2053,9 +1736,8 @@ mod tests {
         let r2 = create_leaf_node(30);
         let lbranch = Node::new_branch(0, l1, l2);
         let rbranch = Node::new_branch(0, r1, r2);
-        let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
-        let mut wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
+        let root = Node::new_branch(0, lbranch, rbranch);
+        let mut wcurs = CursorWrite::new(root, 4);
         assert!(wcurs.verify());
 
         wcurs.path_clone(&20);
@@ -2065,11 +1747,11 @@ mod tests {
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_12() {
+    fn test_bptree_cursor_remove_12() {
         // Given the tree:
         //
         //          root
@@ -2091,10 +1773,9 @@ mod tests {
         let r2 = create_leaf_node(90);
         let rbranch = Node::new_branch(0, r1, r2);
 
-        let root =
-            Node::new_branch(0, lbranch as *mut _, rbranch as *mut _) as *mut Node<usize, usize>;
-        // let count = BV_CAPACITY + 2;
-        let mut wcurs = CursorWrite::new_test(1, root);
+        let root = Node::new_branch(0, lbranch, rbranch);
+        let count = BV_CAPACITY + 2;
+        let mut wcurs = CursorWrite::new(root, count);
         assert!(wcurs.verify());
 
         wcurs.path_clone(&0);
@@ -2105,11 +1786,11 @@ mod tests {
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_13() {
+    fn test_bptree_cursor_remove_13() {
         // Given the tree:
         //
         //          root
@@ -2131,9 +1812,8 @@ mod tests {
 
         let rbranch = create_branch_node_full(100);
 
-        let root =
-            Node::new_branch(0, lbranch as *mut _, rbranch as *mut _) as *mut Node<usize, usize>;
-        let mut wcurs = CursorWrite::new_test(1, root);
+        let root = Node::new_branch(0, lbranch, rbranch);
+        let mut wcurs = CursorWrite::new(root, BV_CAPACITY + 2);
         assert!(wcurs.verify());
 
         for i in 0..BV_CAPACITY {
@@ -2146,86 +1826,82 @@ mod tests {
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_14() {
+    fn test_bptree_cursor_remove_14() {
         // Test leaf borrow left
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node(20);
-        let root = Node::new_branch(0, lnode, rnode) as *mut Node<usize, usize>;
-        let mut wcurs = CursorWrite::new_test(1, root);
+        let root = Node::new_branch(0, lnode, rnode);
+        let mut wcurs = CursorWrite::new(root, L_CAPACITY + 1);
         assert!(wcurs.verify());
 
         wcurs.remove(&20);
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_15() {
+    fn test_bptree_cursor_remove_15() {
         // Test leaf borrow right.
-        let lnode = create_leaf_node(10) as *mut Node<usize, usize>;
-        let rnode = create_leaf_node_full(20) as *mut Node<usize, usize>;
-        let root = Node::new_branch(0, lnode, rnode) as *mut Node<usize, usize>;
-        let mut wcurs = CursorWrite::new_test(1, root);
+        let lnode = create_leaf_node(10);
+        let rnode = create_leaf_node_full(20);
+        let root = Node::new_branch(0, lnode, rnode);
+        let mut wcurs = CursorWrite::new(root, L_CAPACITY + 1);
         assert!(wcurs.verify());
 
         wcurs.remove(&10);
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
-    fn tree_create_rand() -> SuperBlock<usize, usize> {
+    fn tree_create_rand() -> ABNode<usize, usize> {
         let mut rng = rand::thread_rng();
         let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
-        let mut sblock = SuperBlock::default();
-        let mut wcurs = CursorWrite::new(&sblock);
+        let node = create_leaf_node(0);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         for v in ins.into_iter() {
             let r = wcurs.insert(v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
         }
-        let new_sblock = wcurs.finalise();
-        new_sblock.commit_prep(&sblock);
-        new_sblock
+        let (r, _c) = wcurs.finalise();
+        r
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_stress_1() {
+    fn test_bptree_cursor_remove_stress_1() {
         // Insert ascending - we want to ensure the tree is a few levels deep
         // so we do this to a reasonable number.
-        let sblock = tree_create_rand();
-        let mut wcurs = CursorWrite::new(&sblock);
+        let node = tree_create_rand();
+        let mut wcurs = CursorWrite::new(node, L_CAPACITY << 4);
 
         for v in 1..(L_CAPACITY << 4) {
-            // println!("-- ITER v {}", v);
+            // println!("ITER v {}", v);
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
         }
         // println!("{:?}", wcurs);
         // On shutdown, check we dropped all as needed.
-        let new_sblock = wcurs.finalise();
-        new_sblock.commit_prep(&sblock);
-        std::mem::drop(sblock);
-        std::mem::drop(new_sblock);
-        assert_released();
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_stress_2() {
+    fn test_bptree_cursor_remove_stress_2() {
         // Insert descending
-        let sblock = tree_create_rand();
-        let mut wcurs = CursorWrite::new(&sblock);
+        let node = tree_create_rand();
+        let mut wcurs = CursorWrite::new(node, L_CAPACITY << 4);
 
         for v in (1..(L_CAPACITY << 4)).rev() {
             // println!("ITER v {}", v);
@@ -2236,22 +1912,19 @@ mod tests {
         // println!("{:?}", wcurs);
         // println!("DENSITY -> {:?}", wcurs.get_tree_density());
         // On shutdown, check we dropped all as needed.
-        let new_sblock = wcurs.finalise();
-        new_sblock.commit_prep(&sblock);
-        std::mem::drop(sblock);
-        std::mem::drop(new_sblock);
-        assert_released();
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_stress_3() {
+    fn test_bptree_cursor_remove_stress_3() {
         // Insert random
         let mut rng = rand::thread_rng();
         let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
-        let sblock = tree_create_rand();
-        let mut wcurs = CursorWrite::new(&sblock);
+        let node = tree_create_rand();
+        let mut wcurs = CursorWrite::new(node, L_CAPACITY << 4);
 
         for v in ins.into_iter() {
             let r = wcurs.remove(&v);
@@ -2261,111 +1934,106 @@ mod tests {
         // println!("{:?}", wcurs);
         // println!("DENSITY -> {:?}", wcurs.get_tree_density());
         // On shutdown, check we dropped all as needed.
-        let new_sblock = wcurs.finalise();
-        new_sblock.commit_prep(&sblock);
-        std::mem::drop(sblock);
-        std::mem::drop(new_sblock);
-        assert_released();
+        mem::drop(wcurs);
+        check_drop_count();
     }
 
     // Add transaction-ised versions.
     #[test]
-    fn test_bptree2_cursor_remove_stress_4() {
+    fn test_bptree_cursor_remove_stress_4() {
         // Insert ascending - we want to ensure the tree is a few levels deep
         // so we do this to a reasonable number.
-        let mut sblock = tree_create_rand();
+        let mut node = tree_create_rand();
+        let mut count = L_CAPACITY << 4;
 
         for v in 1..(L_CAPACITY << 4) {
-            let mut wcurs = CursorWrite::new(&sblock);
+            let mut wcurs = CursorWrite::new(node, count);
             // println!("ITER v {}", v);
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
-            let new_sblock = wcurs.finalise();
-            new_sblock.commit_prep(&sblock);
-            sblock = new_sblock;
+            let (n, c) = wcurs.finalise();
+            node = n;
+            count = c;
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
-        std::mem::drop(sblock);
-        assert_released();
+        mem::drop(node);
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_stress_5() {
+    fn test_bptree_cursor_remove_stress_5() {
         // Insert descending
-        let mut sblock = tree_create_rand();
+        let mut node = tree_create_rand();
+        let mut count = L_CAPACITY << 4;
 
         for v in (1..(L_CAPACITY << 4)).rev() {
-            let mut wcurs = CursorWrite::new(&sblock);
+            let mut wcurs = CursorWrite::new(node, count);
             // println!("ITER v {}", v);
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
-            let new_sblock = wcurs.finalise();
-            new_sblock.commit_prep(&sblock);
-            sblock = new_sblock;
+            let (n, c) = wcurs.finalise();
+            node = n;
+            count = c;
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
-        // mem::drop(node);
-        std::mem::drop(sblock);
-        assert_released();
+        mem::drop(node);
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_remove_stress_6() {
+    fn test_bptree_cursor_remove_stress_6() {
         // Insert random
         let mut rng = rand::thread_rng();
         let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
-        let mut sblock = tree_create_rand();
+        let mut node = tree_create_rand();
+        let mut count = L_CAPACITY << 4;
 
         for v in ins.into_iter() {
-            let mut wcurs = CursorWrite::new(&sblock);
+            let mut wcurs = CursorWrite::new(node, count);
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
-            let new_sblock = wcurs.finalise();
-            new_sblock.commit_prep(&sblock);
-            sblock = new_sblock;
+            let (n, c) = wcurs.finalise();
+            node = n;
+            count = c;
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
-        // mem::drop(node);
-        std::mem::drop(sblock);
-        assert_released();
+        mem::drop(node);
+        check_drop_count();
     }
 
-    /*
     #[test]
     #[cfg_attr(miri, ignore)]
-    fn test_bptree2_cursor_remove_stress_7() {
+    fn test_bptree_cursor_remove_stress_7() {
         // Insert random
         let mut rng = rand::thread_rng();
         let mut ins: Vec<usize> = (1..10240).collect();
 
-        let node: *mut Leaf<usize, usize> = Node::new_leaf(0);
-        let mut wcurs = CursorWrite::new_test(1, node as *mut _);
+        let mut wcurs = CursorWrite::new(Node::new_ableaf(0), 0);
         wcurs.extend(ins.iter().map(|v| (*v, *v)));
 
         ins.shuffle(&mut rng);
 
-        let compacts = 0;
+        let mut compacts = 0;
 
         for v in ins.into_iter() {
             let r = wcurs.remove(&v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
-            // let (l, m) = wcurs.tree_density();
-            // if l > 0 && (m / l) > 1 {
-            //     compacts += 1;
-            // }
+            let (l, m) = wcurs.tree_density();
+            if l > 0 && (m / l) > 1 {
+                compacts += 1;
+            }
         }
         println!("compacts {:?}", compacts);
     }
-    */
 
     // This is for setting up trees that are specialised for the split off tests.
     // This is because we can exercise a LOT of complex edge cases by bracketing
@@ -2383,15 +2051,15 @@ mod tests {
     //         t3 = i + j + 2
     //         t4 = i + j + 3
     //
-    fn create_split_off_leaf(base: usize) -> *mut Node<usize, usize> {
-        let l = Node::new_leaf(0);
-        let lref = leaf_ref!(l, usize, usize);
-        lref.insert_or_update(base + 1, base + 1);
-        lref.insert_or_update(base + 2, base + 2);
-        l as *mut _
+    fn create_split_off_leaf(base: usize) -> ABNode<usize, usize> {
+        let mut l = Arc::new(Node::new_leaf(0));
+        let lref = Arc::get_mut(&mut l).unwrap().as_mut_leaf();
+        lref.insert_or_update(0, base + 1, base + 1);
+        lref.insert_or_update(0, base + 2, base + 2);
+        l
     }
 
-    fn create_split_off_branch(base: usize) -> *mut Node<usize, usize> {
+    fn create_split_off_branch(base: usize) -> ABNode<usize, usize> {
         // This is a helper for create_split_off_tree to make the sub-branches based
         // on a base.
         let l1 = create_split_off_leaf(base);
@@ -2399,33 +2067,33 @@ mod tests {
         let l3 = create_split_off_leaf(base + 20);
         let l4 = create_split_off_leaf(base + 30);
 
-        let branch = Node::new_branch(0, l1, l2);
-        let nref = branch_ref!(branch, usize, usize);
+        let mut branch = Node::new_branch(0, l1, l2);
+        let nref = Arc::get_mut(&mut branch).unwrap().as_mut_branch();
         nref.add_node(l3);
         nref.add_node(l4);
 
-        branch as *mut _
+        branch
     }
 
-    fn create_split_off_tree() -> *mut Node<usize, usize> {
+    fn create_split_off_tree() -> ABNode<usize, usize> {
         let b1 = create_split_off_branch(0);
         let b2 = create_split_off_branch(100);
         let b3 = create_split_off_branch(200);
         let b4 = create_split_off_branch(300);
-        let root = Node::new_branch(0, b1, b2);
-        let nref = branch_ref!(root, usize, usize);
+        let mut root = Node::new_branch(0, b1, b2);
+        let nref = Arc::get_mut(&mut root).unwrap().as_mut_branch();
         nref.add_node(b3);
         nref.add_node(b4);
 
-        root as *mut _
+        root
     }
 
     #[test]
-    fn test_bptree2_cursor_split_off_lt_01() {
+    fn test_bptree_cursor_split_off_lt_01() {
         // Make a tree witth just a leaf
         // Do a split_off_lt.
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         wcurs.split_off_lt(&5);
 
@@ -2433,15 +2101,15 @@ mod tests {
         // leaf.
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_split_off_lt_02() {
+    fn test_bptree_cursor_split_off_lt_02() {
         // Make a tree witth just a leaf
         // Do a split_off_lt.
         let node = create_leaf_node_full(10);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         wcurs.split_off_lt(&11);
 
@@ -2449,15 +2117,15 @@ mod tests {
         // leaf.
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_split_off_lt_03() {
+    fn test_bptree_cursor_split_off_lt_03() {
         // Make a tree witth just a leaf
         // Do a split_off_lt.
         let node = create_leaf_node_full(10);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let mut wcurs = CursorWrite::new(node, 1);
 
         wcurs.path_clone(&11);
         wcurs.split_off_lt(&11);
@@ -2466,14 +2134,14 @@ mod tests {
         // leaf.
         assert!(wcurs.verify());
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     fn run_split_off_test_clone(v: usize, _exp: usize) {
         // println!("RUNNING -> {:?}", v);
         let tree = create_split_off_tree();
 
-        let mut wcurs = CursorWrite::new_test(1, tree);
+        let mut wcurs = CursorWrite::new(tree, 32);
         // 0 is min, and not present, will cause no change.
         // clone everything
         let outer: [usize; 4] = [0, 100, 200, 300];
@@ -2493,15 +2161,15 @@ mod tests {
 
         // println!("{:?}", wcurs);
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     fn run_split_off_test(v: usize, _exp: usize) {
-        // println!("RUNNING -> {:?}", v);
+        println!("RUNNING -> {:?}", v);
         let tree = create_split_off_tree();
-        // println!("START -> {:?}", tree);
+        println!("START -> {:?}", tree);
 
-        let mut wcurs = CursorWrite::new_test(1, tree);
+        let mut wcurs = CursorWrite::new(tree, 32);
         // 0 is min, and not present, will cause no change.
         wcurs.split_off_lt(&v);
         assert!(wcurs.verify());
@@ -2512,13 +2180,15 @@ mod tests {
 
         // println!("{:?}", wcurs);
         mem::drop(wcurs);
-        assert_released();
+        check_drop_count();
     }
 
     #[test]
-    fn test_bptree2_cursor_split_off_lt_clone_stress() {
-        // Can't proceed as the "fake" tree we make is invalid.
-        debug_assert!(L_CAPACITY >= 4);
+    fn test_bptree_cursor_split_off_lt_clone_stress() {
+        if CAPACITY < 10 {
+            // Can't proceed as the "fake" tree we make is invalid.
+            return;
+        }
         let outer: [usize; 4] = [0, 100, 200, 300];
         let inner: [usize; 4] = [0, 10, 20, 30];
         for i in outer.iter() {
@@ -2532,8 +2202,11 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree2_cursor_split_off_lt_stress() {
-        debug_assert!(L_CAPACITY >= 4);
+    fn test_bptree_cursor_split_off_lt_stress() {
+        if CAPACITY < 10 {
+            // Can't proceed as the "fake" tree we make is invalid.
+            return;
+        }
         let outer: [usize; 4] = [0, 100, 200, 300];
         let inner: [usize; 4] = [0, 10, 20, 30];
         for i in outer.iter() {
@@ -2548,13 +2221,12 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)]
-    fn test_bptree2_cursor_split_off_lt_random_stress() {
+    fn test_bptree_cursor_split_off_lt_random_stress() {
         let data: Vec<isize> = (0..1024).collect();
 
         for v in data.iter() {
-            let node: *mut Leaf<isize, isize> = Node::new_leaf(0) as *mut _;
-            let mut wcurs = CursorWrite::new_test(1, node as *mut _);
-            wcurs.extend(data.iter().map(|v| (*v, *v)));
+            let mut wcurs = CursorWrite::new(Node::new_ableaf(0), 0);
+            wcurs.extend(data.iter().map(|v| (v, v)));
 
             if v > &0 {
                 assert!(wcurs.contains_key(&(v - 1)));
@@ -2567,7 +2239,7 @@ mod tests {
             }
             assert!(wcurs.verify());
             let contents: Vec<_> = wcurs.k_iter().collect();
-            assert!(contents[0] == v);
+            assert!(contents[0] == &v);
             assert!(contents.len() as isize == (1024 - v));
         }
     }

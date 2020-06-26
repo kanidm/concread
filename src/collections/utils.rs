@@ -25,7 +25,7 @@ pub(crate) unsafe fn slice_remove<T>(slice: &mut [T], idx: usize) -> T {
 }
 
 pub(crate) unsafe fn slice_merge<T>(dst: &mut [T], start_idx: usize, src: &mut [T], count: usize) {
-    let dst_ptr = dst.as_mut_ptr().offset(start_idx as isize);
+    let dst_ptr = dst.as_mut_ptr().add(start_idx);
     let src_ptr = src.as_ptr();
 
     ptr::copy_nonoverlapping(src_ptr, dst_ptr, count);
@@ -38,8 +38,8 @@ pub(crate) unsafe fn slice_move<T>(
     src_start_idx: usize,
     count: usize,
 ) {
-    let dst_ptr = dst.as_mut_ptr().offset(dst_start_idx as isize);
-    let src_ptr = src.as_ptr().offset(src_start_idx as isize);
+    let dst_ptr = dst.as_mut_ptr().add(dst_start_idx);
+    let src_ptr = src.as_ptr().add(src_start_idx);
 
     ptr::copy_nonoverlapping(src_ptr, dst_ptr, count);
 }
@@ -50,10 +50,15 @@ pub(crate) unsafe fn slice_slide_and_drop<T>(
     count: usize,
 ) {
     // drop everything up to and including idx
-    for didx in 0..(idx + 1) {
+    for item in slice.iter_mut().take(idx + 1) {
         // These are dropped here ...?
-        ptr::drop_in_place(slice[didx].as_mut_ptr());
+        ptr::drop_in_place(item.as_mut_ptr());
     }
+    // now move everything down.
+    ptr::copy(slice.as_ptr().add(idx + 1), slice.as_mut_ptr(), count);
+}
+
+pub(crate) unsafe fn slice_slide<T>(slice: &mut [T], idx: usize, count: usize) {
     // now move everything down.
     ptr::copy(slice.as_ptr().add(idx + 1), slice.as_mut_ptr(), count);
 }

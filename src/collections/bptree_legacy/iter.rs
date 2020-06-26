@@ -1,10 +1,10 @@
 //! Iterators for the map.
 
 // Iterators for the bptree
-use super::node::{Branch, Leaf, Meta, Node};
+use super::leaf::Leaf;
+use super::node::ABNode;
 use std::collections::VecDeque;
 use std::fmt::Debug;
-use std::marker::PhantomData;
 
 pub(crate) struct LeafIter<'a, K, V>
 where
@@ -13,15 +13,13 @@ where
 {
     length: Option<usize>,
     // idx: usize,
-    stack: VecDeque<(*mut Node<K, V>, usize)>,
-    phantom_k: PhantomData<&'a K>,
-    phantom_v: PhantomData<&'a V>,
+    stack: VecDeque<(&'a ABNode<K, V>, usize)>,
 }
 
 impl<'a, K: Clone + Ord + Debug, V: Clone> LeafIter<'a, K, V> {
-    pub(crate) fn new(root: *mut Node<K, V>, size_hint: bool) -> Self {
+    pub(crate) fn new(root: &'a ABNode<K, V>, size_hint: bool) -> Self {
         let length = if size_hint {
-            Some(unsafe { (*root).leaf_count() })
+            Some(root.leaf_count())
         } else {
             None
         };
@@ -32,10 +30,10 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> LeafIter<'a, K, V> {
         let mut work_node = root;
         loop {
             stack.push_back((work_node, 0));
-            if self_meta!(work_node).is_leaf() {
+            if work_node.is_leaf() {
                 break;
             } else {
-                work_node = branch_ref!(work_node, K, V).get_idx_unchecked(0);
+                work_node = work_node.as_branch().get_idx(0);
             }
         }
 
@@ -43,8 +41,6 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> LeafIter<'a, K, V> {
             length,
             // idx: 0,
             stack,
-            phantom_k: PhantomData,
-            phantom_v: PhantomData,
         }
     }
 
@@ -54,15 +50,13 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> LeafIter<'a, K, V> {
             length: None,
             // idx: 0,
             stack: VecDeque::new(),
-            phantom_k: PhantomData,
-            phantom_v: PhantomData,
         }
     }
 
     pub(crate) fn stack_position(&mut self, idx: usize) {
         // Get the current branch, it must the the back.
         if let Some((bref, bpidx)) = self.stack.back() {
-            let wbranch = branch_ref!(*bref, K, V);
+            let wbranch = bref.as_branch();
             if let Some(node) = wbranch.get_idx_checked(idx) {
                 // Insert as much as possible now. First insert
                 // our current idx, then all the 0, idxs.
@@ -70,11 +64,11 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> LeafIter<'a, K, V> {
                 let mut work_idx = idx;
                 loop {
                     self.stack.push_back((work_node, work_idx));
-                    if self_meta!(work_node).is_leaf() {
+                    if work_node.is_leaf() {
                         break;
                     } else {
                         work_idx = 0;
-                        work_node = branch_ref!(work_node, K, V).get_idx_unchecked(work_idx);
+                        work_node = work_node.as_branch().get_idx(work_idx);
                     }
                 }
             } else {
@@ -111,7 +105,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for LeafIter<'a, K, V> {
 
         // Return the leaf as we found at the start, regardless of the
         // stack operations.
-        Some(leaf_ref!(leafref, K, V))
+        Some(leafref.as_leaf())
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -136,7 +130,7 @@ where
 }
 
 impl<'a, K: Clone + Ord + Debug, V: Clone> Iter<'a, K, V> {
-    pub(crate) fn new(root: *mut Node<K, V>, length: usize) -> Self {
+    pub(crate) fn new(root: &'a ABNode<K, V>, length: usize) -> Self {
         let mut liter = LeafIter::new(root, false);
         let leaf = liter.next();
         // We probably need to position the VecDeque here.
@@ -184,7 +178,7 @@ where
 }
 
 impl<'a, K: Clone + Ord + Debug, V: Clone> KeyIter<'a, K, V> {
-    pub(crate) fn new(root: *mut Node<K, V>, length: usize) -> Self {
+    pub(crate) fn new(root: &'a ABNode<K, V>, length: usize) -> Self {
         KeyIter {
             iter: Iter::new(root, length),
         }
@@ -214,7 +208,7 @@ where
 }
 
 impl<'a, K: Clone + Ord + Debug, V: Clone> ValueIter<'a, K, V> {
-    pub(crate) fn new(root: *mut Node<K, V>, length: usize) -> Self {
+    pub(crate) fn new(root: &'a ABNode<K, V>, length: usize) -> Self {
         ValueIter {
             iter: Iter::new(root, length),
         }
@@ -236,32 +230,34 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for ValueIter<'a, K, V> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::node::{Branch, Leaf, Node, L_CAPACITY};
+    use super::super::constants::L_CAPACITY;
+    use super::super::node::{ABNode, Node};
     use super::{Iter, LeafIter};
+    use std::sync::Arc;
 
-    fn create_leaf_node_full(vbase: usize) -> *mut Node<usize, usize> {
+    fn create_leaf_node_full(vbase: usize) -> ABNode<usize, usize> {
         assert!(vbase % 10 == 0);
-        let node = Node::new_leaf(0);
+        let mut node = Arc::new(Node::new_leaf(0));
         {
-            let nmut = leaf_ref!(node, usize, usize);
+            let nmut = Arc::get_mut(&mut node).unwrap().as_mut_leaf();
             for idx in 0..L_CAPACITY {
                 let v = vbase + idx;
-                nmut.insert_or_update(v, v);
+                nmut.insert_or_update(0, v, v);
             }
         }
-        node as *mut _
+        node
     }
 
     #[test]
-    fn test_bptree2_iter_leafiter_1() {
+    fn test_bptree_iter_leafiter_1() {
         let test_iter: LeafIter<usize, usize> = LeafIter::new_base();
         assert!(test_iter.count() == 0);
     }
 
     #[test]
-    fn test_bptree2_iter_leafiter_2() {
+    fn test_bptree_iter_leafiter_2() {
         let lnode = create_leaf_node_full(10);
-        let mut test_iter = LeafIter::new(lnode, true);
+        let mut test_iter = LeafIter::new(&lnode, true);
 
         assert!(test_iter.size_hint() == (1, Some(1)));
 
@@ -271,11 +267,11 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree2_iter_leafiter_3() {
+    fn test_bptree_iter_leafiter_3() {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, true);
+        let mut test_iter = LeafIter::new(&root, true);
 
         assert!(test_iter.size_hint() == (2, Some(2)));
         let lref = test_iter.next().unwrap();
@@ -286,16 +282,15 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree2_iter_leafiter_4() {
+    fn test_bptree_iter_leafiter_4() {
         let l1node = create_leaf_node_full(10);
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
         let b1node = Node::new_branch(0, l1node, r1node);
         let b2node = Node::new_branch(0, l2node, r2node);
-        let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
-        let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, true);
+        let root = Node::new_branch(0, b1node, b2node);
+        let mut test_iter = LeafIter::new(&root, true);
 
         assert!(test_iter.size_hint() == (4, Some(4)));
         let l1ref = test_iter.next().unwrap();
@@ -310,9 +305,9 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree2_iter_leafiter_5() {
+    fn test_bptree_iter_leafiter_5() {
         let lnode = create_leaf_node_full(10);
-        let mut test_iter = LeafIter::new(lnode, true);
+        let mut test_iter = LeafIter::new(&lnode, true);
 
         assert!(test_iter.size_hint() == (1, Some(1)));
 
@@ -322,12 +317,12 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree2_iter_iter_1() {
+    fn test_bptree_iter_iter_1() {
         // Make a tree
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let test_iter: Iter<usize, usize> = Iter::new(root as *mut _, L_CAPACITY * 2);
+        let test_iter = Iter::new(&root, L_CAPACITY * 2);
 
         assert!(test_iter.size_hint() == (L_CAPACITY * 2, Some(L_CAPACITY * 2)));
         assert!(test_iter.count() == L_CAPACITY * 2);
@@ -335,18 +330,17 @@ mod tests {
     }
 
     #[test]
-    fn test_bptree2_iter_iter_2() {
+    fn test_bptree_iter_iter_2() {
         let l1node = create_leaf_node_full(10);
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
         let b1node = Node::new_branch(0, l1node, r1node);
         let b2node = Node::new_branch(0, l2node, r2node);
-        let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
-        let test_iter: Iter<usize, usize> = Iter::new(root as *mut _, L_CAPACITY * 4);
+        let root = Node::new_branch(0, b1node, b2node);
+        let test_iter = Iter::new(&root, L_CAPACITY * 4);
 
-        // println!("{:?}", test_iter.size_hint());
+        println!("{:?}", test_iter.size_hint());
 
         assert!(test_iter.size_hint() == (L_CAPACITY * 4, Some(L_CAPACITY * 4)));
         assert!(test_iter.count() == L_CAPACITY * 4);

@@ -51,6 +51,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn iter_mut(&self) -> LLIterMut<K> {
         LLIterMut {
             next: unsafe { (*self.head).next },
@@ -100,7 +101,7 @@ where
         if n == unsafe { (*self.tail).prev } {
             // Done, no-op
         } else {
-            let _ = self.extract(n);
+            self.extract(n);
             self.append_n(n);
         }
     }
@@ -291,7 +292,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::cache::arc::ll::{LLNode, LL};
+    use crate::cache::arc::ll::LL;
 
     #[test]
     fn test_cache_arc_ll_basic() {

@@ -331,7 +331,7 @@ mod tests {
         let data: i64 = 0;
         let cc = EbrCell::new(data);
 
-        scope(|scope| {
+        assert!(scope(|scope| {
             let cc_ref = &cc;
 
             let _readers: Vec<_> = (0..7)
@@ -366,7 +366,8 @@ mod tests {
                     })
                 })
                 .collect();
-        });
+        })
+        .is_ok());
 
         let end = time::Instant::now();
         print!("Ebr MT create :{:?} ", end - start);
@@ -407,7 +408,7 @@ mod tests {
         let data = TestGcWrapper { data: 0 };
         let cc = EbrCell::new(data);
 
-        scope(|scope| {
+        assert!(scope(|scope| {
             let cc_ref = &cc;
             let _writers: Vec<_> = (0..3)
                 .map(|_| {
@@ -416,7 +417,8 @@ mod tests {
                     })
                 })
                 .collect();
-        });
+        })
+        .is_ok());
 
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
     }

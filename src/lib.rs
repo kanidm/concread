@@ -27,13 +27,13 @@
 #![warn(unused_extern_crates)]
 #![warn(missing_docs)]
 
+extern crate ahash;
 extern crate crossbeam;
 extern crate crossbeam_epoch;
+extern crate libc;
 extern crate parking_lot;
-extern crate smallvec;
-
-#[cfg(test)]
 extern crate rand;
+extern crate smallvec;
 
 pub mod cache;
 pub mod collections;

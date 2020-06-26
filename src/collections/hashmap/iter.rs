@@ -1,21 +1,24 @@
+//! Iterators for the map.
+
 use crate::collections::bptree::iter::Iter as BIter;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use super::map::vinner;
+use super::map::Vinner;
 
+/// Iterator over references to Key Value pairs stored in the map.
 pub struct Iter<'a, K, V>
 where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
-    iter: BIter<'a, u64, vinner<K, V>>,
-    cur_va: Option<&'a vinner<K, V>>,
+    iter: BIter<'a, u64, Vinner<K, V>>,
+    cur_va: Option<&'a Vinner<K, V>>,
     next_idx: usize,
 }
 
 impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> Iter<'a, K, V> {
-    pub(crate) fn new(mut biter: BIter<'a, u64, vinner<K, V>>) -> Self {
+    pub(crate) fn new(mut biter: BIter<'a, u64, Vinner<K, V>>) -> Self {
         let next = biter.next().map(|(_k, v)| v);
         Iter {
             iter: biter,
@@ -51,6 +54,7 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> Iterator for Iter<'a, K, V> {
     }
 }
 
+/// Iterater over references to Keys stored in the map.
 pub struct KeyIter<'a, K, V>
 where
     K: Hash + Eq + Clone + Debug,
@@ -60,7 +64,7 @@ where
 }
 
 impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> KeyIter<'a, K, V> {
-    pub(crate) fn new(biter: BIter<'a, u64, vinner<K, V>>) -> Self {
+    pub(crate) fn new(biter: BIter<'a, u64, Vinner<K, V>>) -> Self {
         KeyIter {
             iter: Iter::new(biter),
         }
@@ -80,6 +84,7 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> Iterator for KeyIter<'a, K, V> 
     }
 }
 
+/// Iterater over references to Values stored in the map.
 pub struct ValueIter<'a, K, V>
 where
     K: Hash + Eq + Clone + Debug,
@@ -89,7 +94,7 @@ where
 }
 
 impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> ValueIter<'a, K, V> {
-    pub(crate) fn new(biter: BIter<'a, u64, vinner<K, V>>) -> Self {
+    pub(crate) fn new(biter: BIter<'a, u64, Vinner<K, V>>) -> Self {
         ValueIter {
             iter: Iter::new(biter),
         }

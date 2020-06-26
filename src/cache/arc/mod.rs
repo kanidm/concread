@@ -13,7 +13,8 @@
 mod ll;
 
 use self::ll::{LLNode, LL};
-use crate::collections::bptree::*;
+// use crate::collections::bptree::*;
+use crate::collections::hashmap::*;
 use crate::cowcell::{CowCell, CowCellReadTxn};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use parking_lot::{Mutex, RwLock};
@@ -25,24 +26,37 @@ use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem;
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::time::Instant;
 
-const READ_THREAD_MIN: usize = 8;
+// const READ_THREAD_MIN: usize = 8;
 const READ_THREAD_RATIO: usize = 16;
 
 /// Statistics related to the Arc
 #[derive(Clone, Debug, PartialEq)]
 pub struct CacheStats {
+    /// The number of hits during all read operations.
     pub reader_hits: usize,
+    /// The number of inclusions through read operations.
     pub reader_includes: usize,
+    /// The number of hits during all write operations.
     pub write_hits: usize,
+    /// The number of inclusions or changes through write operations.
     pub write_inc_or_mod: usize,
+    /// The maximum number of items in the shared cache.
     pub shared_max: usize,
+    /// The number of items in the frequent set
     pub freq: usize,
+    /// The number of items in the recent set
     pub recent: usize,
+    /// The number of items evicted from the frequent set
     pub freq_evicts: usize,
+    /// The number of items evicted from the recent set
     pub recent_evicts: usize,
+    /// The current cache weight between recent and frequent.
     pub p_weight: usize,
+    /// The number of keys seen through the cache's lifetime.
     pub all_seen_keys: usize,
 }
 
@@ -53,7 +67,7 @@ enum ThreadCacheItem<V> {
 
 enum CacheEvent<K, V> {
     Hit(Instant, K),
-    Include(Instant, K, V, usize),
+    Include(Instant, K, V, u64),
 }
 
 #[derive(Hash, Ord, PartialOrd, Eq, PartialEq, Clone, Debug)]
@@ -62,7 +76,7 @@ where
     K: Hash + Eq + Ord + Clone + Debug,
 {
     k: K,
-    txid: usize,
+    txid: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -115,7 +129,7 @@ where
     ghost_rec: LL<CacheItemInner<K>>,
     haunted: LL<CacheItemInner<K>>,
     rx: Receiver<CacheEvent<K, V>>,
-    min_txid: usize,
+    min_txid: u64,
 }
 
 struct ArcShared<K, V>
@@ -141,7 +155,7 @@ where
 {
     // Use a unified tree, allows simpler movement of items between the
     // cache types.
-    cache: BptreeMap<K, CacheItem<K, V>>,
+    cache: HashMap<K, CacheItem<K, V>>,
     // This is normally only ever taken in "read" mode, so it's effectively
     // an uncontended barrier.
     shared: RwLock<ArcShared<K, V>>,
@@ -175,7 +189,7 @@ where
 {
     caller: &'a Arc<K, V>,
     // ro_txn to cache
-    cache: BptreeMapReadTxn<K, CacheItem<K, V>>,
+    cache: HashMapReadTxn<'a, K, CacheItem<K, V>>,
     tlocal: Option<ReadCache<K, V>>,
     // tx channel to send forward events.
     tx: Sender<CacheEvent<K, V>>,
@@ -193,7 +207,7 @@ where
 {
     caller: &'a Arc<K, V>,
     // wr_txn to cache
-    cache: BptreeMapWriteTxn<'a, K, CacheItem<K, V>>,
+    cache: HashMapWriteTxn<'a, K, CacheItem<K, V>>,
     // Cache of missed items (w_ dirty/clean)
     // On COMMIT we drain this to the main cache
     tlocal: Map<K, ThreadCacheItem<V>>,
@@ -384,14 +398,14 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         ex_rw_miss: usize,
         read_cache: bool,
     ) -> Self {
-        let y = isize::try_from(total).unwrap();
-        let t = isize::try_from(threads).unwrap();
-        let m = isize::try_from(ex_ro_miss).unwrap();
-        let w = isize::try_from(ex_rw_miss).unwrap();
-        let r = isize::try_from(READ_THREAD_RATIO).unwrap();
+        let total = isize::try_from(total).unwrap();
+        let threads = isize::try_from(threads).unwrap();
+        let ro_miss = isize::try_from(ex_ro_miss).unwrap();
+        let wr_miss = isize::try_from(ex_rw_miss).unwrap();
+        let ratio = isize::try_from(READ_THREAD_RATIO).unwrap();
         // I'd like to thank wolfram alpha ... for this magic.
-        let max = -((r * ((m * t) + w - y)) / (r + t));
-        let read_max = if read_cache { max / r } else { 0 };
+        let max = -((ratio * ((ro_miss * threads) + wr_miss - total)) / (ratio + threads));
+        let read_max = if read_cache { max / ratio } else { 0 };
 
         let max = usize::try_from(max).unwrap();
         let read_max = usize::try_from(read_max).unwrap();
@@ -432,7 +446,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
             all_seen_keys: 0,
         });
         Arc {
-            cache: BptreeMap::new(),
+            cache: HashMap::new(),
             shared,
             inner,
             stats,
@@ -475,6 +489,8 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         }
     }
 
+    /// View the statistics for this cache. These values are a snapshot of a point in
+    /// time and may not be accurate at "this exact moment".
     pub fn view_stats(&self) -> CowCellReadTxn<CacheStats> {
         self.stats.read()
     }
@@ -482,7 +498,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
     fn try_write(&self) -> Option<ArcWriteTxn<K, V>> {
         self.cache.try_write().map(|cache| ArcWriteTxn {
             caller: &self,
-            cache: cache,
+            cache,
             tlocal: Map::new(),
             hit: UnsafeCell::new(Vec::new()),
             clear: UnsafeCell::new(false),
@@ -490,10 +506,9 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
     }
 
     fn try_quiesce(&self) {
-        match self.try_write() {
-            Some(wr_txn) => wr_txn.commit(),
-            None => {}
-        }
+        if let Some(wr_txn) = self.try_write() {
+            wr_txn.commit()
+        };
     }
 
     fn calc_p_freq(ghost_rec_len: usize, ghost_freq_len: usize, p: &mut usize) {
@@ -522,63 +537,15 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         }
     }
 
-    fn commit<'a>(
+    fn drain_tlocal_inc<'a>(
         &'a self,
-        mut cache: BptreeMapWriteTxn<'a, K, CacheItem<K, V>>,
+        cache: &mut HashMapWriteTxn<'a, K, CacheItem<K, V>>,
+        inner: &mut ArcInner<K, V>,
+        shared: &ArcShared<K, V>,
+        // stats: &mut CacheStats,
         tlocal: Map<K, ThreadCacheItem<V>>,
-        hit: Vec<K>,
-        clear: bool,
+        commit_txid: u64,
     ) {
-        // What is the time?
-        let commit_ts = Instant::now();
-        let commit_txid = cache.get_txid();
-        // Copy p + init cache sizes for adjustment.
-        let mut inner = self.inner.lock();
-        let shared = self.shared.read();
-        let mut stat_guard = self.stats.write();
-        let stats = stat_guard.get_mut();
-
-        // Did we request to be cleared? If so, we move everything to a ghost set
-        // that was live.
-        //
-        // we also set the min_txid watermark which prevents any inclusion of
-        // any item that existed before this point in time.
-        if clear {
-            // Set the watermark of this txn.
-            inner.min_txid = commit_txid;
-
-            // Indicate that we evicted all to ghost/freq
-            stats.freq_evicts += inner.freq.len();
-            stats.recent_evicts += inner.rec.len();
-
-            // Move everything active into ghost sets.
-            drain_ll_to_ghost!(
-                &mut cache,
-                inner.freq,
-                inner.ghost_freq,
-                inner.ghost_rec,
-                commit_txid
-            );
-            drain_ll_to_ghost!(
-                &mut cache,
-                inner.rec,
-                inner.ghost_freq,
-                inner.ghost_rec,
-                commit_txid
-            );
-        }
-
-        // Why is it okay to drain the rx/tlocal and create the cache in a temporary
-        // oversize? Because these values in the queue/tlocal are already in memory
-        // and we are moving them to the cache, we are not actually using any more
-        // memory (well, not significantly more). By adding everything, then evicting
-        // we also get better and more accurate hit patterns over the cache based on what
-        // was used. This gives us an advantage over other cache types - we can see
-        // patterns based on temporal usage that other caches can't, at the expense that
-        // it may take some moments for that cache pattern to sync to the main thread.
-
-        stats.write_inc_or_mod += tlocal.len();
-
         // drain tlocal into the main cache.
         tlocal.into_iter().for_each(|(k, tcio)| {
             let r = cache.get_mut(&k);
@@ -705,53 +672,56 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                 }
             }
         });
+    }
 
-        // drain rx until empty or time >= time.
+    fn drain_rx<'a>(
+        &'a self,
+        cache: &mut HashMapWriteTxn<'a, K, CacheItem<K, V>>,
+        inner: &mut ArcInner<K, V>,
+        shared: &ArcShared<K, V>,
+        stats: &mut CacheStats,
+        commit_ts: Instant,
+    ) {
         // * for each item
         while let Ok(ce) = inner.rx.try_recv() {
             let t = match ce {
                 // Update if it was hit.
                 CacheEvent::Hit(t, k) => {
                     stats.reader_hits += 1;
-                    let mut r = cache.get_mut(&k);
-                    match r {
-                        Some(ref mut ci) => {
-                            let mut next_state = match &ci {
-                                CacheItem::Freq(llp, v) => {
-                                    // println!("rxhit {:?} Freq -> Freq", k);
-                                    inner.freq.touch(*llp);
-                                    CacheItem::Freq(*llp, v.clone())
-                                }
-                                CacheItem::Rec(llp, v) => {
-                                    // println!("rxhit {:?} Rec -> Freq", k);
-                                    inner.rec.extract(*llp);
-                                    inner.freq.append_n(*llp);
-                                    CacheItem::Freq(*llp, v.clone())
-                                }
-                                // While we can't add this from nothing, we can
-                                // at least keep it in the ghost sets.
-                                CacheItem::GhostFreq(llp) => {
-                                    // println!("rxhit {:?} GhostFreq -> GhostFreq", k);
-                                    inner.ghost_freq.touch(*llp);
-                                    CacheItem::GhostFreq(*llp)
-                                }
-                                CacheItem::GhostRec(llp) => {
-                                    // println!("rxhit {:?} GhostRec -> GhostRec", k);
-                                    inner.ghost_rec.touch(*llp);
-                                    CacheItem::GhostRec(*llp)
-                                }
-                                CacheItem::Haunted(llp) => {
-                                    // println!("rxhit {:?} Haunted -> Haunted", k);
-                                    // We can't do anything about this ...
-                                    CacheItem::Haunted(*llp)
-                                }
-                            };
-                            mem::swap(*ci, &mut next_state);
-                        }
-                        None => {
-                            // Do nothing, it must have been evicted.
-                        }
-                    };
+                    if let Some(ref mut ci) = cache.get_mut(&k) {
+                        let mut next_state = match &ci {
+                            CacheItem::Freq(llp, v) => {
+                                // println!("rxhit {:?} Freq -> Freq", k);
+                                inner.freq.touch(*llp);
+                                CacheItem::Freq(*llp, v.clone())
+                            }
+                            CacheItem::Rec(llp, v) => {
+                                // println!("rxhit {:?} Rec -> Freq", k);
+                                inner.rec.extract(*llp);
+                                inner.freq.append_n(*llp);
+                                CacheItem::Freq(*llp, v.clone())
+                            }
+                            // While we can't add this from nothing, we can
+                            // at least keep it in the ghost sets.
+                            CacheItem::GhostFreq(llp) => {
+                                // println!("rxhit {:?} GhostFreq -> GhostFreq", k);
+                                inner.ghost_freq.touch(*llp);
+                                CacheItem::GhostFreq(*llp)
+                            }
+                            CacheItem::GhostRec(llp) => {
+                                // println!("rxhit {:?} GhostRec -> GhostRec", k);
+                                inner.ghost_rec.touch(*llp);
+                                CacheItem::GhostRec(*llp)
+                            }
+                            CacheItem::Haunted(llp) => {
+                                // println!("rxhit {:?} Haunted -> Haunted", k);
+                                // We can't do anything about this ...
+                                CacheItem::Haunted(*llp)
+                            }
+                        };
+                        mem::swap(*ci, &mut next_state);
+                    }
+                    // Do nothing, it must have been evicted.
                     t
                 }
                 // Update if it was inc
@@ -871,9 +841,17 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                 break;
             }
         }
+    }
 
-        stats.write_hits += hit.len();
-        // drain the tlocal hits into the main cache.
+    fn drain_tlocal_hits<'a>(
+        &'a self,
+        cache: &mut HashMapWriteTxn<'a, K, CacheItem<K, V>>,
+        inner: &mut ArcInner<K, V>,
+        // shared: &ArcShared<K, V>,
+        // stats: &mut CacheStats,
+        commit_txid: u64,
+        hit: Vec<K>,
+    ) {
         hit.into_iter().for_each(|k| {
             // * everything hit must be in main cache now, so bring these
             //   all to the relevant item heads.
@@ -927,13 +905,17 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
                 }
             }
         });
+    }
 
-        // now clean the space for each of the primary caches, evicting into the ghost sets.
-        // * It's possible that both caches are now over-sized if rx was empty
-        //   but wr inc many items.
-        // * p has possibly changed width, causing a balance shift
-        // * and ghost items have been included changing ghost list sizes.
-        // so we need to do a clean up/balance of all the list lengths.
+    #[allow(clippy::cognitive_complexity)]
+    fn evict<'a>(
+        &'a self,
+        cache: &mut HashMapWriteTxn<'a, K, CacheItem<K, V>>,
+        inner: &mut ArcInner<K, V>,
+        shared: &ArcShared<K, V>,
+        stats: &mut CacheStats,
+        commit_txid: u64,
+    ) {
         debug_assert!(inner.p <= shared.max);
         // Convince the compiler copying is okay.
         let p = inner.p;
@@ -1004,15 +986,15 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
             stats.recent_evicts += inner.rec.len() - rec_to_len;
 
             evict_to_len!(
-                &mut cache,
-                &mut inner.rec,
+                cache,
+                inner.rec,
                 &mut inner.ghost_rec,
                 rec_to_len,
                 commit_txid
             );
             evict_to_len!(
-                &mut cache,
-                &mut inner.freq,
+                cache,
+                inner.freq,
                 &mut inner.ghost_freq,
                 freq_to_len,
                 commit_txid
@@ -1023,8 +1005,8 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
             // ghost freq!
             if inner.ghost_rec.len() > (shared.max - p) {
                 evict_to_haunted_len!(
-                    &mut cache,
-                    &mut inner.ghost_rec,
+                    cache,
+                    inner.ghost_rec,
                     &mut inner.haunted,
                     freq_to_len,
                     commit_txid
@@ -1033,14 +1015,109 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
 
             if inner.ghost_freq.len() > p {
                 evict_to_haunted_len!(
-                    &mut cache,
-                    &mut inner.ghost_freq,
+                    cache,
+                    inner.ghost_freq,
                     &mut inner.haunted,
                     rec_to_len,
                     commit_txid
                 );
             }
         }
+    }
+
+    #[allow(clippy::unnecessary_mut_passed)]
+    fn commit<'a>(
+        &'a self,
+        mut cache: HashMapWriteTxn<'a, K, CacheItem<K, V>>,
+        tlocal: Map<K, ThreadCacheItem<V>>,
+        hit: Vec<K>,
+        clear: bool,
+    ) {
+        // What is the time?
+        let commit_ts = Instant::now();
+        let commit_txid = cache.get_txid();
+        // Copy p + init cache sizes for adjustment.
+        let mut inner = self.inner.lock();
+        let shared = self.shared.read();
+        let mut stat_guard = self.stats.write();
+        let stats = stat_guard.get_mut();
+
+        // Did we request to be cleared? If so, we move everything to a ghost set
+        // that was live.
+        //
+        // we also set the min_txid watermark which prevents any inclusion of
+        // any item that existed before this point in time.
+        if clear {
+            // Set the watermark of this txn.
+            inner.min_txid = commit_txid;
+
+            // Indicate that we evicted all to ghost/freq
+            stats.freq_evicts += inner.freq.len();
+            stats.recent_evicts += inner.rec.len();
+
+            // Move everything active into ghost sets.
+            drain_ll_to_ghost!(
+                &mut cache,
+                inner.freq,
+                inner.ghost_freq,
+                inner.ghost_rec,
+                commit_txid
+            );
+            drain_ll_to_ghost!(
+                &mut cache,
+                inner.rec,
+                inner.ghost_freq,
+                inner.ghost_rec,
+                commit_txid
+            );
+        }
+
+        // Why is it okay to drain the rx/tlocal and create the cache in a temporary
+        // oversize? Because these values in the queue/tlocal are already in memory
+        // and we are moving them to the cache, we are not actually using any more
+        // memory (well, not significantly more). By adding everything, then evicting
+        // we also get better and more accurate hit patterns over the cache based on what
+        // was used. This gives us an advantage over other cache types - we can see
+        // patterns based on temporal usage that other caches can't, at the expense that
+        // it may take some moments for that cache pattern to sync to the main thread.
+
+        stats.write_inc_or_mod += tlocal.len();
+
+        self.drain_tlocal_inc(
+            &mut cache,
+            inner.deref_mut(),
+            shared.deref(),
+            tlocal,
+            commit_txid,
+        );
+
+        // drain rx until empty or time >= time.
+        self.drain_rx(
+            &mut cache,
+            inner.deref_mut(),
+            shared.deref(),
+            stats,
+            commit_ts,
+        );
+
+        stats.write_hits += hit.len();
+        // drain the tlocal hits into the main cache.
+
+        self.drain_tlocal_hits(&mut cache, inner.deref_mut(), commit_txid, hit);
+
+        // now clean the space for each of the primary caches, evicting into the ghost sets.
+        // * It's possible that both caches are now over-sized if rx was empty
+        //   but wr inc many items.
+        // * p has possibly changed width, causing a balance shift
+        // * and ghost items have been included changing ghost list sizes.
+        // so we need to do a clean up/balance of all the list lengths.
+        self.evict(
+            &mut cache,
+            inner.deref_mut(),
+            shared.deref(),
+            stats,
+            commit_txid,
+        );
 
         stats.shared_max = shared.max;
         stats.freq = inner.freq.len();
@@ -1186,12 +1263,10 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
     /// progresses, items will be marked clean. This is where you should sync dirty
     /// cache content to your associated store. The iterator is K, Option<V>, where
     /// the Option<V> indicates if the item has been remove (None) or is updated (Some).
-    pub fn iter_mut_mark_clean<'b>(
-        &'b mut self,
-    ) -> impl Iterator<Item = (&'b K, Option<&'b mut V>)> {
+    pub fn iter_mut_mark_clean(&mut self) -> impl Iterator<Item = (&K, Option<&mut V>)> {
         self.tlocal
             .iter_mut()
-            .filter(|(k, v)| match v {
+            .filter(|(_k, v)| match v {
                 ThreadCacheItem::Present(_v, c) => !c,
                 ThreadCacheItem::Removed(c) => !c,
             })
@@ -1203,11 +1278,44 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
                 }
                 // Get the data.
                 let data = match v {
-                    ThreadCacheItem::Present(v, c) => Some(v),
-                    ThreadCacheItem::Removed(c) => None,
+                    ThreadCacheItem::Present(v, _c) => Some(v),
+                    ThreadCacheItem::Removed(_c) => None,
                 };
                 (k, data)
             })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn iter_rec(&self) -> impl Iterator<Item = &K> {
+        self.cache.values().filter_map(|ci| match &ci {
+            CacheItem::Rec(lln, _) => unsafe {
+                let cii = &*((**lln).k.as_ptr());
+                Some(&cii.k)
+            },
+            _ => None,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn iter_ghost_rec(&self) -> impl Iterator<Item = &K> {
+        self.cache.values().filter_map(|ci| match &ci {
+            CacheItem::GhostRec(lln) => unsafe {
+                let cii = &*((**lln).k.as_ptr());
+                Some(&cii.k)
+            },
+            _ => None,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn iter_ghost_freq(&self) -> impl Iterator<Item = &K> {
+        self.cache.values().filter_map(|ci| match &ci {
+            CacheItem::GhostFreq(lln) => unsafe {
+                let cii = &*((**lln).k.as_ptr());
+                Some(&cii.k)
+            },
+            _ => None,
+        })
     }
 
     #[cfg(test)]
@@ -1275,7 +1383,7 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K,
                 })
             })
             .or_else(|| {
-                self.cache.get(k).and_then(|v| unsafe {
+                self.cache.get(k).and_then(|v| {
                     (*v).to_vref().map(|vin| unsafe {
                         let vin = vin as *const _;
                         &(*vin)
@@ -1286,7 +1394,7 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K,
         if r.is_some() {
             let hk: K = k.to_owned().into();
             self.tx
-                .send(CacheEvent::Hit(self.ts.clone(), hk))
+                .send(CacheEvent::Hit(self.ts, hk))
                 .expect("Invalid tx state");
         }
         r
@@ -1315,7 +1423,7 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K,
         // Send a copy forward through time and space.
         self.tx
             .send(CacheEvent::Include(
-                self.ts.clone(),
+                self.ts,
                 k.clone(),
                 v.clone(),
                 self.cache.get_txid(),
@@ -1372,13 +1480,13 @@ mod tests {
         wr_txn.commit();
 
         // Now we start the second txn, and see if it's in there.
-        let mut wr_txn = arc.write();
+        let wr_txn = arc.write();
         assert!(wr_txn.peek_cache(&1) == CacheState::Rec);
         assert!(wr_txn.get(&1) == Some(&1));
         assert!(wr_txn.peek_hit().len() == 1);
         wr_txn.commit();
         // And now check it's moved to Freq due to the extra
-        let mut wr_txn = arc.write();
+        let wr_txn = arc.write();
         assert!(wr_txn.peek_cache(&1) == CacheState::Freq);
         println!("{:?}", wr_txn.peek_stat());
     }
@@ -1425,7 +1533,7 @@ mod tests {
 
         // Now we start the second txn, and check the stats.
         println!("== 2");
-        let mut wr_txn = arc.write();
+        let wr_txn = arc.write();
         assert!(
             CStat {
                 max: 4,
@@ -1470,7 +1578,7 @@ mod tests {
 
         // Now we start the fourth txn, and check the stats.
         println!("== 4");
-        let mut wr_txn = arc.write();
+        let wr_txn = arc.write();
         println!("stat -> {:?}", wr_txn.peek_stat());
         assert!(
             CStat {
@@ -1486,15 +1594,15 @@ mod tests {
             } == wr_txn.peek_stat()
         );
         // And assert what's in the sets to be sure of what went where.
-        assert!(wr_txn.peek_cache(&1) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&2) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&3) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&4) == CacheState::Rec);
-        assert!(wr_txn.peek_cache(&5) == CacheState::Rec);
+        // 🚨 Can no longer peek these with hashmap backing as the keys may
+        // be evicted out-of-order, but the stats are correct!
 
-        // Now we touch 4/5 to make them freq.
-        assert!(wr_txn.get(&4) == Some(&4));
-        assert!(wr_txn.get(&5) == Some(&5));
+        // Now touch the two recent items to bring them also to freq
+
+        let rec_set: Vec<usize> = wr_txn.iter_rec().take(2).copied().collect();
+        assert!(wr_txn.get(&rec_set[0]) == Some(&rec_set[0]));
+        assert!(wr_txn.get(&rec_set[1]) == Some(&rec_set[1]));
+
         wr_txn.commit();
 
         // Now we start the fifth txn, and check the stats.
@@ -1515,16 +1623,14 @@ mod tests {
             } == wr_txn.peek_stat()
         );
         // And assert what's in the sets to be sure of what went where.
-        assert!(wr_txn.peek_cache(&1) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&2) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&3) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&4) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&5) == CacheState::Freq);
+        // 🚨 Can no longer peek these with hashmap backing as the keys may
+        // be evicted out-of-order, but the stats are correct!
 
-        // Now, we touch 3, 10, 11, 12, 13. Due to how many additions there are, 3 should be
-        // evicted from ghost rec, and all the current freq items should be removed?
-        wr_txn.insert(3, 3);
-        assert!(wr_txn.get(&3) == Some(&3));
+        // Now touch the one item that's in ghost rec - this will trigger
+        // an evict from ghost freq
+        let grec: usize = wr_txn.iter_ghost_rec().take(1).copied().next().unwrap();
+        wr_txn.insert(grec, grec);
+        assert!(wr_txn.get(&grec) == Some(&grec));
         // When we add 3, we are basically issuing a demand that the rec set should be
         // allowed to grow as we had a potential cache miss here.
         wr_txn.commit();
@@ -1547,11 +1653,9 @@ mod tests {
             } == wr_txn.peek_stat()
         );
         // And assert what's in the sets to be sure of what went where.
-        assert!(wr_txn.peek_cache(&1) == CacheState::GhostFreq);
-        assert!(wr_txn.peek_cache(&2) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&3) == CacheState::Rec);
-        assert!(wr_txn.peek_cache(&4) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&5) == CacheState::Freq);
+        // 🚨 Can no longer peek these with hashmap backing as the keys may
+        // be evicted out-of-order, but the stats are correct!
+        assert!(wr_txn.peek_cache(&grec) == CacheState::Rec);
 
         // Right, seventh txn - we show how a cache scan doesn't cause p shifting or evict.
         // tl;dr - attempt to include a bunch in a scan, and it will be ignored as p is low,
@@ -1577,20 +1681,14 @@ mod tests {
                 p: 1
             } == wr_txn.peek_stat()
         );
-        assert!(wr_txn.peek_cache(&1) == CacheState::GhostFreq);
-        assert!(wr_txn.peek_cache(&2) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&3) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&4) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&5) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&10) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&11) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&12) == CacheState::Rec);
+        // 🚨 Can no longer peek these with hashmap backing as the keys may
+        // be evicted out-of-order, but the stats are correct!
 
         // Eight txn - now that we had a demand for items before, we re-demand them - this will trigger
         // a shift in p, causing some more to be in the rec cache.
-        wr_txn.insert(10, 10);
-        wr_txn.insert(11, 11);
-        wr_txn.insert(3, 3);
+        let grec_set: Vec<usize> = wr_txn.iter_ghost_rec().take(3).copied().collect();
+
+        grec_set.iter().for_each(|i| wr_txn.insert(*i, *i));
         wr_txn.commit();
 
         println!("== 8");
@@ -1609,24 +1707,19 @@ mod tests {
                 p: 4
             } == wr_txn.peek_stat()
         );
-        assert!(wr_txn.peek_cache(&1) == CacheState::GhostFreq);
-        assert!(wr_txn.peek_cache(&2) == CacheState::GhostFreq);
-        assert!(wr_txn.peek_cache(&3) == CacheState::Rec);
-        assert!(wr_txn.peek_cache(&4) == CacheState::GhostFreq);
-        assert!(wr_txn.peek_cache(&5) == CacheState::GhostFreq);
-        assert!(wr_txn.peek_cache(&10) == CacheState::Rec);
-        assert!(wr_txn.peek_cache(&11) == CacheState::Rec);
-        assert!(wr_txn.peek_cache(&12) == CacheState::Rec);
+
+        grec_set
+            .iter()
+            .for_each(|i| assert!(wr_txn.peek_cache(i) == CacheState::Rec));
 
         // Now lets go back the other way - we want freq items to come back.
-        wr_txn.insert(1, 1);
-        wr_txn.insert(2, 1);
-        wr_txn.insert(4, 1);
-        wr_txn.insert(5, 1);
+        let gfreq_set: Vec<usize> = wr_txn.iter_ghost_freq().take(4).copied().collect();
+
+        gfreq_set.iter().for_each(|i| wr_txn.insert(*i, *i));
         wr_txn.commit();
 
         println!("== 9");
-        let mut wr_txn = arc.write();
+        let wr_txn = arc.write();
         println!("stat -> {:?}", wr_txn.peek_stat());
         assert!(
             CStat {
@@ -1641,14 +1734,11 @@ mod tests {
                 p: 0
             } == wr_txn.peek_stat()
         );
-        assert!(wr_txn.peek_cache(&1) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&2) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&3) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&4) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&5) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&10) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&11) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&12) == CacheState::GhostRec);
+        // 🚨 Can no longer peek these with hashmap backing as the keys may
+        // be evicted out-of-order, but the stats are correct!
+        gfreq_set
+            .iter()
+            .for_each(|i| assert!(wr_txn.peek_cache(i) == CacheState::Freq));
 
         // And done!
         wr_txn.commit();
@@ -1681,7 +1771,7 @@ mod tests {
         arc.try_quiesce();
         // What state is the cache now in?
         println!("== 2");
-        let mut wr_txn = arc.write();
+        let wr_txn = arc.write();
         println!("{:?}", wr_txn.peek_stat());
         assert!(
             CStat {
@@ -1715,7 +1805,7 @@ mod tests {
         // Now commit and check the state.
         wr_txn.commit();
         println!("== 3");
-        let mut wr_txn = arc.write();
+        let wr_txn = arc.write();
         assert!(
             CStat {
                 max: 4,
@@ -1747,7 +1837,7 @@ mod tests {
 
         wr_txn.commit();
         println!("== 4");
-        let mut wr_txn = arc.write();
+        let wr_txn = arc.write();
         assert!(
             CStat {
                 max: 4,
@@ -1813,7 +1903,7 @@ mod tests {
         wr_txn.commit();
 
         // begin wr
-        let mut wr_txn = arc.write();
+        let wr_txn = arc.write();
         // assert that 1 is haunted.
         assert!(wr_txn.peek_cache(&1) == CacheState::Haunted);
         // assert 1 is not in rd.
@@ -1824,7 +1914,7 @@ mod tests {
         wr_txn.commit();
 
         // start wr
-        let mut wr_txn = arc.write();
+        let wr_txn = arc.write();
         // assert that 1 is still haunted.
         assert!(wr_txn.peek_cache(&1) == CacheState::Haunted);
         // assert that 1, x is in rd.
@@ -1839,49 +1929,65 @@ mod tests {
         // Start a wr
         let mut wr_txn = arc.write();
         // Add a bunch of values, and touch some twice.
-        wr_txn.insert(10, 1);
-        wr_txn.insert(11, 1);
-        wr_txn.insert(12, 1);
-        wr_txn.insert(13, 1);
-        wr_txn.insert(14, 1);
-        wr_txn.insert(15, 1);
-        wr_txn.insert(16, 1);
-        wr_txn.insert(17, 1);
+        wr_txn.insert(10, 10);
+        wr_txn.insert(11, 11);
+        wr_txn.insert(12, 12);
+        wr_txn.insert(13, 13);
+        wr_txn.insert(14, 14);
+        wr_txn.insert(15, 15);
+        wr_txn.insert(16, 16);
+        wr_txn.insert(17, 17);
         wr_txn.commit();
         // Begin a new write.
-        let mut wr_txn = arc.write();
-        assert!(wr_txn.get(&16) == Some(&1));
-        assert!(wr_txn.get(&17) == Some(&1));
+        let wr_txn = arc.write();
+
+        // Touch two values that are in the rec set.
+        let rec_set: Vec<usize> = wr_txn.iter_rec().take(2).copied().collect();
+        println!("{:?}", rec_set);
+        assert!(wr_txn.get(&rec_set[0]) == Some(&rec_set[0]));
+        assert!(wr_txn.get(&rec_set[1]) == Some(&rec_set[1]));
+
         // commit wr
         wr_txn.commit();
         // Begin a new write.
         let mut wr_txn = arc.write();
-        assert!(wr_txn.peek_cache(&10) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&11) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&12) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&13) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&14) == CacheState::Rec);
-        assert!(wr_txn.peek_cache(&15) == CacheState::Rec);
-        assert!(wr_txn.peek_cache(&16) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&17) == CacheState::Freq);
+        println!("stat -> {:?}", wr_txn.peek_stat());
+        assert!(
+            CStat {
+                max: 4,
+                cache: 8,
+                tlocal: 0,
+                freq: 2,
+                rec: 2,
+                ghost_freq: 0,
+                ghost_rec: 4,
+                haunted: 0,
+                p: 0
+            } == wr_txn.peek_stat()
+        );
 
         // Clear
         wr_txn.clear();
         // Now commit
         wr_txn.commit();
-
         // Now check their states.
-        let mut wr_txn = arc.write();
-
-        assert!(wr_txn.peek_cache(&10) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&11) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&12) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&13) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&14) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&15) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&16) == CacheState::GhostFreq);
-        assert!(wr_txn.peek_cache(&17) == CacheState::GhostFreq);
+        let wr_txn = arc.write();
         // See what stats did
+        println!("stat -> {:?}", wr_txn.peek_stat());
+        // stat -> CStat { max: 4, cache: 8, tlocal: 0, freq: 0, rec: 0, ghost_freq: 2, ghost_rec: 6, haunted: 0, p: 0 }
+        assert!(
+            CStat {
+                max: 4,
+                cache: 8,
+                tlocal: 0,
+                freq: 0,
+                rec: 0,
+                ghost_freq: 2,
+                ghost_rec: 6,
+                haunted: 0,
+                p: 0
+            } == wr_txn.peek_stat()
+        );
         let stats = arc.view_stats();
         println!("{:?}", *stats);
     }
@@ -1893,47 +1999,63 @@ mod tests {
         // Start a wr
         let mut wr_txn = arc.write();
         // Add a bunch of values, and touch some twice.
-        wr_txn.insert(10, 1);
-        wr_txn.insert(11, 1);
-        wr_txn.insert(12, 1);
-        wr_txn.insert(13, 1);
-        wr_txn.insert(14, 1);
-        wr_txn.insert(15, 1);
-        wr_txn.insert(16, 1);
-        wr_txn.insert(17, 1);
+        wr_txn.insert(10, 10);
+        wr_txn.insert(11, 11);
+        wr_txn.insert(12, 12);
+        wr_txn.insert(13, 13);
+        wr_txn.insert(14, 14);
+        wr_txn.insert(15, 15);
+        wr_txn.insert(16, 16);
+        wr_txn.insert(17, 17);
         wr_txn.commit();
         // Begin a new write.
-        let mut wr_txn = arc.write();
-        assert!(wr_txn.get(&16) == Some(&1));
-        assert!(wr_txn.get(&17) == Some(&1));
+        let wr_txn = arc.write();
+        let rec_set: Vec<usize> = wr_txn.iter_rec().take(2).copied().collect();
+        println!("{:?}", rec_set);
+        let r = wr_txn.get(&rec_set[0]);
+        println!("{:?}", r);
+        assert!(r == Some(&rec_set[0]));
+        assert!(wr_txn.get(&rec_set[1]) == Some(&rec_set[1]));
+
         // commit wr
         wr_txn.commit();
         // Begin a new write.
         let mut wr_txn = arc.write();
-        assert!(wr_txn.peek_cache(&10) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&11) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&12) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&13) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&14) == CacheState::Rec);
-        assert!(wr_txn.peek_cache(&15) == CacheState::Rec);
-        println!("--> {:?}", wr_txn.peek_cache(&16));
-        assert!(wr_txn.peek_cache(&16) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&17) == CacheState::Freq);
+        println!("stat -> {:?}", wr_txn.peek_stat());
+        assert!(
+            CStat {
+                max: 4,
+                cache: 8,
+                tlocal: 0,
+                freq: 2,
+                rec: 2,
+                ghost_freq: 0,
+                ghost_rec: 4,
+                haunted: 0,
+                p: 0
+            } == wr_txn.peek_stat()
+        );
 
         // Clear
         wr_txn.clear();
         // Now abort the clear - should do nothing!
         drop(wr_txn);
         // Check the states, should not have changed
-        let mut wr_txn = arc.write();
-        assert!(wr_txn.peek_cache(&10) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&11) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&12) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&13) == CacheState::GhostRec);
-        assert!(wr_txn.peek_cache(&14) == CacheState::Rec);
-        assert!(wr_txn.peek_cache(&15) == CacheState::Rec);
-        assert!(wr_txn.peek_cache(&16) == CacheState::Freq);
-        assert!(wr_txn.peek_cache(&17) == CacheState::Freq);
+        let wr_txn = arc.write();
+        println!("stat -> {:?}", wr_txn.peek_stat());
+        assert!(
+            CStat {
+                max: 4,
+                cache: 8,
+                tlocal: 0,
+                freq: 2,
+                rec: 2,
+                ghost_freq: 0,
+                ghost_rec: 4,
+                haunted: 0,
+                p: 0
+            } == wr_txn.peek_stat()
+        );
     }
 
     #[test]
@@ -1945,7 +2067,7 @@ mod tests {
         wr_txn.insert(10, 1);
         wr_txn.commit();
         // --
-        let mut wr_txn = arc.write();
+        let wr_txn = arc.write();
         assert!(wr_txn.peek_cache(&10) == CacheState::Rec);
         wr_txn.commit();
         // --
@@ -1970,7 +2092,7 @@ mod tests {
 
         // Assert that the items that we provided were NOT included, and are
         // in the correct states.
-        let mut wr_txn = arc.write();
+        let wr_txn = arc.write();
         assert!(wr_txn.peek_cache(&10) == CacheState::GhostRec);
         println!("--> {:?}", wr_txn.peek_cache(&11));
         assert!(wr_txn.peek_cache(&11) == CacheState::None);
@@ -2008,7 +2130,7 @@ mod tests {
         arc.try_quiesce();
         // What state is the cache now in?
         println!("== 2");
-        let mut wr_txn = arc.write();
+        let wr_txn = arc.write();
         assert!(
             CStat {
                 max: 4,

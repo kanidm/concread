@@ -9,7 +9,7 @@ use super::node::Node;
 #[cfg(test)]
 use super::states::BLPruneState;
 use super::states::{BLInsertState, BLRemoveState};
-use super::utils::*;
+use crate::collections::utils::*;
 
 pub(crate) struct Leaf<K, V>
 where
@@ -30,7 +30,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
         }
     }
 
-    pub(crate) fn insert_or_update(&mut self, txid: usize, k: K, v: V) -> BLInsertState<K, V> {
+    pub(crate) fn insert_or_update(&mut self, txid: u64, k: K, v: V) -> BLInsertState<K, V> {
         // Update the node, and split if required.
         // There are three possible paths
         let r = {
@@ -45,7 +45,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
                 // * some values (but not full) exist, and we need to update the value that does exist
                 let prev = unsafe { self.value[idx].as_mut_ptr().replace(v) };
                 // v now contains the original value, return it!
-                return BLInsertState::Ok(Some(prev));
+                BLInsertState::Ok(Some(prev))
             }
             Err(idx) => {
                 if self.count == L_CAPACITY {
@@ -189,7 +189,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Leaf<K, V> {
             slice_merge(&mut self.key, self.count, &mut right.key, right.count);
             slice_merge(&mut self.value, self.count, &mut right.value, right.count);
         }
-        self.count = self.count + right.count;
+        self.count += right.count;
         right.count = 0;
     }
 

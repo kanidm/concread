@@ -87,6 +87,12 @@ where
     work: SnapshotType<'a, K, V>,
 }
 
+impl<K: Clone + Ord + Debug, V: Clone> Default for BptreeMap<K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K: Clone + Ord + Debug, V: Clone> BptreeMap<K, V> {
     /// Construct a new concurrent tree
     pub fn new() -> Self {
@@ -193,7 +199,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
         self.work.contains_key(k)
     }
 
-    /// Returns the current number of k:v pairs in the tree
+    /// returns the current number of k:v pairs in the tree
     pub fn len(&self) -> usize {
         self.work.len()
     }
@@ -224,7 +230,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
 
     // (adv) values
 
-    pub(crate) fn get_txid(&self) -> usize {
+    pub(crate) fn get_txid(&self) -> u64 {
         self.work.get_txid()
     }
 
@@ -289,7 +295,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     /// iterator, this is probably the case you have here!
     ///
     /// However under random insert loads we tend toward ~60% utilisation similar to the classic
-    /// B+tree. Given reverse key order inserts we have poor behaviour with about ~%20 occupation.
+    /// B+tree.
     ///
     /// Instead of paying a cost in time and memory on every insert to achieve the "constant" %60
     /// loading, we prefer to minimise the work in the tree in favour of compacting the structure
@@ -351,7 +357,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to percieve these changes.
     ///
-    /// To abort, just do not call this function.
+    /// To abort (unstage changes), just do not call this function.
     pub fn commit(self) {
         self.caller.commit(self.work.finalise())
     }
@@ -388,7 +394,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapReadTxn<K, V> {
     }
 
     // (adv) range
-    pub(crate) fn get_txid(&self) -> usize {
+    pub(crate) fn get_txid(&self) -> u64 {
         self.work.get_txid()
     }
 
@@ -416,6 +422,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapReadTxn<K, V> {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn verify(&self) -> bool {
         self.work.verify()
     }
