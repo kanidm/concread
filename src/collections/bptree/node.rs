@@ -41,18 +41,21 @@ pub(crate) const BV_CAPACITY: usize = L_CAPACITY + 1;
 
 #[cfg(test)]
 thread_local!(static NODE_COUNTER: AtomicUsize = AtomicUsize::new(1));
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 thread_local!(static ALLOC_LIST: Mutex<BTreeSet<usize>> = Mutex::new(BTreeSet::new()));
 
 #[cfg(test)]
 fn alloc_nid() -> usize {
     let nid: usize = NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel));
-    ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(nid));
-    // println!("Allocate -> {:?}", nid);
+    #[cfg(all(test, not(miri)))]
+    {
+        ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(nid));
+    }
+    eprintln!("Allocate -> {:?}", nid);
     nid
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 fn release_nid(nid: usize) {
     // println!("Release -> {:?}", nid);
     // debug_assert!(nid != 3);
@@ -62,12 +65,15 @@ fn release_nid(nid: usize) {
 
 #[cfg(test)]
 pub(crate) fn assert_released() {
-    let is_empt = ALLOC_LIST.with(|llist| {
-        let x = llist.lock().unwrap();
-        // println!("Remaining -> {:?}", x);
-        x.is_empty()
-    });
-    assert!(is_empt);
+    #[cfg(not(miri))]
+    {
+        let is_empt = ALLOC_LIST.with(|llist| {
+            let x = llist.lock().unwrap();
+            // println!("Remaining -> {:?}", x);
+            x.is_empty()
+        });
+        assert!(is_empt);
+    }
 }
 
 #[repr(C)]
@@ -82,7 +88,7 @@ where
     pub(crate) meta: Meta,
     key: [MaybeUninit<K>; L_CAPACITY],
     nodes: [*mut Node<K, V>; BV_CAPACITY],
-    #[cfg(test)]
+    #[cfg(all(test, not(miri)))]
     pub(crate) nid: usize,
 }
 
@@ -95,7 +101,7 @@ where
     pub(crate) meta: Meta,
     key: [MaybeUninit<K>; L_CAPACITY],
     values: [MaybeUninit<V>; L_CAPACITY],
-    #[cfg(test)]
+    #[cfg(all(test, not(miri)))]
     pub(crate) nid: usize,
 }
 
@@ -125,7 +131,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
             meta: Meta((txid << TXID_SHF) | FLAG_LEAF),
             key: unsafe { MaybeUninit::uninit().assume_init() },
             values: unsafe { MaybeUninit::uninit().assume_init() },
-            #[cfg(test)]
+            #[cfg(all(test, not(miri)))]
             nid: alloc_nid(),
         });
         Box::into_raw(x) as *mut _
@@ -171,7 +177,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
                 MaybeUninit::uninit(),
                 MaybeUninit::uninit(),
             ],
-            #[cfg(test)]
+            #[cfg(all(test, not(miri)))]
             nid: alloc_nid(),
         });
         let nnode = Box::into_raw(x) as *mut Leaf<K, V>;
@@ -221,7 +227,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
                 ptr::null_mut(),
                 ptr::null_mut(),
             ],
-            #[cfg(test)]
+            #[cfg(all(test, not(miri)))]
             nid: alloc_nid(),
         });
         debug_assert!(x.verify());
@@ -567,7 +573,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
                 meta: Meta(new_txid),
                 key: unsafe { MaybeUninit::uninit().assume_init() },
                 values: unsafe { MaybeUninit::uninit().assume_init() },
-                #[cfg(test)]
+                #[cfg(all(test, not(miri)))]
                 nid: alloc_nid(),
             });
 
@@ -781,7 +787,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Debug for Leaf<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), Error> {
         debug_assert_leaf!(self);
         write!(f, "Leaf -> {}", self.count())?;
-        #[cfg(test)]
+        #[cfg(all(test, not(miri)))]
         write!(f, " nid: {}", self.nid)?;
         write!(f, "  \\-> [ ")?;
         for idx in 0..self.count() {
@@ -794,7 +800,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Debug for Leaf<K, V> {
 impl<K: Ord + Clone + Debug, V: Clone> Drop for Leaf<K, V> {
     fn drop(&mut self) {
         debug_assert_leaf!(self);
-        #[cfg(test)]
+        #[cfg(all(test, not(miri)))]
         release_nid(self.nid);
         // Due to the use of maybe uninit we have to drop any contained values.
         unsafe {
@@ -871,7 +877,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
                 key: unsafe { MaybeUninit::uninit().assume_init() },
                 // We can simply clone the pointers.
                 nodes: self.nodes.clone(),
-                #[cfg(test)]
+                #[cfg(all(test, not(miri)))]
                 nid: alloc_nid(),
             });
             // Copy in the keys to the correct location.
@@ -1792,7 +1798,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Debug for Branch<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), Error> {
         debug_assert_branch!(self);
         write!(f, "Branch -> {}", self.count())?;
-        #[cfg(test)]
+        #[cfg(all(test, not(miri)))]
         write!(f, " nid: {}", self.nid)?;
         write!(f, "  \\-> [ ")?;
         for idx in 0..self.count() {
@@ -1805,7 +1811,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Debug for Branch<K, V> {
 impl<K: Ord + Clone + Debug, V: Clone> Drop for Branch<K, V> {
     fn drop(&mut self) {
         debug_assert_branch!(self);
-        #[cfg(test)]
+        #[cfg(all(test, not(miri)))]
         release_nid(self.nid);
         // Due to the use of maybe uninit we have to drop any contained values.
         unsafe {

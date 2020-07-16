@@ -237,6 +237,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for ValueIter<'a, K, V> {
 #[cfg(test)]
 mod tests {
     use super::super::node::{Branch, Leaf, Node, L_CAPACITY};
+    use super::super::cursor::CursorWrite;
     use super::{Iter, LeafIter};
 
     fn create_leaf_node_full(vbase: usize) -> *mut Node<usize, usize> {
@@ -268,6 +269,8 @@ mod tests {
         let lref = test_iter.next().unwrap();
         assert!(lref.min() == &10);
         assert!(test_iter.next().is_none());
+        // This drops everything.
+        let _wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, lnode as *mut _);
     }
 
     #[test]
@@ -283,6 +286,8 @@ mod tests {
         assert!(lref.min() == &10);
         assert!(rref.min() == &20);
         assert!(test_iter.next().is_none());
+        // This drops everything.
+        let _wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
     }
 
     #[test]
@@ -307,6 +312,8 @@ mod tests {
         assert!(l2ref.min() == &30);
         assert!(r2ref.min() == &40);
         assert!(test_iter.next().is_none());
+        // This drops everything.
+        let _wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
     }
 
     #[test]
@@ -319,6 +326,8 @@ mod tests {
         let lref = test_iter.next().unwrap();
         assert!(lref.min() == &10);
         assert!(test_iter.next().is_none());
+        // This drops everything.
+        let _wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, lnode as *mut _);
     }
 
     #[test]
@@ -332,6 +341,8 @@ mod tests {
         assert!(test_iter.size_hint() == (L_CAPACITY * 2, Some(L_CAPACITY * 2)));
         assert!(test_iter.count() == L_CAPACITY * 2);
         // Iterate!
+        // This drops everything.
+        let _wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
     }
 
     #[test]
@@ -350,5 +361,7 @@ mod tests {
 
         assert!(test_iter.size_hint() == (L_CAPACITY * 4, Some(L_CAPACITY * 4)));
         assert!(test_iter.count() == L_CAPACITY * 4);
+        // This drops everything.
+        let _wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
     }
 }
