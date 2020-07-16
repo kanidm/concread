@@ -1826,6 +1826,22 @@ mod tests {
     use std::ptr;
 
     #[test]
+    fn test_bptree2_node_cache_size() {
+        let ls = std::mem::size_of::<Leaf<u64, u64>>() - std::mem::size_of::<usize>();
+        let bs = std::mem::size_of::<Branch<u64, u64>>() - std::mem::size_of::<usize>();
+        #[cfg(feature = "skinny")]
+        {
+            assert!(ls <= 64);
+            assert!(bs <= 64);
+        }
+        #[cfg(not(feature = "skinny"))]
+        {
+            assert!(ls <= 128);
+            assert!(bs <= 128);
+        }
+    }
+
+    #[test]
     fn test_bptree2_node_test_weird_basics() {
         let leaf: *mut Leaf<u64, u64> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf };

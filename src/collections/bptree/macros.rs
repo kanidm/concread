@@ -34,7 +34,6 @@ macro_rules! key_search {
     ($self:expr, $k:expr) => {{
         let (left, _) = $self.key.split_at($self.count());
         let inited: &[K] = unsafe { slice::from_raw_parts(left.as_ptr() as *const K, left.len()) };
-
         slice_search_linear(inited, $k)
     }};
 }
