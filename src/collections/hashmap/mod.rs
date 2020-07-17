@@ -17,7 +17,13 @@
 //! data views for a duration of time, cpu cache friendly behaviours and
 //! database like transaction properties (ACID).
 
+#[macro_use]
+mod macros;
+mod cursor;
 pub mod iter;
 pub mod map;
+mod node;
+mod simd;
+mod states;
 
 pub use self::map::{HashMap, HashMapReadSnapshot, HashMapReadTxn, HashMapWriteTxn};

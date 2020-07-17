@@ -1,10 +1,11 @@
 use super::node::{Leaf, Node};
 use std::fmt::Debug;
+use std::hash::Hash;
 
 #[derive(Debug)]
 pub(crate) enum LeafInsertState<K, V>
 where
-    K: Ord + Clone + Debug,
+    K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
     Ok(Option<V>),
@@ -28,7 +29,7 @@ where
 #[derive(Debug)]
 pub(crate) enum BranchInsertState<K, V>
 where
-    K: Ord + Clone + Debug,
+    K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
     Ok,
@@ -39,7 +40,7 @@ where
 #[derive(Debug)]
 pub(crate) enum BranchShrinkState<K, V>
 where
-    K: Ord + Clone + Debug,
+    K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
     Balanced,
@@ -51,16 +52,18 @@ where
 #[derive(Debug)]
 pub(crate) enum BranchTrimState<K, V>
 where
-    K: Ord + Clone + Debug,
+    K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
     Complete,
     Promote(*mut Node<K, V>),
 }
+*/
 
+/*
 pub(crate) enum CRTrimState<K, V>
 where
-    K: Ord + Clone + Debug,
+    K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
     Complete,
@@ -72,7 +75,7 @@ where
 #[derive(Debug)]
 pub(crate) enum CRInsertState<K, V>
 where
-    K: Ord + Clone + Debug,
+    K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
     // We did not need to clone, here is the result.
@@ -93,7 +96,7 @@ where
 #[derive(Debug)]
 pub(crate) enum CRCloneState<K, V>
 where
-    K: Ord + Clone + Debug,
+    K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
     Clone(*mut Node<K, V>),
@@ -103,7 +106,7 @@ where
 #[derive(Debug)]
 pub(crate) enum CRRemoveState<K, V>
 where
-    K: Ord + Clone + Debug,
+    K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
     // We did not need to clone, here is the result.

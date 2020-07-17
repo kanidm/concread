@@ -36,6 +36,8 @@ This library also has a concurrently readable BTreeMap, HashMap and Adaptive Rep
 These are best used when you have at least 512 bytes worth of data in your Cell, as they only copy
 what is required for an update.
 
+If you do not required key-ordering, then the HashMap will likely be the best choice
+for most applications.
 
 What is concurrently readable?
 ------------------------------

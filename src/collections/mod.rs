@@ -4,8 +4,6 @@
 //! to these structures.
 
 pub mod bptree;
-#[cfg(test)]
-pub mod bptree_legacy;
 pub mod hashmap;
 mod utils;
 // #[cfg(test)]

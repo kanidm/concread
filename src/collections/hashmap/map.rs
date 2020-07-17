@@ -6,25 +6,18 @@
 use ahash::AHasher;
 use std::borrow::Borrow;
 // use std::collections::hash_map::DefaultHasher;
+use super::cursor::CursorReadOps;
+use super::cursor::{CursorRead, CursorWrite, SuperBlock};
+use super::iter::*;
+use parking_lot::{Mutex, MutexGuard};
 use rand::Rng;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::iter::FromIterator;
-use std::mem;
-
-use super::iter::*;
-use crate::collections::bptree::{
-    BptreeMap, BptreeMapReadSnapshot, BptreeMapReadTxn, BptreeMapWriteTxn,
-};
+use std::sync::Arc;
 
 // #[cfg(feature = "simd_support")] use packed_simd::*;
 // #[cfg(feature = "simd_support")]
-
-use smallvec::SmallVec;
-
-const DEFAULT_STACK_ALLOC: usize = 1;
-
-pub(crate) type Vinner<K, V> = SmallVec<[(K, V); DEFAULT_STACK_ALLOC]>;
 
 macro_rules! hash_key {
     ($k:expr, $key1:expr, $key2:expr) => {{
@@ -58,10 +51,14 @@ where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
-    map: BptreeMap<u64, Vinner<K, V>>,
+    write: Mutex<()>,
+    active: Mutex<Arc<SuperBlock<K, V>>>,
     key1: u64,
     key2: u64,
 }
+
+unsafe impl<K: Hash + Eq + Clone + Debug, V: Clone> Send for HashMap<K, V> {}
+unsafe impl<K: Hash + Eq + Clone + Debug, V: Clone> Sync for HashMap<K, V> {}
 
 /// An active read transaction over a `HashMap`. The data in this tree
 /// is guaranteed to not change and will remain consistent for the life
@@ -71,7 +68,9 @@ where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
-    map: BptreeMapReadTxn<'a, u64, Vinner<K, V>>,
+    _caller: &'a HashMap<K, V>,
+    pin: Arc<SuperBlock<K, V>>,
+    work: CursorRead<K, V>,
     key1: u64,
     key2: u64,
 }
@@ -86,9 +85,20 @@ where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
-    map: BptreeMapWriteTxn<'a, u64, Vinner<K, V>>,
+    work: CursorWrite<K, V>,
+    caller: &'a HashMap<K, V>,
+    _guard: MutexGuard<'a, ()>,
     key1: u64,
     key2: u64,
+}
+
+enum SnapshotType<'a, K, V>
+where
+    K: Hash + Eq + Clone + Debug,
+    V: Clone,
+{
+    R(&'a CursorRead<K, V>),
+    W(&'a CursorWrite<K, V>),
 }
 
 /// A point-in-time snapshot of the tree from within a read OR write. This is
@@ -104,7 +114,7 @@ where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
-    map: BptreeMapReadSnapshot<'a, u64, Vinner<K, V>>,
+    work: SnapshotType<'a, K, V>,
     key1: u64,
     key2: u64,
 }
@@ -119,7 +129,8 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> HashMap<K, V> {
     /// Construct a new concurrent hashmap
     pub fn new() -> Self {
         HashMap {
-            map: BptreeMap::new(),
+            write: Mutex::new(()),
+            active: Mutex::new(Arc::new(SuperBlock::default())),
             key1: rand::thread_rng().gen::<u64>(),
             key2: rand::thread_rng().gen::<u64>(),
         }
@@ -128,8 +139,13 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> HashMap<K, V> {
     /// Initiate a read transaction for the Hashmap, concurrent to any
     /// other readers or writers.
     pub fn read(&self) -> HashMapReadTxn<K, V> {
+        let rguard = self.active.lock();
+        let pin = rguard.clone();
+        let work = CursorRead::new(pin.as_ref());
         HashMapReadTxn {
-            map: self.map.read(),
+            _caller: self,
+            pin,
+            work,
             key1: self.key1,
             key2: self.key2,
         }
@@ -138,21 +154,64 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> HashMap<K, V> {
     /// Initiate a write transaction for the map, exclusive to this
     /// writer, and concurrently to all existing reads.
     pub fn write(&self) -> HashMapWriteTxn<K, V> {
+        /* Take the exclusive write lock first */
+        let mguard = self.write.lock();
+        /* Now take a ro-txn to get the data copied */
+        let rguard = self.active.lock();
+        /*
+         * Take a ref to the root, we want to minimise our time in the.
+         * active lock. We could do a full clone here but that would trigger
+         * node-width worth of atomics, and if the write is dropped without
+         * action we've save a lot of cycles.
+         */
+        let sblock: &SuperBlock<K, V> = rguard.as_ref();
+        /* Setup the cursor that will work on the tree */
+        let cursor = CursorWrite::new(sblock);
+        /* Now build the write struct */
         HashMapWriteTxn {
-            map: self.map.write(),
+            work: cursor,
+            caller: self,
+            _guard: mguard,
             key1: self.key1,
             key2: self.key2,
         }
+        /* rguard dropped here */
     }
 
     /// Attempt to create a new write, returns None if another writer
     /// already exists.
     pub fn try_write(&self) -> Option<HashMapWriteTxn<K, V>> {
-        self.map.try_write().map(|lmap| HashMapWriteTxn {
-            map: lmap,
-            key1: self.key1,
-            key2: self.key2,
+        self.write.try_lock().map(|mguard| {
+            let rguard = self.active.lock();
+            let sblock: &SuperBlock<K, V> = rguard.as_ref();
+            let cursor = CursorWrite::new(sblock);
+            HashMapWriteTxn {
+                work: cursor,
+                caller: self,
+                _guard: mguard,
+                key1: self.key1,
+                key2: self.key2,
+            }
         })
+    }
+
+    fn commit(&self, newdata: SuperBlock<K, V>) {
+        // println!("commit wr");
+        let mut rwguard = self.active.lock();
+        // Now we need to setup the sb pointers properly.
+        // The current active SHOULD have a NONE last seen as it's the current
+        // tree holder.
+        newdata.commit_prep(rwguard.as_ref());
+
+        let arc_newdata = Arc::new(newdata);
+        // Now pin the older to this new txn.
+        {
+            let mut pin_guard = rwguard.as_ref().pin_next.lock();
+            *pin_guard = Some(arc_newdata.clone());
+        }
+
+        // Now push the new SB.
+        *rwguard = arc_newdata;
     }
 }
 
@@ -176,7 +235,7 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> Extend<(K, V)> for HashMapWrite
 
 impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapWriteTxn<'a, K, V> {
     pub(crate) fn get_txid(&self) -> u64 {
-        self.map.get_txid()
+        self.work.get_txid()
     }
 
     /// Retrieve a value from the map. If the value exists, a reference is returned
@@ -187,13 +246,7 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapWriteTxn<'a, K, V> {
         Q: Hash + Eq,
     {
         let k_hash = hash_key!(k, self.key1, self.key2);
-        self.map.get(&k_hash).and_then(|va| {
-            va.iter()
-                .filter(|(ki, _vi)| k.eq(ki.borrow()))
-                .take(1)
-                .map(|(_kr, vr)| vr)
-                .next()
-        })
+        self.work.search(k_hash, k)
     }
 
     /// Assert if a key exists in the map.
@@ -207,35 +260,34 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapWriteTxn<'a, K, V> {
 
     /// returns the current number of k:v pairs in the tree
     pub fn len(&self) -> usize {
-        // TODO: We need to count this ourselves!
-        self.map.len()
+        self.work.len()
     }
 
     /// Determine if the set is currently empty
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.work.len() == 0
     }
 
     /// Iterator over `(&K, &V)` of the set
     pub fn iter(&self) -> Iter<K, V> {
-        Iter::new(self.map.iter())
+        self.work.kv_iter()
     }
 
     /// Iterator over &K
     pub fn values(&self) -> ValueIter<K, V> {
-        ValueIter::new(self.map.iter())
+        self.work.v_iter()
     }
 
     /// Iterator over &V
     pub fn keys(&self) -> KeyIter<K, V> {
-        KeyIter::new(self.map.iter())
+        self.work.k_iter()
     }
 
     /// Reset this map to an empty state. As this is within the transaction this
     /// change only takes effect once commited. Once cleared, you can begin adding
     /// new writes and changes, again, that will only be visible once commited.
     pub fn clear(&mut self) {
-        self.map.clear();
+        self.work.clear();
     }
 
     /// Insert or update a value by key. If the value previously existed it is returned
@@ -243,54 +295,14 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapWriteTxn<'a, K, V> {
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         // Hash the key.
         let k_hash = hash_key!(k, self.key1, self.key2);
-        // Does it exist?
-        match self.map.get_mut(&k_hash) {
-            Some(va) => {
-                // Does our k exist in va?
-                for (ki, vi) in va.as_mut_slice().iter_mut() {
-                    if *ki == k {
-                        // swap v and vi
-                        let mut ov = v;
-                        mem::swap(&mut ov, vi);
-                        // Return the previous value.
-                        return Some(ov);
-                    }
-                }
-                // If we get here, it wasn't present.
-                va.push((k, v));
-                None
-            }
-            None => {
-                let mut va = SmallVec::new();
-                va.push((k, v));
-                self.map.insert(k_hash, va);
-                None
-            }
-        }
+        self.work.insert(k_hash, k, v)
     }
 
     /// Remove a key if it exists in the tree. If the value exists, we return it as `Some(V)`,
     /// and if it did not exist, we return `None`
     pub fn remove(&mut self, k: &K) -> Option<V> {
         let k_hash = hash_key!(k, self.key1, self.key2);
-        match self.map.get_mut(&k_hash) {
-            Some(va) => {
-                let mut idx = 0;
-                for (ki, _vi) in va.iter() {
-                    if k.eq(ki.borrow()) {
-                        break;
-                    }
-                    idx += 1;
-                }
-                if idx > va.len() {
-                    None
-                } else {
-                    let (_ki, vi) = va.remove(idx);
-                    Some(vi)
-                }
-            }
-            None => None,
-        }
+        self.work.remove(k_hash, k)
     }
 
     /// Get a mutable reference to a value in the tree. This is correctly, and
@@ -298,13 +310,7 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapWriteTxn<'a, K, V> {
     /// other transactions.
     pub fn get_mut(&mut self, k: &K) -> Option<&mut V> {
         let k_hash = hash_key!(k, self.key1, self.key2);
-        self.map.get_mut(&k_hash).and_then(|va| {
-            va.iter_mut()
-                .filter(|(ki, _vi)| k.eq(ki.borrow()))
-                .take(1)
-                .map(|(_kr, vr)| vr)
-                .next()
-        })
+        self.work.get_mut_ref(k_hash, k)
     }
 
     /// Create a read-snapshot of the current map. This does NOT guarantee the map may
@@ -312,7 +318,7 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapWriteTxn<'a, K, V> {
     /// write txn are called while this snapshot is active.
     pub fn to_snapshot(&'a self) -> HashMapReadSnapshot<K, V> {
         HashMapReadSnapshot {
-            map: self.map.to_snapshot(),
+            work: SnapshotType::W(&self.work),
             key1: self.key1,
             key2: self.key2,
         }
@@ -323,13 +329,13 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapWriteTxn<'a, K, V> {
     ///
     /// To abort (unstage changes), just do not call this function.
     pub fn commit(self) {
-        self.map.commit()
+        self.caller.commit(self.work.finalise())
     }
 }
 
 impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapReadTxn<'a, K, V> {
     pub(crate) fn get_txid(&self) -> u64 {
-        self.map.get_txid()
+        self.work.get_txid()
     }
 
     /// Retrieve a value from the tree. If the value exists, a reference is returned
@@ -340,20 +346,7 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapReadTxn<'a, K, V> {
         Q: Hash + Eq,
     {
         let k_hash = hash_key!(k, self.key1, self.key2);
-        self.map.get(&k_hash).and_then(|va| {
-            va.iter()
-                .filter(|(ki, _vi)| k.eq(ki.borrow()))
-                .take(1)
-                .map(|(_kr, vr)| {
-                    // This is some lifetime stripping to deal with the fact that
-                    // this ref IS valid, but it's bound to k_hash, not to &self
-                    // so we ... cheat.
-                    vr as *const V
-                })
-                // ThIs Is ThE GuD RuSt
-                .map(|v| unsafe { &*v as &'a V })
-                .next()
-        })
+        self.work.search(k_hash, k)
     }
 
     /// Assert if a key exists in the tree.
@@ -365,38 +358,36 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapReadTxn<'a, K, V> {
         self.get(k).is_some()
     }
 
-    /*
     /// Returns the current number of k:v pairs in the tree
     pub fn len(&self) -> usize {
-        unimplemented!();
+        self.work.len()
     }
 
     /// Determine if the set is currently empty
     pub fn is_empty(&self) -> bool {
-        unimplemented!();
+        self.work.len() == 0
     }
-    */
 
     /// Iterator over `(&K, &V)` of the set
     pub fn iter(&self) -> Iter<K, V> {
-        Iter::new(self.map.iter())
+        self.work.kv_iter()
     }
 
     /// Iterator over &K
     pub fn values(&self) -> ValueIter<K, V> {
-        ValueIter::new(self.map.iter())
+        self.work.v_iter()
     }
 
     /// Iterator over &V
     pub fn keys(&self) -> KeyIter<K, V> {
-        KeyIter::new(self.map.iter())
+        self.work.k_iter()
     }
 
     /// Create a read-snapshot of the current tree.
     /// As this is the read variant, it IS safe, and guaranteed the tree will not change.
     pub fn to_snapshot(&'a self) -> HashMapReadSnapshot<'a, K, V> {
         HashMapReadSnapshot {
-            map: self.map.to_snapshot(),
+            work: SnapshotType::R(&self.work),
             key1: self.key1,
             key2: self.key2,
         }
@@ -412,14 +403,10 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapReadSnapshot<'a, K, V> {
         Q: Hash + Eq,
     {
         let k_hash = hash_key!(k, self.key1, self.key2);
-        self.map.get(&k_hash).and_then(|va| {
-            va.iter()
-                .filter(|(ki, _vi)| k.eq(ki.borrow()))
-                .take(1)
-                .map(|(_kr, vr)| vr as *const V)
-                .map(|v| unsafe { &*v as &'a V })
-                .next()
-        })
+        match self.work {
+            SnapshotType::R(work) => work.search(k_hash, k),
+            SnapshotType::W(work) => work.search(k_hash, k),
+        }
     }
 
     /// Assert if a key exists in the tree.
@@ -431,31 +418,43 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapReadSnapshot<'a, K, V> {
         self.get(k).is_some()
     }
 
-    /*
     /// Returns the current number of k:v pairs in the tree
     pub fn len(&self) -> usize {
-        unimplemented!();
+        match self.work {
+            SnapshotType::R(work) => work.len(),
+            SnapshotType::W(work) => work.len(),
+        }
     }
 
     /// Determine if the set is currently empty
     pub fn is_empty(&self) -> bool {
-        unimplemented!();
+        self.len() == 0
     }
-    */
+
+    // (adv) range
 
     /// Iterator over `(&K, &V)` of the set
     pub fn iter(&self) -> Iter<K, V> {
-        Iter::new(self.map.iter())
+        match self.work {
+            SnapshotType::R(work) => work.kv_iter(),
+            SnapshotType::W(work) => work.kv_iter(),
+        }
     }
 
     /// Iterator over &K
     pub fn values(&self) -> ValueIter<K, V> {
-        ValueIter::new(self.map.iter())
+        match self.work {
+            SnapshotType::R(work) => work.v_iter(),
+            SnapshotType::W(work) => work.v_iter(),
+        }
     }
 
     /// Iterator over &V
     pub fn keys(&self) -> KeyIter<K, V> {
-        KeyIter::new(self.map.iter())
+        match self.work {
+            SnapshotType::R(work) => work.k_iter(),
+            SnapshotType::W(work) => work.k_iter(),
+        }
     }
 }
 

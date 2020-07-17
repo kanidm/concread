@@ -1,6 +1,6 @@
 [package]
 name = "concread"
-version = "0.1.19"
+version = "0.1.20"
 authors = ["William Brown <william@blackhats.net.au>"]
 
 description = "Concurrently Readable Data-Structures for Rust"
@@ -22,14 +22,10 @@ crossbeam-utils = "0.7"
 crossbeam = "0.7"
 parking_lot = "0.10"
 num = "0.2.0"
-smallvec = "1.2"
+smallvec = "1.4"
 ahash = "0.3"
 rand = "0.7"
-libc = "0.2"
-
-[dependencies.packed_simd]
-version = "0.3"
-optional = true
+packed_simd = { version = "0.3", optional = true }
 
 [dev-dependencies]
 time = "0.2"

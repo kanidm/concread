@@ -30,10 +30,14 @@
 extern crate ahash;
 extern crate crossbeam;
 extern crate crossbeam_epoch;
-extern crate libc;
+// extern crate libc;
 extern crate parking_lot;
 extern crate rand;
+#[macro_use]
 extern crate smallvec;
+
+#[cfg(feature = "simd_support")]
+extern crate packed_simd;
 
 pub mod cache;
 pub mod collections;

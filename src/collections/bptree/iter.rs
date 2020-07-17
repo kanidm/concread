@@ -236,8 +236,8 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for ValueIter<'a, K, V> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::node::{Branch, Leaf, Node, L_CAPACITY};
     use super::super::cursor::CursorWrite;
+    use super::super::node::{Branch, Leaf, Node, L_CAPACITY};
     use super::{Iter, LeafIter};
 
     fn create_leaf_node_full(vbase: usize) -> *mut Node<usize, usize> {

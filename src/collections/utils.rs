@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::mem::MaybeUninit;
+// use std::mem::MaybeUninit;
 use std::ptr;
 
 pub(crate) unsafe fn slice_insert<T>(slice: &mut [T], new: T, idx: usize) {
@@ -44,6 +44,7 @@ pub(crate) unsafe fn slice_move<T>(
     ptr::copy_nonoverlapping(src_ptr, dst_ptr, count);
 }
 
+/*
 pub(crate) unsafe fn slice_slide_and_drop<T>(
     slice: &mut [MaybeUninit<T>],
     idx: usize,
@@ -62,6 +63,7 @@ pub(crate) unsafe fn slice_slide<T>(slice: &mut [T], idx: usize, count: usize) {
     // now move everything down.
     ptr::copy(slice.as_ptr().add(idx + 1), slice.as_mut_ptr(), count);
 }
+*/
 
 pub(crate) fn slice_search_linear<K, Q: ?Sized>(slice: &[K], k: &Q) -> Result<usize, usize>
 where
