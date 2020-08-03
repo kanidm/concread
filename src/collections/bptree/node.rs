@@ -1,6 +1,7 @@
 use super::states::*;
 use crate::collections::utils::*;
 // use libc::{c_void, mprotect, PROT_READ, PROT_WRITE};
+use crossbeam::utils::CachePadded;
 use std::borrow::Borrow;
 use std::fmt::{self, Debug, Error};
 use std::marker::PhantomData;
@@ -128,14 +129,14 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     pub(crate) fn new_leaf(txid: u64) -> *mut Leaf<K, V> {
         // println!("Req new leaf");
         debug_assert!(txid < (TXID_MASK >> TXID_SHF));
-        let x: Box<Leaf<K, V>> = Box::new(Leaf {
+        let x: Box<CachePadded<Leaf<K, V>>> = Box::new(CachePadded::new(Leaf {
             meta: Meta((txid << TXID_SHF) | FLAG_LEAF),
             key: unsafe { MaybeUninit::uninit().assume_init() },
             values: unsafe { MaybeUninit::uninit().assume_init() },
             #[cfg(all(test, not(miri)))]
             nid: alloc_nid(),
-        });
-        Box::into_raw(x) as *mut _
+        }));
+        Box::into_raw(x) as *mut Leaf<K, V>
     }
 
     fn new_leaf_ins(flags: u64, k: K, v: V) -> *mut Leaf<K, V> {
@@ -144,7 +145,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         debug_assert!((flags & FLAG_MASK) == FLAG_LEAF);
         // Let the flag, txid and the count of value 1 through.
         let txid = flags & (TXID_MASK | FLAG_MASK | 1);
-        let x: Box<Leaf<K, V>> = Box::new(Leaf {
+        let x: Box<CachePadded<Leaf<K, V>>> = Box::new(CachePadded::new(Leaf {
             meta: Meta(txid),
             #[cfg(feature = "skinny")]
             key: [
@@ -180,7 +181,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
             ],
             #[cfg(all(test, not(miri)))]
             nid: alloc_nid(),
-        });
+        }));
         let nnode = Box::into_raw(x) as *mut Leaf<K, V>;
         nnode
     }
@@ -196,7 +197,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         debug_assert!(unsafe { (*l).verify() });
         debug_assert!(unsafe { (*r).verify() });
         debug_assert!(txid < (TXID_MASK >> TXID_SHF));
-        let x: Box<Branch<K, V>> = Box::new(Branch {
+        let x: Box<CachePadded<Branch<K, V>>> = Box::new(CachePadded::new(Branch {
             // This sets the default (key) count to 1, since we take an l/r
             meta: Meta((txid << TXID_SHF) | FLAG_BRANCH | 1),
             #[cfg(feature = "skinny")]
@@ -230,9 +231,9 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
             ],
             #[cfg(all(test, not(miri)))]
             nid: alloc_nid(),
-        });
+        }));
         debug_assert!(x.verify());
-        Box::into_raw(x)
+        Box::into_raw(x) as *mut Branch<K, V>
     }
 
     #[inline(always)]
@@ -569,14 +570,14 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
             // debug_assert!(false);
             // Diff txn, must clone.
             let new_txid = (self.meta.0 & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF);
-            let mut x: Box<Leaf<K, V>> = Box::new(Leaf {
+            let mut x: Box<CachePadded<Leaf<K, V>>> = Box::new(CachePadded::new(Leaf {
                 // Need to preserve count.
                 meta: Meta(new_txid),
                 key: unsafe { MaybeUninit::uninit().assume_init() },
                 values: unsafe { MaybeUninit::uninit().assume_init() },
                 #[cfg(all(test, not(miri)))]
                 nid: alloc_nid(),
-            });
+            }));
 
             // Copy in the values to the correct location.
             for idx in 0..self.count() {
@@ -872,7 +873,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
             // println!("Req clone branch");
             // Diff txn, must clone.
             let new_txid = (self.meta.0 & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF);
-            let mut x: Box<Branch<K, V>> = Box::new(Branch {
+            let mut x: Box<CachePadded<Branch<K, V>>> = Box::new(CachePadded::new(Branch {
                 // Need to preserve count.
                 meta: Meta(new_txid),
                 key: unsafe { MaybeUninit::uninit().assume_init() },
@@ -880,7 +881,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
                 nodes: self.nodes.clone(),
                 #[cfg(all(test, not(miri)))]
                 nid: alloc_nid(),
-            });
+            }));
             // Copy in the keys to the correct location.
             for idx in 0..self.count() {
                 unsafe {

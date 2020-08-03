@@ -41,6 +41,7 @@ extern crate packed_simd;
 
 pub mod cache;
 pub mod collections;
+// pub mod hpcell;
 pub mod cowcell;
 pub mod ebrcell;
 #[cfg(test)]

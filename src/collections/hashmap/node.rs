@@ -1,6 +1,7 @@
 use super::simd::*;
 use super::states::*;
 use crate::collections::utils::*;
+use crossbeam::utils::CachePadded;
 use std::borrow::Borrow;
 use std::fmt::{self, Debug, Error};
 use std::hash::Hash;
@@ -180,7 +181,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
     pub(crate) fn new_leaf(txid: u64) -> *mut Leaf<K, V> {
         // println!("Req new hash leaf");
         debug_assert!(txid < (TXID_MASK >> TXID_SHF));
-        let x: Box<LeafSimd<K, V>> = Box::new(LeafSimd {
+        let x: Box<CachePadded<LeafSimd<K, V>>> = Box::new(CachePadded::new(LeafSimd {
             ctrl: u64x8::new(
                 (txid << TXID_SHF) | FLAG_HASH_LEAF,
                 u64::MAX,
@@ -196,7 +197,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
             values: unsafe { MaybeUninit::uninit().assume_init() },
             #[cfg(all(test, not(miri)))]
             nid: alloc_nid(),
-        });
+        }));
         Box::into_raw(x) as *mut Leaf<K, V>
     }
 
@@ -204,7 +205,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
         // println!("Req new hash leaf ins");
         // debug_assert!(false);
         debug_assert!((flags & FLAG_MASK) == FLAG_HASH_LEAF);
-        let x: Box<LeafSimd<K, V>> = Box::new(LeafSimd {
+        let x: Box<CachePadded<LeafSimd<K, V>>> = Box::new(CachePadded::new(LeafSimd {
             // Let the flag, txid and the slots of value 1 through.
             ctrl: u64x8::new(
                 flags & (TXID_MASK | FLAG_MASK | 1),
@@ -229,7 +230,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
             ],
             #[cfg(all(test, not(miri)))]
             nid: alloc_nid(),
-        });
+        }));
         let nnode = Box::into_raw(x) as *mut Leaf<K, V>;
         nnode
     }
@@ -250,7 +251,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
         debug_assert!(unsafe { (*r).verify() });
         debug_assert!(txid < (TXID_MASK >> TXID_SHF));
         let pivot = unsafe { (*r).min() };
-        let x: Box<BranchSimd<K, V>> = Box::new(BranchSimd {
+        let x: Box<CachePadded<BranchSimd<K, V>>> = Box::new(CachePadded::new(BranchSimd {
             // This sets the default (key) slots to 1, since we take an l/r
             ctrl: u64x8::new(
                 (txid << TXID_SHF) | FLAG_HASH_BRANCH | 1,
@@ -276,7 +277,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
             ],
             #[cfg(all(test, not(miri)))]
             nid: alloc_nid(),
-        });
+        }));
         let b = Box::into_raw(x) as *mut Branch<K, V>;
         debug_assert!(unsafe { (*b).verify() });
         b
@@ -616,7 +617,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             // debug_assert!(false);
             // Diff txn, must clone.
             let new_txid = (self.meta.0 & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF);
-            let x: Box<LeafSimd<K, V>> = Box::new(LeafSimd {
+            let x: Box<CachePadded<LeafSimd<K, V>>> = Box::new(CachePadded::new(LeafSimd {
                 ctrl: u64x8::new(
                     new_txid,
                     u64::MAX,
@@ -632,7 +633,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
                 values: unsafe { MaybeUninit::uninit().assume_init() },
                 #[cfg(all(test, not(miri)))]
                 nid: alloc_nid(),
-            });
+            }));
 
             let x = Box::into_raw(x);
             let xr = x as *mut Leaf<K, V>;
@@ -997,7 +998,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
             // Diff txn, must clone.
             let new_txid = (self.meta.0 & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF);
 
-            let x: Box<BranchSimd<K, V>> = Box::new(BranchSimd {
+            let x: Box<CachePadded<BranchSimd<K, V>>> = Box::new(CachePadded::new(BranchSimd {
                 // This sets the default (key) slots to 1, since we take an l/r
                 ctrl: u64x8::new(
                     new_txid,
@@ -1015,7 +1016,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 nodes: self.nodes.clone(),
                 #[cfg(all(test, not(miri)))]
                 nid: alloc_nid(),
-            });
+            }));
 
             let x = Box::into_raw(x);
             let xr = x as *mut Branch<K, V>;
