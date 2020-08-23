@@ -148,7 +148,7 @@ where
 
 /// A concurrently readable adaptive replacement cache. Operations are performed on the
 /// cache via read and write operations.
-pub struct Arc<K, V>
+pub struct ARCache<K, V>
 where
     K: Hash + Eq + Ord + Clone + Debug,
     V: Clone + Debug,
@@ -182,7 +182,7 @@ where
 /// An active read transaction over the cache. The data is this cache is guaranteed to be
 /// valid at the point in time the read is created. You may include items during a cache
 /// miss via the "insert" function.
-pub struct ArcReadTxn<'a, K, V>
+pub struct ARCacheReadTxn<'a, K, V>
 where
     K: Hash + Eq + Ord + Clone + Debug,
     V: Clone + Debug,
@@ -200,7 +200,7 @@ where
 /// from readers, and may be rolled-back if an error occurs. Changes only become
 /// globally visible once you call "commit". Items may be added to the cache on
 /// a miss via "insert", and you can explicitly remove items by calling "remove".
-pub struct ArcWriteTxn<'a, K, V>
+pub struct ARCacheWriteTxn<'a, K, V>
 where
     K: Hash + Eq + Ord + Clone + Debug,
     V: Clone + Debug,
