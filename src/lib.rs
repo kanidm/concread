@@ -42,8 +42,6 @@ extern crate packed_simd;
 // This is where the gud rust lives.
 mod utils;
 
-pub mod cache;
-pub mod collections;
 // pub mod hpcell;
 pub mod cowcell;
 pub mod ebrcell;
