@@ -1,5 +1,5 @@
 use super::states::*;
-use crate::collections::utils::*;
+use crate::utils::*;
 // use libc::{c_void, mprotect, PROT_READ, PROT_WRITE};
 use crossbeam::utils::CachePadded;
 use std::borrow::Borrow;

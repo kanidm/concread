@@ -39,15 +39,25 @@ extern crate smallvec;
 #[cfg(feature = "simd_support")]
 extern crate packed_simd;
 
-pub mod cache;
-pub mod collections;
+// This is where the gud rust lives.
+mod utils;
+
 // pub mod hpcell;
 pub mod cowcell;
 pub mod ebrcell;
+
+pub mod bptree;
+pub mod hashmap;
+pub mod arcache;
+
+// #[cfg(test)]
+// mod maple_tree;
 #[cfg(test)]
 extern crate crossbeam_utils;
 #[cfg(test)]
 mod lincowcell;
+
+
 
 pub use cowcell::CowCell;
 pub use ebrcell::EbrCell;

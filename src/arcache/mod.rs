@@ -1,6 +1,6 @@
-//! Arc - A concurrently readable adaptive replacement cache.
+//! ARCache - A concurrently readable adaptive replacement cache.
 //!
-//! An Arc is used in place of a `RwLock<LruCache>` or `Mutex<LruCache>`.
+//! An ARCache is used in place of a `RwLock<LruCache>` or `Mutex<LruCache>`.
 //! This structure is transactional, meaning that readers have guaranteed
 //! point-in-time views of the cache and their items, while allowing writers
 //! to proceed with inclusions and cache state management in parallel.
@@ -14,7 +14,7 @@ mod ll;
 
 use self::ll::{LLNode, LL};
 // use crate::collections::bptree::*;
-use crate::collections::hashmap::*;
+use crate::hashmap::*;
 use crate::cowcell::{CowCell, CowCellReadTxn};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use parking_lot::{Mutex, RwLock};
@@ -148,7 +148,7 @@ where
 
 /// A concurrently readable adaptive replacement cache. Operations are performed on the
 /// cache via read and write operations.
-pub struct Arc<K, V>
+pub struct ARCache<K, V>
 where
     K: Hash + Eq + Ord + Clone + Debug,
     V: Clone + Debug,
@@ -164,8 +164,8 @@ where
     stats: CowCell<CacheStats>,
 }
 
-unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Send for Arc<K, V> {}
-unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Sync for Arc<K, V> {}
+unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Send for ARCache<K, V> {}
+unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Sync for ARCache<K, V> {}
 
 struct ReadCache<K, V>
 where
@@ -182,12 +182,12 @@ where
 /// An active read transaction over the cache. The data is this cache is guaranteed to be
 /// valid at the point in time the read is created. You may include items during a cache
 /// miss via the "insert" function.
-pub struct ArcReadTxn<'a, K, V>
+pub struct ARCacheReadTxn<'a, K, V>
 where
     K: Hash + Eq + Ord + Clone + Debug,
     V: Clone + Debug,
 {
-    caller: &'a Arc<K, V>,
+    caller: &'a ARCache<K, V>,
     // ro_txn to cache
     cache: HashMapReadTxn<'a, K, CacheItem<K, V>>,
     tlocal: Option<ReadCache<K, V>>,
@@ -200,12 +200,12 @@ where
 /// from readers, and may be rolled-back if an error occurs. Changes only become
 /// globally visible once you call "commit". Items may be added to the cache on
 /// a miss via "insert", and you can explicitly remove items by calling "remove".
-pub struct ArcWriteTxn<'a, K, V>
+pub struct ARCacheWriteTxn<'a, K, V>
 where
     K: Hash + Eq + Ord + Clone + Debug,
     V: Clone + Debug,
 {
-    caller: &'a Arc<K, V>,
+    caller: &'a ARCache<K, V>,
     // wr_txn to cache
     cache: HashMapWriteTxn<'a, K, CacheItem<K, V>>,
     // Cache of missed items (w_ dirty/clean)
@@ -372,8 +372,8 @@ macro_rules! evict_to_haunted_len {
     }};
 }
 
-impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
-    /// Create a new Arc, that derives it's size based on your expected workload.
+impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCache<K, V> {
+    /// Create a new ARCache, that derives it's size based on your expected workload.
     ///
     /// The values are total number of items you want to have in memory, the number
     /// of read threads you expect concurrently, the expected average number of cache
@@ -413,7 +413,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         Self::new_size(max, read_max)
     }
 
-    /// Create a new Arc, with a capacity of `max` main cache items and `read_max`
+    /// Create a new ARCache, with a capacity of `max` main cache items and `read_max`
     /// Note that due to the way the cache operates, the number of items can and
     /// will exceed `max` on a regular basis, so you should consider using `new`
     /// and specifying your expected workload parameters to have a better derived
@@ -445,7 +445,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
             p_weight: 0,
             all_seen_keys: 0,
         });
-        Arc {
+        ARCache {
             cache: HashMap::new(),
             shared,
             inner,
@@ -456,7 +456,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
     /// Begin a read operation on the cache. This reader has a thread-local cache for items
     /// that are localled included via `insert`, and can communicate back to the main cache
     /// to safely include items.
-    pub fn read(&self) -> ArcReadTxn<K, V> {
+    pub fn read(&self) -> ARCacheReadTxn<K, V> {
         let rshared = self.shared.read();
         let tlocal = if rshared.read_max > 0 {
             Some(ReadCache {
@@ -467,7 +467,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         } else {
             None
         };
-        ArcReadTxn {
+        ARCacheReadTxn {
             caller: &self,
             cache: self.cache.read(),
             tlocal,
@@ -479,8 +479,8 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
     /// Begin a write operation on the cache. This writer has a thread-local store
     /// for all items that have been included or dirtied in the transactions, items
     /// may be removed from this cache (ie deleted, invalidated).
-    pub fn write(&self) -> ArcWriteTxn<K, V> {
-        ArcWriteTxn {
+    pub fn write(&self) -> ARCacheWriteTxn<K, V> {
+        ARCacheWriteTxn {
             caller: &self,
             cache: self.cache.write(),
             tlocal: Map::new(),
@@ -495,8 +495,8 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
         self.stats.read()
     }
 
-    fn try_write(&self) -> Option<ArcWriteTxn<K, V>> {
-        self.cache.try_write().map(|cache| ArcWriteTxn {
+    fn try_write(&self) -> Option<ARCacheWriteTxn<K, V>> {
+        self.cache.try_write().map(|cache| ARCacheWriteTxn {
             caller: &self,
             cache,
             tlocal: Map::new(),
@@ -1132,7 +1132,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Arc<K, V> {
     }
 }
 
-impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K, V> {
+impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheWriteTxn<'a, K, V> {
     /// Commit the changes of this writer, making them globally visible. This causes
     /// all items written to this thread's local store to become visible in the main
     /// cache.
@@ -1362,7 +1362,7 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcWriteTxn<'a, K
     // to_snapshot
 }
 
-impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K, V> {
+impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheReadTxn<'a, K, V> {
     /// Attempt to retieve a k-v pair from the cache. If it is present in the main cache OR
     /// the thread local cache, a `Some` is returned, else you will recieve a `None`. On a
     /// `None`, you must then consult the external data source that this structure is acting
@@ -1454,7 +1454,7 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ArcReadTxn<'a, K,
     }
 }
 
-impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Drop for ArcReadTxn<'a, K, V> {
+impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Drop for ARCacheReadTxn<'a, K, V> {
     fn drop(&mut self) {
         self.caller.try_quiesce();
     }
@@ -1462,9 +1462,9 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Drop for ArcReadT
 
 #[cfg(test)]
 mod tests {
-    use crate::cache::arc::Arc;
-    use crate::cache::arc::CStat;
-    use crate::cache::arc::CacheState;
+    use crate::arcache::ARCache as Arc;
+    use crate::arcache::CStat;
+    use crate::arcache::CacheState;
 
     #[test]
     fn test_cache_arc_basic() {

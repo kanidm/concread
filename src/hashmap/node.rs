@@ -1,6 +1,6 @@
 use super::simd::*;
 use super::states::*;
-use crate::collections::utils::*;
+use crate::utils::*;
 use crossbeam::utils::CachePadded;
 use std::borrow::Borrow;
 use std::fmt::{self, Debug, Error};
