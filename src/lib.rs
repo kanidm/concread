@@ -22,6 +22,10 @@
 //!
 //! In the future, a concurrent BTree and HashTree will be added, that can be used inplace
 //! of a `RwLock<BTreeMap>` or `RwLock<HashMap>`. Stay tuned!
+//!
+//! Asynch lock capable versions of these structures exist with the feature flag `asynch`. These
+//! can then be found in the asynch submodule of each datastructure type. 
+//! IE `concread::hashmap::HashMap` and `concread::hashmap::asynch::HashMap`
 
 // #![deny(warnings)]
 #![warn(unused_extern_crates)]

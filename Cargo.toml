@@ -38,3 +38,5 @@ async-std = "1.6"
 name = "unsound"
 path = "src/unsound.rs"
 
+[package.metadata.docs.rs]
+rustc-args = ["--features", "asynch"]

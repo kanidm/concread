@@ -11,8 +11,10 @@
 //! compliant Cache.
 
 mod ll;
+#[macro_use]
 mod common;
 pub mod cache;
+#[cfg(feature = "asynch")]
 pub mod asynch;
 
 pub use self::cache::{ARCache, ARCacheReadTxn, ARCacheWriteTxn};
