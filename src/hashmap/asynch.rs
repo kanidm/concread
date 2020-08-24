@@ -9,15 +9,14 @@ use std::borrow::Borrow;
 use super::cursor::CursorReadOps;
 use super::cursor::{CursorRead, CursorWrite, SuperBlock};
 use super::iter::*;
-use parking_lot::{Mutex, MutexGuard};
+use tokio::sync::{Mutex, MutexGuard};
+use parking_lot::Mutex as SyncMutex;
+
 use rand::Rng;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::iter::FromIterator;
 use std::sync::Arc;
-
-// #[cfg(feature = "simd_support")] use packed_simd::*;
-// #[cfg(feature = "simd_support")]
 
 macro_rules! hash_key {
     ($k:expr, $key1:expr, $key2:expr) => {{
@@ -52,7 +51,7 @@ where
     V: Clone,
 {
     write: Mutex<()>,
-    active: Mutex<Arc<SuperBlock<K, V>>>,
+    active: SyncMutex<Arc<SuperBlock<K, V>>>,
     key1: u64,
     key2: u64,
 }
@@ -130,7 +129,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> HashMap<K, V> {
     pub fn new() -> Self {
         HashMap {
             write: Mutex::new(()),
-            active: Mutex::new(Arc::new(SuperBlock::default())),
+            active: SyncMutex::new(Arc::new(SuperBlock::default())),
             key1: rand::thread_rng().gen::<u64>(),
             key2: rand::thread_rng().gen::<u64>(),
         }
@@ -153,9 +152,9 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> HashMap<K, V> {
 
     /// Initiate a write transaction for the map, exclusive to this
     /// writer, and concurrently to all existing reads.
-    pub fn write(&self) -> HashMapWriteTxn<K, V> {
+    pub async fn write<'a>(&'a self) -> HashMapWriteTxn<'a, K, V> {
         /* Take the exclusive write lock first */
-        let mguard = self.write.lock();
+        let mguard = self.write.lock().await;
         /* Now take a ro-txn to get the data copied */
         let rguard = self.active.lock();
         /*
@@ -181,7 +180,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> HashMap<K, V> {
     /// Attempt to create a new write, returns None if another writer
     /// already exists.
     pub fn try_write(&self) -> Option<HashMapWriteTxn<K, V>> {
-        self.write.try_lock().map(|mguard| {
+        self.write.try_lock().ok().map(|mguard| {
             let rguard = self.active.lock();
             let sblock: &SuperBlock<K, V> = rguard.as_ref();
             let cursor = CursorWrite::new(sblock);
@@ -218,7 +217,8 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> HashMap<K, V> {
 impl<K: Hash + Eq + Clone + Debug, V: Clone> FromIterator<(K, V)> for HashMap<K, V> {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let hmap = HashMap::new();
-        let mut hmap_write = hmap.write();
+        let mut hmap_write = hmap.try_write()
+            .expect("Unable to fail");
         hmap_write.extend(iter);
         hmap_write.commit();
         hmap
@@ -465,11 +465,12 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapReadSnapshot<'a, K, V> {
 #[cfg(test)]
 mod tests {
     use super::HashMap;
+    use async_std::task;
 
     #[test]
     fn test_hashmap_basic_write() {
         let hmap: HashMap<usize, usize> = HashMap::new();
-        let mut hmap_write = hmap.write();
+        let mut hmap_write = task::block_on(hmap.write());
 
         hmap_write.insert(10, 10);
         hmap_write.insert(15, 15);
@@ -500,7 +501,7 @@ mod tests {
     #[test]
     fn test_hashmap_basic_read_write() {
         let hmap: HashMap<usize, usize> = HashMap::new();
-        let mut hmap_w1 = hmap.write();
+        let mut hmap_w1 = task::block_on(hmap.write());
         hmap_w1.insert(10, 10);
         hmap_w1.insert(15, 15);
         hmap_w1.commit();
@@ -510,7 +511,7 @@ mod tests {
         assert!(hmap_r1.contains_key(&15));
         assert!(!hmap_r1.contains_key(&20));
 
-        let mut hmap_w2 = hmap.write();
+        let mut hmap_w2 = task::block_on(hmap.write());
         hmap_w2.insert(20, 20);
         hmap_w2.commit();
 
@@ -527,7 +528,7 @@ mod tests {
     #[test]
     fn test_hashmap_basic_read_snapshot() {
         let hmap: HashMap<usize, usize> = HashMap::new();
-        let mut hmap_w1 = hmap.write();
+        let mut hmap_w1 = task::block_on(hmap.write());
         hmap_w1.insert(10, 10);
         hmap_w1.insert(15, 15);
 
@@ -540,7 +541,7 @@ mod tests {
     #[test]
     fn test_hashmap_basic_iter() {
         let hmap: HashMap<usize, usize> = HashMap::new();
-        let mut hmap_w1 = hmap.write();
+        let mut hmap_w1 = task::block_on(hmap.write());
         assert!(hmap_w1.iter().count() == 0);
 
         hmap_w1.insert(10, 10);

@@ -1947,7 +1947,7 @@ mod tests {
         let mut ins: Vec<usize> = (1..(H_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
-        let mut sblock = SuperBlock::default();
+        let sblock = SuperBlock::default();
         let mut wcurs = CursorWrite::new(&sblock);
 
         for v in ins.into_iter() {

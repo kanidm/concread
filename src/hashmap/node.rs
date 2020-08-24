@@ -39,6 +39,8 @@ pub(crate) const HBV_CAPACITY: usize = H_CAPACITY + 1;
 
 const DEFAULT_BUCKET_ALLOC: usize = 1;
 
+// Need to allow to parallel simd support
+#[allow(non_camel_case_types, dead_code)]
 #[cfg(not(feature = "simd_support"))]
 pub struct u64x8 {
     data: [u64; 8],
@@ -520,6 +522,7 @@ impl Meta {
 
 impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
     #[inline(always)]
+    #[cfg(test)]
     fn set_slots(&mut self, c: usize) {
         debug_assert_leaf!(self);
         self.meta.set_slots(c)
@@ -945,6 +948,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Drop for Leaf<K, V> {
 
 impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
     #[inline(always)]
+    #[cfg(test)]
     fn set_slots(&mut self, c: usize) {
         debug_assert_branch!(self);
         self.meta.set_slots(c)

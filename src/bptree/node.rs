@@ -252,6 +252,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     }
 
     #[inline(always)]
+    #[cfg(test)]
     pub(crate) fn get_txid(&self) -> u64 {
         self.meta.get_txid()
     }
@@ -262,6 +263,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     }
 
     #[inline(always)]
+    #[cfg(test)]
     pub(crate) fn is_branch(&self) -> bool {
         self.meta.is_branch()
     }
@@ -486,6 +488,7 @@ impl Meta {
 
 impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
     #[inline(always)]
+    #[cfg(test)]
     fn set_count(&mut self, c: usize) {
         debug_assert_leaf!(self);
         self.meta.set_count(c)
@@ -821,6 +824,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Drop for Leaf<K, V> {
 
 impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
     #[inline(always)]
+    #[cfg(test)]
     fn set_count(&mut self, c: usize) {
         debug_assert_branch!(self);
         self.meta.set_count(c)

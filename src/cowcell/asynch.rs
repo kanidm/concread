@@ -9,10 +9,8 @@
 //! but has better behaviour with very long running read operations, and more
 //! accurate memory reclaim behaviour.
 
-#[cfg(feature = "asynch")]
-pub mod asynch;
-
-use parking_lot::{Mutex, MutexGuard};
+use tokio::sync::{Mutex, MutexGuard};
+use parking_lot::Mutex as SyncMutex;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
@@ -60,7 +58,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct CowCell<T> {
     write: Mutex<()>,
-    active: Mutex<Arc<T>>,
+    active: SyncMutex<Arc<T>>,
 }
 
 /// A `CowCell` Write Transaction handle.
@@ -103,7 +101,7 @@ where
     pub fn new(data: T) -> Self {
         CowCell {
             write: Mutex::new(()),
-            active: Mutex::new(Arc::new(data)),
+            active: SyncMutex::new(Arc::new(data)),
         }
     }
 
@@ -119,9 +117,9 @@ where
     /// Begin a write transaction, returning a write guard. The content of the
     /// write is only visible to this thread, and is not visible to any reader
     /// until `commit()` is called.
-    pub fn write(&self) -> CowCellWriteTxn<T> {
+    pub async fn write<'a>(&'a self) -> CowCellWriteTxn<'a, T> {
         /* Take the exclusive write lock first */
-        let mguard = self.write.lock();
+        let mguard = self.write.lock().await;
         // We delay copying until the first get_mut.
         let read = {
             let rwguard = self.active.lock();
@@ -141,7 +139,9 @@ where
     /// `write(&self)`
     pub fn try_write(&self) -> Option<CowCellWriteTxn<T>> {
         /* Take the exclusive write lock first */
-        self.write.try_lock().map(|mguard| {
+        self.write.try_lock()
+            .ok()
+            .map(|mguard| {
             // We delay copying until the first get_mut.
             let read = {
                 let rwguard = self.active.lock();
@@ -235,8 +235,9 @@ where
 mod tests {
     use super::CowCell;
     use std::sync::atomic::{AtomicUsize, Ordering};
-
     use crossbeam_utils::thread::scope;
+
+    use async_std::task;
 
     #[test]
     fn test_deref_mut() {
@@ -244,7 +245,7 @@ mod tests {
         let cc = CowCell::new(data);
         {
             /* Take a write txn */
-            let mut cc_wrtxn = cc.write();
+            let mut cc_wrtxn = task::block_on(cc.write());
             *cc_wrtxn = 1;
             cc_wrtxn.commit();
         }
@@ -274,7 +275,7 @@ mod tests {
 
         {
             /* Take a write txn */
-            let mut cc_wrtxn = cc.write();
+            let mut cc_wrtxn = task::block_on(cc.write());
             /* Get the data ... */
             {
                 let mut_ptr = cc_wrtxn.get_mut();
@@ -330,7 +331,7 @@ mod tests {
                     scope.spawn(move |_| {
                         let mut last_value: i64 = 0;
                         while last_value < MAX_TARGET {
-                            let mut cc_wrtxn = cc_ref.write();
+                            let mut cc_wrtxn = task::block_on(cc_ref.write());
                             {
                                 let mut_ptr = cc_wrtxn.get_mut();
                                 assert!(*mut_ptr >= last_value);
@@ -367,7 +368,7 @@ mod tests {
         while GC_COUNT.load(Ordering::Acquire) < 50 {
             // thread::sleep(std::time::Duration::from_millis(200));
             {
-                let mut cc_wrtxn = cc.write();
+                let mut cc_wrtxn = task::block_on(cc.write());
                 {
                     let mut_ptr = cc_wrtxn.get_mut();
                     mut_ptr.data = mut_ptr.data + 1;

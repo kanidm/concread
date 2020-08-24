@@ -27,17 +27,14 @@
 #![warn(unused_extern_crates)]
 #![warn(missing_docs)]
 
-extern crate ahash;
-extern crate crossbeam;
-extern crate crossbeam_epoch;
-// extern crate libc;
-extern crate parking_lot;
-extern crate rand;
 #[macro_use]
 extern crate smallvec;
 
-#[cfg(feature = "simd_support")]
-extern crate packed_simd;
+// #[cfg(feature = "simd_support")]
+// extern crate packed_simd;
+
+// #[cfg(feature = "asynch")]
+// extern crate tokio;
 
 // This is where the gud rust lives.
 mod utils;
@@ -52,8 +49,6 @@ pub mod arcache;
 
 // #[cfg(test)]
 // mod maple_tree;
-#[cfg(test)]
-extern crate crossbeam_utils;
 #[cfg(test)]
 mod lincowcell;
 

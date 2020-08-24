@@ -22,6 +22,8 @@ mod macros;
 mod cursor;
 pub mod iter;
 pub mod map;
+#[cfg(feature = "asynch")]
+pub mod asynch;
 mod node;
 mod simd;
 mod states;

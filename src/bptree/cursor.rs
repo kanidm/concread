@@ -474,6 +474,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         self.get_root_ref().get_txid()
     }
 
+    #[cfg(test)]
     pub(crate) fn tree_density(&self) -> (usize, usize) {
         self.get_root_ref().tree_density()
     }
@@ -2188,7 +2189,7 @@ mod tests {
         let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
-        let mut sblock = SuperBlock::default();
+        let sblock = SuperBlock::default();
         let mut wcurs = CursorWrite::new(&sblock);
 
         for v in ins.into_iter() {
