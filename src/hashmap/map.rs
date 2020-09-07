@@ -53,8 +53,8 @@ where
 {
     write: Mutex<()>,
     active: Mutex<Arc<SuperBlock<K, V>>>,
-    key1: u64,
-    key2: u64,
+    key1: u128,
+    key2: u128,
 }
 
 unsafe impl<K: Hash + Eq + Clone + Debug, V: Clone> Send for HashMap<K, V> {}
@@ -71,8 +71,8 @@ where
     _caller: &'a HashMap<K, V>,
     pin: Arc<SuperBlock<K, V>>,
     work: CursorRead<K, V>,
-    key1: u64,
-    key2: u64,
+    key1: u128,
+    key2: u128,
 }
 
 /// An active write transaction for a `HashMap`. The data in this tree
@@ -88,8 +88,8 @@ where
     work: CursorWrite<K, V>,
     caller: &'a HashMap<K, V>,
     _guard: MutexGuard<'a, ()>,
-    key1: u64,
-    key2: u64,
+    key1: u128,
+    key2: u128,
 }
 
 enum SnapshotType<'a, K, V>
@@ -115,8 +115,8 @@ where
     V: Clone,
 {
     work: SnapshotType<'a, K, V>,
-    key1: u64,
-    key2: u64,
+    key1: u128,
+    key2: u128,
 }
 
 impl<K: Hash + Eq + Clone + Debug, V: Clone> Default for HashMap<K, V> {
@@ -131,8 +131,8 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> HashMap<K, V> {
         HashMap {
             write: Mutex::new(()),
             active: Mutex::new(Arc::new(SuperBlock::default())),
-            key1: rand::thread_rng().gen::<u64>(),
-            key2: rand::thread_rng().gen::<u64>(),
+            key1: rand::thread_rng().gen::<u128>(),
+            key2: rand::thread_rng().gen::<u128>(),
         }
     }
 

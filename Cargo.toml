@@ -20,10 +20,10 @@ skinny = []
 crossbeam-epoch = "0.8"
 crossbeam-utils = "0.7"
 crossbeam = "0.7"
-parking_lot = "0.10"
-num = "0.2.0"
+parking_lot = "0.11"
+num = "0.3.0"
 smallvec = "1.4"
-ahash = "0.3"
+ahash = "0.4"
 rand = "0.7"
 packed_simd = { version = "0.3", optional = true }
 
