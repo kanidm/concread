@@ -9,6 +9,7 @@ use std::borrow::Borrow;
 use super::cursor::CursorReadOps;
 use super::cursor::{CursorRead, CursorWrite, SuperBlock};
 use super::iter::*;
+use super::node::Datum;
 use parking_lot::{Mutex, MutexGuard};
 use rand::Rng;
 use std::fmt::Debug;
@@ -238,6 +239,22 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapWriteTxn<'a, K, V> {
         self.work.get_txid()
     }
 
+    pub(crate) fn prehash<'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        hash_key!(k, self.key1, self.key2)
+    }
+
+    pub(crate) fn get_prehashed<'b, Q: ?Sized>(&'a self, k: &'b Q, k_hash: u64) -> Option<&'a V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        self.work.search(k_hash, k)
+    }
+
     /// Retrieve a value from the map. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
     pub fn get<'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
@@ -246,7 +263,7 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapWriteTxn<'a, K, V> {
         Q: Hash + Eq,
     {
         let k_hash = hash_key!(k, self.key1, self.key2);
-        self.work.search(k_hash, k)
+        self.get_prehashed(k, k_hash)
     }
 
     /// Assert if a key exists in the map.
@@ -313,6 +330,14 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapWriteTxn<'a, K, V> {
         self.work.get_mut_ref(k_hash, k)
     }
 
+    /// This is *unsafe* because changing the key CAN and WILL break hashing, which can
+    /// have serious consequences. This API only exists to allow arcache to access the inner
+    /// content of the slot to simplify it's API. You should basically never touch this
+    /// function as it's the HashMap equivalent of a the demon sphere.
+    pub(crate) unsafe fn get_slot_mut(&mut self, k_hash: u64) -> Option<&mut [Datum<K, V>]> {
+        self.work.get_slot_mut_ref(k_hash)
+    }
+
     /// Create a read-snapshot of the current map. This does NOT guarantee the map may
     /// not be mutated during the read, so you MUST guarantee that no functions of the
     /// write txn are called while this snapshot is active.
@@ -338,6 +363,22 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapReadTxn<'a, K, V> {
         self.work.get_txid()
     }
 
+    pub(crate) fn prehash<'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        hash_key!(k, self.key1, self.key2)
+    }
+
+    pub(crate) fn get_prehashed<'b, Q: ?Sized>(&'a self, k: &'b Q, k_hash: u64) -> Option<&'a V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        self.work.search(k_hash, k)
+    }
+
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
     pub fn get<'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
@@ -346,7 +387,7 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapReadTxn<'a, K, V> {
         Q: Hash + Eq,
     {
         let k_hash = hash_key!(k, self.key1, self.key2);
-        self.work.search(k_hash, k)
+        self.get_prehashed(k, k_hash)
     }
 
     /// Assert if a key exists in the tree.

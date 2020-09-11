@@ -585,6 +585,19 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             })
     }
 
+    pub(crate) unsafe fn get_slot_mut_ref<Q: ?Sized>(
+        &mut self,
+        h: u64,
+    ) -> Option<&mut [Datum<K, V>]>
+    where
+        K: Borrow<Q>,
+        Q: Eq,
+    {
+        debug_assert_leaf!(self);
+        leaf_simd_get_slot(self, h)
+            .map(|slot_idx| unsafe { (*self.values[slot_idx].as_mut_ptr()).as_mut_slice() })
+    }
+
     #[inline(always)]
     pub(crate) fn get_kv_idx_checked(&self, slot_idx: usize, bk_idx: usize) -> Option<(&K, &V)> {
         debug_assert_leaf!(self);

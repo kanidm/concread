@@ -364,12 +364,11 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
     }
 
     #[cfg(test)]
-    pub(crate) fn path_clone(&mut self, h: u64, k: &K) {
+    pub(crate) fn path_clone(&mut self, h: u64) {
         match path_clone(
             self.root,
             self.txid,
             h,
-            k,
             &mut self.last_seen,
             &mut self.first_seen,
         ) {
@@ -386,7 +385,6 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
             self.root,
             self.txid,
             h,
-            k,
             &mut self.last_seen,
             &mut self.first_seen,
         ) {
@@ -398,6 +396,24 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
         };
         // Now get the ref.
         path_get_mut_ref(self.root, h, k)
+    }
+
+    pub(crate) unsafe fn get_slot_mut_ref(&mut self, h: u64) -> Option<&mut [Datum<K, V>]> {
+        match path_clone(
+            self.root,
+            self.txid,
+            h,
+            &mut self.last_seen,
+            &mut self.first_seen,
+        ) {
+            CRCloneState::Clone(mut nroot) => {
+                // We cloned the root, so swap it.
+                mem::swap(&mut self.root, &mut nroot);
+            }
+            CRCloneState::NoClone => {}
+        };
+        // Now get the ref.
+        path_get_slot_mut_ref(self.root, h)
     }
 
     #[cfg(test)]
@@ -733,7 +749,6 @@ fn path_clone<'a, K: Clone + Hash + Eq + Debug, V: Clone>(
     node: *mut Node<K, V>,
     txid: u64,
     h: u64,
-    k: &K,
     last_seen: &mut Vec<*mut Node<K, V>>,
     first_seen: &mut Vec<*mut Node<K, V>>,
 ) -> CRCloneState<K, V> {
@@ -757,7 +772,7 @@ fn path_clone<'a, K: Clone + Hash + Eq + Debug, V: Clone>(
         let nmref = branch_ref!(node, K, V);
         let anode_idx = nmref.locate_node(h);
         let anode = nmref.get_idx_unchecked(anode_idx);
-        match path_clone(anode, txid, h, k, last_seen, first_seen) {
+        match path_clone(anode, txid, h, last_seen, first_seen) {
             CRCloneState::Clone(cnode) => {
                 // Do we need to clone?
                 nmref
@@ -975,6 +990,31 @@ where
 
         // I solemly swear I am up to no good.
         r.map(|v| unsafe { &mut *v as &mut V })
+    }
+}
+
+unsafe fn path_get_slot_mut_ref<'a, K: Clone + Hash + Eq + Debug, V: Clone>(
+    node: *mut Node<K, V>,
+    h: u64,
+) -> Option<&'a mut [Datum<K, V>]>
+where
+    K: 'a,
+{
+    if self_meta!(node).is_leaf() {
+        leaf_ref!(node, K, V).get_slot_mut_ref(h)
+    } else {
+        // This nmref binds the life of the reference ...
+        let nmref = branch_ref!(node, K, V);
+        let anode_idx = nmref.locate_node(h);
+        let anode = nmref.get_idx_unchecked(anode_idx);
+        // That we get here. So we can't just return it, and we need to 'strip' the
+        // lifetime so that it's bound to the lifetime of the outer node
+        // rather than the nmref.
+        let r: Option<*mut [Datum<K, V>]> =
+            path_get_slot_mut_ref(anode, h).map(|v| v as *mut [Datum<K, V>]);
+
+        // I solemly swear I am up to no good.
+        r.map(|v| unsafe { &mut *v as &mut [Datum<K, V>] })
     }
 }
 
@@ -1547,7 +1587,7 @@ mod tests {
         assert!(wcurs.verify());
 
         // Setup sibling leaf to already be cloned.
-        wcurs.path_clone(10, &10);
+        wcurs.path_clone(10);
         assert!(wcurs.verify());
 
         wcurs.remove(20, &20);
@@ -1575,7 +1615,7 @@ mod tests {
         assert!(wcurs.verify());
 
         // Setup leaf to already be cloned.
-        wcurs.path_clone(20, &20);
+        wcurs.path_clone(20);
         assert!(wcurs.verify());
 
         wcurs.remove(20, &20);
@@ -1603,7 +1643,7 @@ mod tests {
         assert!(wcurs.verify());
 
         // Setup leaf to already be cloned.
-        wcurs.path_clone(20, &20);
+        wcurs.path_clone(20);
 
         wcurs.remove(10, &10);
         assert!(wcurs.verify());
@@ -1781,8 +1821,8 @@ mod tests {
 
         assert!(wcurs.verify());
 
-        wcurs.path_clone(0, &0);
-        wcurs.path_clone(10, &10);
+        wcurs.path_clone(0);
+        wcurs.path_clone(10);
 
         wcurs.remove(30, &30);
 
@@ -1819,8 +1859,8 @@ mod tests {
         let mut wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
         assert!(wcurs.verify());
 
-        wcurs.path_clone(20, &20);
-        wcurs.path_clone(30, &30);
+        wcurs.path_clone(20);
+        wcurs.path_clone(30);
 
         wcurs.remove(0, &0);
 
@@ -1858,9 +1898,9 @@ mod tests {
         let mut wcurs = CursorWrite::new_test(1, root);
         assert!(wcurs.verify());
 
-        wcurs.path_clone(0, &0);
-        wcurs.path_clone(10, &10);
-        wcurs.path_clone(20, &20);
+        wcurs.path_clone(0);
+        wcurs.path_clone(10);
+        wcurs.path_clone(20);
 
         wcurs.remove(90, &90);
 
@@ -1899,7 +1939,7 @@ mod tests {
 
         for i in 0..HBV_CAPACITY {
             let k = 100 + (10 * i);
-            wcurs.path_clone(k as u64, &k);
+            wcurs.path_clone(k as u64);
         }
         assert!(wcurs.verify());
 

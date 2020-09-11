@@ -112,6 +112,79 @@ where
 }
 
 #[cfg(not(feature = "simd_support"))]
+pub(crate) fn leaf_simd_get_slot<K, V>(leaf: &Leaf<K, V>, h: u64) -> Option<usize>
+where
+    K: Hash + Eq + Clone + Debug,
+    V: Clone,
+{
+    debug_assert!(h < u64::MAX);
+
+    for cand_idx in 0..leaf.slots() {
+        if h == leaf.key[cand_idx] {
+            return Some(cand_idx);
+        }
+    }
+
+    None
+}
+
+#[cfg(feature = "simd_support")]
+pub(crate) fn leaf_simd_get_slot<K, V>(leaf: &Leaf<K, V>, h: u64) -> Option<usize>
+where
+    K: Hash + Eq + Clone + Debug,
+    V: Clone,
+{
+    // This is an important piece of logic!
+    debug_assert!(h < u64::MAX);
+    let leaf_simd = unsafe { &*(leaf as *const Leaf<K, V> as *const LeafSimd<K, V>) };
+
+    debug_assert!({
+        let want = u64x8::splat(u64::MAX);
+        let r1 = want.eq(leaf_simd.ctrl);
+        let mask = r1.bitmask() & 0b1111_1110;
+
+        match (mask, leaf.slots()) {
+            (0b1111_1110, 0)
+            | (0b1111_1100, 1)
+            | (0b1111_1000, 2)
+            | (0b1111_0000, 3)
+            | (0b1110_0000, 4)
+            | (0b1100_0000, 5)
+            | (0b1000_0000, 6)
+            | (0b0000_0000, 7) => true,
+            _ => false,
+        }
+    });
+
+    let want = u64x8::splat(h);
+    let r1 = want.eq(leaf_simd.ctrl);
+
+    // println!("want: {:?}", want);
+    // println!("ctrl: {:?}", leaf_simd.ctrl);
+
+    // Always discard the meta field
+    let mask = r1.bitmask() & 0b1111_1110;
+    // println!("res eq: 0b{:b}", mask);
+
+    if mask != 0 {
+        // Something was equal
+        let cand_idx = match mask {
+            // 0b0000_0001 => {},
+            0b0000_0010 => 0,
+            0b0000_0100 => 1,
+            0b0000_1000 => 2,
+            0b0001_0000 => 3,
+            0b0010_0000 => 4,
+            0b0100_0000 => 5,
+            0b1000_0000 => 6,
+            _ => unreachable!(),
+        };
+        return Some(cand_idx);
+    }
+    None
+}
+
+#[cfg(not(feature = "simd_support"))]
 pub(crate) fn leaf_simd_search<K, V, Q: ?Sized>(leaf: &Leaf<K, V>, h: u64, k: &Q) -> KeyLoc
 where
     K: Hash + Eq + Clone + Debug + Borrow<Q>,
