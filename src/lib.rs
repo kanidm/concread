@@ -46,9 +46,9 @@ mod utils;
 pub mod cowcell;
 pub mod ebrcell;
 
+pub mod arcache;
 pub mod bptree;
 pub mod hashmap;
-pub mod arcache;
 
 // #[cfg(test)]
 // mod maple_tree;
@@ -56,8 +56,6 @@ pub mod arcache;
 extern crate crossbeam_utils;
 #[cfg(test)]
 mod lincowcell;
-
-
 
 pub use cowcell::CowCell;
 pub use ebrcell::EbrCell;

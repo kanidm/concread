@@ -14,8 +14,8 @@ mod ll;
 
 use self::ll::{LLNode, LL};
 // use crate::collections::bptree::*;
-use crate::hashmap::*;
 use crate::cowcell::{CowCell, CowCellReadTxn};
+use crate::hashmap::*;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap as Map;
@@ -66,7 +66,7 @@ enum ThreadCacheItem<V> {
 }
 
 enum CacheEvent<K, V> {
-    Hit(Instant, K),
+    Hit(Instant, u64),
     Include(Instant, K, V, u64),
 }
 
@@ -211,7 +211,7 @@ where
     // Cache of missed items (w_ dirty/clean)
     // On COMMIT we drain this to the main cache
     tlocal: Map<K, ThreadCacheItem<V>>,
-    hit: UnsafeCell<Vec<K>>,
+    hit: UnsafeCell<Vec<u64>>,
     clear: UnsafeCell<bool>,
 }
 
@@ -686,40 +686,42 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCache<K, V> {
         while let Ok(ce) = inner.rx.try_recv() {
             let t = match ce {
                 // Update if it was hit.
-                CacheEvent::Hit(t, k) => {
+                CacheEvent::Hit(t, k_hash) => {
                     stats.reader_hits += 1;
-                    if let Some(ref mut ci) = cache.get_mut(&k) {
-                        let mut next_state = match &ci {
-                            CacheItem::Freq(llp, v) => {
-                                // println!("rxhit {:?} Freq -> Freq", k);
-                                inner.freq.touch(*llp);
-                                CacheItem::Freq(*llp, v.clone())
-                            }
-                            CacheItem::Rec(llp, v) => {
-                                // println!("rxhit {:?} Rec -> Freq", k);
-                                inner.rec.extract(*llp);
-                                inner.freq.append_n(*llp);
-                                CacheItem::Freq(*llp, v.clone())
-                            }
-                            // While we can't add this from nothing, we can
-                            // at least keep it in the ghost sets.
-                            CacheItem::GhostFreq(llp) => {
-                                // println!("rxhit {:?} GhostFreq -> GhostFreq", k);
-                                inner.ghost_freq.touch(*llp);
-                                CacheItem::GhostFreq(*llp)
-                            }
-                            CacheItem::GhostRec(llp) => {
-                                // println!("rxhit {:?} GhostRec -> GhostRec", k);
-                                inner.ghost_rec.touch(*llp);
-                                CacheItem::GhostRec(*llp)
-                            }
-                            CacheItem::Haunted(llp) => {
-                                // println!("rxhit {:?} Haunted -> Haunted", k);
-                                // We can't do anything about this ...
-                                CacheItem::Haunted(*llp)
-                            }
-                        };
-                        mem::swap(*ci, &mut next_state);
+                    if let Some(ref mut ci_slots) = unsafe { cache.get_slot_mut(k_hash) } {
+                        for ref mut ci in ci_slots.iter_mut() {
+                            let mut next_state = match &ci.v {
+                                CacheItem::Freq(llp, v) => {
+                                    // println!("rxhit {:?} Freq -> Freq", k);
+                                    inner.freq.touch(*llp);
+                                    CacheItem::Freq(*llp, v.clone())
+                                }
+                                CacheItem::Rec(llp, v) => {
+                                    // println!("rxhit {:?} Rec -> Freq", k);
+                                    inner.rec.extract(*llp);
+                                    inner.freq.append_n(*llp);
+                                    CacheItem::Freq(*llp, v.clone())
+                                }
+                                // While we can't add this from nothing, we can
+                                // at least keep it in the ghost sets.
+                                CacheItem::GhostFreq(llp) => {
+                                    // println!("rxhit {:?} GhostFreq -> GhostFreq", k);
+                                    inner.ghost_freq.touch(*llp);
+                                    CacheItem::GhostFreq(*llp)
+                                }
+                                CacheItem::GhostRec(llp) => {
+                                    // println!("rxhit {:?} GhostRec -> GhostRec", k);
+                                    inner.ghost_rec.touch(*llp);
+                                    CacheItem::GhostRec(*llp)
+                                }
+                                CacheItem::Haunted(llp) => {
+                                    // println!("rxhit {:?} Haunted -> Haunted", k);
+                                    // We can't do anything about this ...
+                                    CacheItem::Haunted(*llp)
+                                }
+                            };
+                            mem::swap(&mut (*ci).v, &mut next_state);
+                        } // for each item in the bucket.
                     }
                     // Do nothing, it must have been evicted.
                     t
@@ -850,9 +852,9 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCache<K, V> {
         // shared: &ArcShared<K, V>,
         // stats: &mut CacheStats,
         commit_txid: u64,
-        hit: Vec<K>,
+        hit: Vec<u64>,
     ) {
-        hit.into_iter().for_each(|k| {
+        hit.into_iter().for_each(|k_hash| {
             // * everything hit must be in main cache now, so bring these
             //   all to the relevant item heads.
             // * Why do this last? Because the write is the "latest" we want all the fresh
@@ -863,41 +865,43 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCache<K, V> {
             // * based on it's type, promote it in the correct list, or move it.
             // How does this prevent incorrect promotion from rec to freq? txid?
             // println!("Checking Hit ... {:?}", k);
-            let mut r = cache.get_mut(&k);
+            let mut r = unsafe { cache.get_slot_mut(k_hash) };
             match r {
-                Some(ref mut ci) => {
-                    // This differs from above - we skip if we don't touch anything
-                    // that was added in this txn. This is to prevent double touching
-                    // anything that was included in a write.
-                    let mut next_state = match &ci {
-                        CacheItem::Freq(llp, v) => {
-                            if unsafe { (**llp).as_ref().txid != commit_txid } {
-                                // println!("hit {:?} Freq -> Freq", k);
-                                inner.freq.touch(*llp);
-                                Some(CacheItem::Freq(*llp, v.clone()))
-                            } else {
+                Some(ref mut ci_slots) => {
+                    for ref mut ci in ci_slots.iter_mut() {
+                        // This differs from above - we skip if we don't touch anything
+                        // that was added in this txn. This is to prevent double touching
+                        // anything that was included in a write.
+                        let mut next_state = match &ci.v {
+                            CacheItem::Freq(llp, v) => {
+                                if unsafe { (**llp).as_ref().txid != commit_txid } {
+                                    // println!("hit {:?} Freq -> Freq", k);
+                                    inner.freq.touch(*llp);
+                                    Some(CacheItem::Freq(*llp, v.clone()))
+                                } else {
+                                    None
+                                }
+                            }
+                            CacheItem::Rec(llp, v) => {
+                                if unsafe { (**llp).as_ref().txid != commit_txid } {
+                                    // println!("hit {:?} Rec -> Freq", k);
+                                    inner.rec.extract(*llp);
+                                    inner.freq.append_n(*llp);
+                                    Some(CacheItem::Freq(*llp, v.clone()))
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => {
+                                // Ignore hits on items that may have been cleared.
                                 None
                             }
+                        };
+                        // Now change the state.
+                        if let Some(ref mut next_state) = next_state {
+                            mem::swap(&mut (*ci).v, next_state);
                         }
-                        CacheItem::Rec(llp, v) => {
-                            if unsafe { (**llp).as_ref().txid != commit_txid } {
-                                // println!("hit {:?} Rec -> Freq", k);
-                                inner.rec.extract(*llp);
-                                inner.freq.append_n(*llp);
-                                Some(CacheItem::Freq(*llp, v.clone()))
-                            } else {
-                                None
-                            }
-                        }
-                        _ => {
-                            // Ignore hits on items that may have been cleared.
-                            None
-                        }
-                    };
-                    // Now change the state.
-                    if let Some(ref mut next_state) = next_state {
-                        mem::swap(*ci, next_state);
-                    }
+                    } // for each ci in slots
                 }
                 None => {
                     // Impossible state!
@@ -1030,7 +1034,7 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCache<K, V> {
         &'a self,
         mut cache: HashMapWriteTxn<'a, K, CacheItem<K, V>>,
         tlocal: Map<K, ThreadCacheItem<V>>,
-        hit: Vec<K>,
+        hit: Vec<u64>,
         clear: bool,
     ) {
         // What is the time?
@@ -1174,9 +1178,11 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheWriteTxn<'
     /// as a cache for.
     pub fn get<'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
     where
-        K: Borrow<Q> + From<Q>,
-        Q: Hash + Eq + Ord + Clone,
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord,
     {
+        let k_hash: u64 = self.cache.prehash(k);
+
         let r: Option<&V> = if let Some(tci) = self.tlocal.get(k) {
             match tci {
                 ThreadCacheItem::Present(v, _clean) => {
@@ -1195,7 +1201,7 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheWriteTxn<'
                 *clear_ptr
             };
             if !is_cleared {
-                if let Some(v) = self.cache.get(k) {
+                if let Some(v) = self.cache.get_prehashed(k, k_hash) {
                     (*v).to_vref()
                 } else {
                     None
@@ -1209,10 +1215,9 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheWriteTxn<'
         // an inclusion from the external system. Subsequent, any further re-hit on an
         // included value WILL be tracked, allowing arc to adjust appropriately.
         if r.is_some() {
-            let hk: K = k.to_owned().into();
             unsafe {
                 let hit_ptr = self.hit.get();
-                (*hit_ptr).push(hk);
+                (*hit_ptr).push(k_hash);
             }
         }
         r
@@ -1221,8 +1226,8 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheWriteTxn<'
     /// Determine if this cache contains the following key.
     pub fn contains_key<'b, Q: ?Sized>(&'a self, k: &'b Q) -> bool
     where
-        K: Borrow<Q> + From<Q>,
-        Q: Hash + Eq + Ord + Clone,
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord,
     {
         self.get(k).is_some()
     }
@@ -1319,7 +1324,7 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheWriteTxn<'
     }
 
     #[cfg(test)]
-    pub(crate) fn peek_hit(&self) -> &[K] {
+    pub(crate) fn peek_hit(&self) -> &[u64] {
         let hit_ptr = self.hit.get();
         unsafe { &(*hit_ptr) }
     }
@@ -1327,8 +1332,8 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheWriteTxn<'
     #[cfg(test)]
     pub(crate) fn peek_cache<'b, Q: ?Sized>(&'a self, k: &'b Q) -> CacheState
     where
-        K: Borrow<Q> + From<Q>,
-        Q: Hash + Eq + Ord + Clone,
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord,
     {
         if let Some(v) = self.cache.get(k) {
             (*v).to_state()
@@ -1369,9 +1374,11 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheReadTxn<'a
     /// as a cache for.
     pub fn get<'b, Q: ?Sized>(&'b self, k: &'b Q) -> Option<&'b V>
     where
-        K: Borrow<Q> + From<Q>,
-        Q: Hash + Eq + Ord + Clone,
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord,
     {
+        let k_hash: u64 = self.cache.prehash(k);
+
         let r: Option<&V> = self
             .tlocal
             .as_ref()
@@ -1383,7 +1390,7 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheReadTxn<'a
                 })
             })
             .or_else(|| {
-                self.cache.get(k).and_then(|v| {
+                self.cache.get_prehashed(k, k_hash).and_then(|v| {
                     (*v).to_vref().map(|vin| unsafe {
                         let vin = vin as *const _;
                         &(*vin)
@@ -1392,9 +1399,8 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheReadTxn<'a
             });
 
         if r.is_some() {
-            let hk: K = k.to_owned().into();
             self.tx
-                .send(CacheEvent::Hit(self.ts, hk))
+                .send(CacheEvent::Hit(self.ts, k_hash))
                 .expect("Invalid tx state");
         }
         r
@@ -1403,8 +1409,8 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheReadTxn<'a
     /// Determine if this cache contains the following key.
     pub fn contains_key<'b, Q: ?Sized>(&mut self, k: &'b Q) -> bool
     where
-        K: Borrow<Q> + From<Q>,
-        Q: Hash + Eq + Ord + Clone,
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord,
     {
         self.get(k).is_some()
     }
