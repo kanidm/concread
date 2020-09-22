@@ -84,9 +84,10 @@ fix it!
 
 To check with miri OR asan on nightly:
 
-    cargo clean && cargo miri setup && cargo miri test -- -Zmiri-disable-isolation
+    # Follow the miri readme setup steps
+    cargo clean && MIRIFLAGS="-Zmiri-disable-isolation" cargo miri test
     RUSTC_FLAGS="-Z sanitizer=address" cargo test
-    
+
 Note: Miri requires isolation to be disabled so that clock monotonic can be used in ARC for cache channels.
 
 [miri]: https://github.com/rust-lang/miri
