@@ -780,7 +780,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
 
     fn free(node: *mut Self) {
         unsafe {
-            let _x: Box<Leaf<K, V>> = Box::from_raw(node as *mut Leaf<K, V>);
+            let _x: Box<CachePadded<Leaf<K, V>>> = Box::from_raw(node as *mut CachePadded<Leaf<K, V>>);
         }
     }
 }
@@ -1793,7 +1793,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
 
     fn free(node: *mut Self) {
         unsafe {
-            let mut _x: Box<Branch<K, V>> = Box::from_raw(node as *mut Branch<K, V>);
+            let mut _x: Box<CachePadded<Branch<K, V>>> = Box::from_raw(node as *mut CachePadded<Branch<K, V>>);
         }
     }
 }
