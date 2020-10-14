@@ -25,7 +25,7 @@ num = "0.3.0"
 smallvec = "1.4"
 ahash = "0.4"
 rand = "0.7"
-packed_simd = { version = "0.3", optional = true }
+packed_simd = { version = "0.3", optional = true, package = "packed_simd_2" }
 
 [dev-dependencies]
 time = "0.2"
