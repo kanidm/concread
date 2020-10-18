@@ -1958,6 +1958,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         true
     }
 
+    #[allow(clippy::cast_ptr_alignment)]
     fn free(node: *mut Self) {
         unsafe {
             let mut _x: Box<CachePadded<Branch<K, V>>> = Box::from_raw(node as *mut CachePadded<Branch<K, V>>);
