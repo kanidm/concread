@@ -1,18 +1,18 @@
 // The benchmarks aim to only measure times of the operations in their names.
 // That's why all use Bencher::iter_batched which enables non-benchmarked
 // preparation before running the measured function.
-// Insert (which doesn't completely avoid updates, but makes them unlikely) and
-// remove both have benchmarks with empty values and with custom structs of 42
-// 64-bit integers.
+// Insert (which doesn't completely avoid updates, but makes them unlikely),
+// remove and search have benchmarks with empty values and with custom structs
+// of 42 64-bit integers.
 // (as a sidenote, the performance really differs; in the case of remove, the
 // remove function itself returns original value - the benchmark doesn't use
 // this value, but performance is significantly worse - about twice on my
 // machine - than the empty value remove; it might be interesting to see if a
 // remove function returning void would perform better, ie. if the returns
 // are optimized - omitted in this case).
-// The counts of inserted/removed elements are chosen at random from constant
-// ranges in an attempt to avoid a single count performing better because of
-// specific HW features of computers the code is benchmarked with.
+// The counts of inserted/removed/searched elements are chosen at random from
+// constant ranges in an attempt to avoid a single count performing better
+// because of specific HW features of computers the code is benchmarked with.
 
 extern crate criterion;
 extern crate rand;
@@ -27,6 +27,11 @@ use std::mem;
 const INSERT_COUNT : (usize, usize) = (120, 140);
 const INSERT_COUNT_FOR_REMOVE : (usize, usize) = (340, 360);
 const REMOVE_COUNT : (usize, usize) = (120, 140);
+const INSERT_COUNT_FOR_SEARCH : (usize, usize) = (120, 140);
+const SEARCH_COUNT : (usize, usize) = (120, 140);
+// In the search benches, we randomly search for elements of a range of SEARCH_SIZE.0/SEARCH_SIZE.1
+// times the number of elements contained.
+const SEARCH_SIZE : (usize, usize) = (4, 3);
 
 pub fn insert_empty_value(c: &mut Criterion) {
     c.bench_function("insert_empty_value", |b| b.iter_batched(
@@ -76,9 +81,26 @@ pub fn remove_struct_value_no_read(c: &mut Criterion) {
     ));
 }
 
+pub fn search_empty_value(c: &mut Criterion) {
+    c.bench_function("search_empty_value", |b| b.iter_batched(
+        || prepare_search(()),
+        |data| search_vec(&data),
+        BatchSize::SmallInput
+    ));
+}
+
+pub fn search_struct_value(c: &mut Criterion) {
+    c.bench_function("search_struct_value", |b| b.iter_batched(
+        || prepare_search(Struct::default()),
+        |data| search_vec(&data),
+        BatchSize::SmallInput
+    ));
+}
+
 criterion_group!(insert, insert_empty_value, insert_struct_value);
 criterion_group!(remove, remove_empty_value, remove_struct_value_no_read);
-criterion_main!(insert, remove);
+criterion_group!(search, search_empty_value, search_struct_value);
+criterion_main!(insert, remove, search);
 
 
 fn insert_vec(pair: &mut (HashMap<u32, ()>, Vec<u32>)) {
@@ -99,6 +121,14 @@ fn remove_vec<V: Clone>(pair: &mut (HashMap<u32, V>, Vec<u32>)) {
     let mut write_txn = pair.0.write();
     for i in pair.1.iter() {
         write_txn.remove(i);
+    }
+}
+
+fn search_vec<V: Clone>(pair: &(HashMap<u32, V>, Vec<u32>)) {
+    let read_txn = pair.0.read();
+    for i in pair.1.iter() {
+        // ! This could potentially get optimized into nothing !
+        read_txn.get(&i);
     }
 }
 
@@ -133,6 +163,28 @@ fn prepare_remove<V: Clone>(values: V) -> (HashMap<u32, V>, Vec<u32>) {
     }
     write_txn.commit();
     (map, random_order(insert_count, remove_count))
+}
+
+fn prepare_search<V: Clone>(values: V) -> (HashMap<u32, V>, Vec<u32>) {
+    let mut rng = thread_rng();
+    let insert_count = rng.gen_range(INSERT_COUNT_FOR_SEARCH.0, INSERT_COUNT_FOR_SEARCH.1);
+    let search_limit = insert_count * SEARCH_SIZE.0 / SEARCH_SIZE.1;
+    let search_count = rng.gen_range(SEARCH_COUNT.0, SEARCH_COUNT.1);
+
+    // Create a HashMap with elements 0 through insert_count(-1)
+    let map = HashMap::new();
+    let mut write_txn = map.write();
+    for k in 0..insert_count {
+        write_txn.insert(k as u32, values.clone());
+    }
+    write_txn.commit();
+
+    // Choose 'search_count' numbers from [0,search_limit) randomly to be searched in the created map.
+    let mut list = Vec::with_capacity(search_count);
+    for _ in 0..search_count {
+        list.push(rng.gen_range(0, search_limit as u32));
+    }
+    (map, list)
 }
 
 /// Returns a Vec of n elements from the range [0,up_to) in random order without repetition
