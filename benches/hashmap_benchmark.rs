@@ -14,94 +14,108 @@
 // constant ranges in an attempt to avoid a single count performing better
 // because of specific HW features of computers the code is benchmarked with.
 
+extern crate concread;
 extern crate criterion;
 extern crate rand;
-extern crate concread;
 
-use criterion::{BatchSize, criterion_group, criterion_main, Criterion};
-use rand::{Rng, thread_rng};
 use concread::hashmap::*;
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use rand::{thread_rng, Rng};
 use std::mem;
 
 // ranges of counts for different benchmarks:
-const INSERT_COUNT : (usize, usize) = (120, 140);
-const INSERT_COUNT_FOR_REMOVE : (usize, usize) = (340, 360);
-const REMOVE_COUNT : (usize, usize) = (120, 140);
-const INSERT_COUNT_FOR_SEARCH : (usize, usize) = (120, 140);
-const SEARCH_COUNT : (usize, usize) = (120, 140);
+const INSERT_COUNT: (usize, usize) = (120, 140);
+const INSERT_COUNT_FOR_REMOVE: (usize, usize) = (340, 360);
+const REMOVE_COUNT: (usize, usize) = (120, 140);
+const INSERT_COUNT_FOR_SEARCH: (usize, usize) = (120, 140);
+const SEARCH_COUNT: (usize, usize) = (120, 140);
 // In the search benches, we randomly search for elements of a range of SEARCH_SIZE.0/SEARCH_SIZE.1
 // times the number of elements contained.
-const SEARCH_SIZE : (usize, usize) = (4, 3);
+const SEARCH_SIZE: (usize, usize) = (4, 3);
 
 pub fn insert_empty_value(c: &mut Criterion) {
-    c.bench_function("insert_empty_value", |b| b.iter_batched(
-        || {
-            let mut rng = thread_rng();
-            let count = rng.gen_range(INSERT_COUNT.0, INSERT_COUNT.1);
-            let mut list = Vec::with_capacity(count);
-            for _ in 0..count {
-                list.push(rng.gen_range(0, INSERT_COUNT.1<<8) as u32)
-            }
-            (HashMap::new(), list)
-        },
-        |mut data| insert_vec(&mut data),
-        BatchSize::SmallInput
-    ));
+    c.bench_function("insert_empty_value", |b| {
+        b.iter_batched(
+            || {
+                let mut rng = thread_rng();
+                let count = rng.gen_range(INSERT_COUNT.0, INSERT_COUNT.1);
+                let mut list = Vec::with_capacity(count);
+                for _ in 0..count {
+                    list.push(rng.gen_range(0, INSERT_COUNT.1 << 8) as u32)
+                }
+                (HashMap::new(), list)
+            },
+            |mut data| insert_vec(&mut data),
+            BatchSize::SmallInput,
+        )
+    });
 }
 
 pub fn insert_struct_value(c: &mut Criterion) {
-    c.bench_function("insert_struct_value", |b| b.iter_batched(
-        || {
-            let mut rng = thread_rng();
-            let count = rng.gen_range(INSERT_COUNT.0, INSERT_COUNT.1);
-            let mut list = Vec::with_capacity(count);
-            for _ in 0..count {
-                list.push((rng.gen_range(0, INSERT_COUNT.1<<8) as u32, default_struct()))
-            }
-            (HashMap::<u32, Struct>::new(), list)
-        },
-        |mut data| insert_struct_vec(&mut data),
-        BatchSize::SmallInput
-    ));
+    c.bench_function("insert_struct_value", |b| {
+        b.iter_batched(
+            || {
+                let mut rng = thread_rng();
+                let count = rng.gen_range(INSERT_COUNT.0, INSERT_COUNT.1);
+                let mut list = Vec::with_capacity(count);
+                for _ in 0..count {
+                    list.push((
+                        rng.gen_range(0, INSERT_COUNT.1 << 8) as u32,
+                        default_struct(),
+                    ))
+                }
+                (HashMap::<u32, Struct>::new(), list)
+            },
+            |mut data| insert_struct_vec(&mut data),
+            BatchSize::SmallInput,
+        )
+    });
 }
 
 pub fn remove_empty_value(c: &mut Criterion) {
-    c.bench_function("remove_empty_value", |b| b.iter_batched(
-        || prepare_remove(()),
-        |mut data| remove_vec(&mut data),
-        BatchSize::SmallInput
-    ));
+    c.bench_function("remove_empty_value", |b| {
+        b.iter_batched(
+            || prepare_remove(()),
+            |mut data| remove_vec(&mut data),
+            BatchSize::SmallInput,
+        )
+    });
 }
 
 pub fn remove_struct_value_no_read(c: &mut Criterion) {
-    c.bench_function("remove_struct_value_no_read", |b| b.iter_batched(
-        || prepare_remove(Struct::default()),
-        |mut data| remove_vec(&mut data),
-        BatchSize::SmallInput
-    ));
+    c.bench_function("remove_struct_value_no_read", |b| {
+        b.iter_batched(
+            || prepare_remove(Struct::default()),
+            |mut data| remove_vec(&mut data),
+            BatchSize::SmallInput,
+        )
+    });
 }
 
 pub fn search_empty_value(c: &mut Criterion) {
-    c.bench_function("search_empty_value", |b| b.iter_batched(
-        || prepare_search(()),
-        |data| search_vec(&data),
-        BatchSize::SmallInput
-    ));
+    c.bench_function("search_empty_value", |b| {
+        b.iter_batched(
+            || prepare_search(()),
+            |data| search_vec(&data),
+            BatchSize::SmallInput,
+        )
+    });
 }
 
 pub fn search_struct_value(c: &mut Criterion) {
-    c.bench_function("search_struct_value", |b| b.iter_batched(
-        || prepare_search(Struct::default()),
-        |data| search_vec(&data),
-        BatchSize::SmallInput
-    ));
+    c.bench_function("search_struct_value", |b| {
+        b.iter_batched(
+            || prepare_search(Struct::default()),
+            |data| search_vec(&data),
+            BatchSize::SmallInput,
+        )
+    });
 }
 
 criterion_group!(insert, insert_empty_value, insert_struct_value);
 criterion_group!(remove, remove_empty_value, remove_struct_value_no_read);
 criterion_group!(search, search_empty_value, search_struct_value);
 criterion_main!(insert, remove, search);
-
 
 fn insert_vec(pair: &mut (HashMap<u32, ()>, Vec<u32>)) {
     let mut write_txn = pair.0.write();
@@ -131,7 +145,6 @@ fn search_vec<V: Clone>(pair: &(HashMap<u32, V>, Vec<u32>)) {
         read_txn.get(&i);
     }
 }
-
 
 type StructValue = Option<Struct>;
 
@@ -198,7 +211,9 @@ fn random_order(up_to: usize, n: usize) -> Vec<u32> {
         let mut r = rng.gen_range(0, remaining_elems);
         // find the r-th yet nongenerated number:
         for i in 0..up_to {
-            if generated[i] { continue; }
+            if generated[i] {
+                continue;
+            }
             if r == 0 {
                 order.push(i as u32);
                 generated[i] = true;
