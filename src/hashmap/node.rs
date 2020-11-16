@@ -40,15 +40,16 @@ pub(crate) const HBV_CAPACITY: usize = H_CAPACITY + 1;
 const DEFAULT_BUCKET_ALLOC: usize = 1;
 
 #[cfg(not(feature = "simd_support"))]
+#[allow(non_camel_case_types)]
 pub struct u64x8 {
-    data: [u64; 8],
+    _data: [u64; 8],
 }
 
 #[cfg(not(feature = "simd_support"))]
 impl u64x8 {
     fn new(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64) -> Self {
         Self {
-            data: [a, b, c, d, e, f, g, h],
+            _data: [a, b, c, d, e, f, g, h],
         }
     }
 }
@@ -284,6 +285,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
     }
 
     #[inline(always)]
+    #[cfg(test)]
     pub(crate) fn get_txid(&self) -> u64 {
         self.meta.get_txid()
     }
@@ -294,10 +296,12 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
     }
 
     #[inline(always)]
+    #[cfg(test)]
     pub(crate) fn is_branch(&self) -> bool {
         self.meta.is_branch()
     }
 
+    #[cfg(test)]
     pub(crate) fn tree_density(&self) -> (usize, usize, usize) {
         match self.meta.0 & FLAG_MASK {
             FLAG_HASH_LEAF => {
@@ -520,6 +524,7 @@ impl Meta {
 
 impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
     #[inline(always)]
+    #[cfg(test)]
     fn set_slots(&mut self, c: usize) {
         debug_assert_leaf!(self);
         self.meta.set_slots(c)
@@ -595,7 +600,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
     {
         debug_assert_leaf!(self);
         leaf_simd_get_slot(self, h)
-            .map(|slot_idx| unsafe { (*self.values[slot_idx].as_mut_ptr()).as_mut_slice() })
+            .map(|slot_idx| (*self.values[slot_idx].as_mut_ptr()).as_mut_slice())
     }
 
     #[inline(always)]
@@ -913,7 +918,8 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
 
     fn free(node: *mut Self) {
         unsafe {
-            let _x: Box<CachePadded<Leaf<K, V>>> = Box::from_raw(node as *mut CachePadded<Leaf<K, V>>);
+            let _x: Box<CachePadded<Leaf<K, V>>> =
+                Box::from_raw(node as *mut CachePadded<Leaf<K, V>>);
         }
     }
 }
@@ -958,6 +964,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Drop for Leaf<K, V> {
 
 impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
     #[inline(always)]
+    #[cfg(test)]
     fn set_slots(&mut self, c: usize) {
         debug_assert_branch!(self);
         self.meta.set_slots(c)
@@ -1961,7 +1968,8 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
     #[allow(clippy::cast_ptr_alignment)]
     fn free(node: *mut Self) {
         unsafe {
-            let mut _x: Box<CachePadded<Branch<K, V>>> = Box::from_raw(node as *mut CachePadded<Branch<K, V>>);
+            let mut _x: Box<CachePadded<Branch<K, V>>> =
+                Box::from_raw(node as *mut CachePadded<Branch<K, V>>);
         }
     }
 }

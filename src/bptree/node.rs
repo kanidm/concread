@@ -252,6 +252,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     }
 
     #[inline(always)]
+    #[cfg(test)]
     pub(crate) fn get_txid(&self) -> u64 {
         self.meta.get_txid()
     }
@@ -262,10 +263,12 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     }
 
     #[inline(always)]
+    #[cfg(test)]
     pub(crate) fn is_branch(&self) -> bool {
         self.meta.is_branch()
     }
 
+    #[cfg(test)]
     pub(crate) fn tree_density(&self) -> (usize, usize) {
         match self.meta.0 & FLAG_MASK {
             FLAG_LEAF => {
@@ -486,6 +489,7 @@ impl Meta {
 
 impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
     #[inline(always)]
+    #[cfg(test)]
     fn set_count(&mut self, c: usize) {
         debug_assert_leaf!(self);
         self.meta.set_count(c)
@@ -780,7 +784,8 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
 
     fn free(node: *mut Self) {
         unsafe {
-            let _x: Box<CachePadded<Leaf<K, V>>> = Box::from_raw(node as *mut CachePadded<Leaf<K, V>>);
+            let _x: Box<CachePadded<Leaf<K, V>>> =
+                Box::from_raw(node as *mut CachePadded<Leaf<K, V>>);
         }
     }
 }
@@ -821,6 +826,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Drop for Leaf<K, V> {
 
 impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
     #[inline(always)]
+    #[cfg(test)]
     fn set_count(&mut self, c: usize) {
         debug_assert_branch!(self);
         self.meta.set_count(c)
@@ -1793,7 +1799,8 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
 
     fn free(node: *mut Self) {
         unsafe {
-            let mut _x: Box<CachePadded<Branch<K, V>>> = Box::from_raw(node as *mut CachePadded<Branch<K, V>>);
+            let mut _x: Box<CachePadded<Branch<K, V>>> =
+                Box::from_raw(node as *mut CachePadded<Branch<K, V>>);
         }
     }
 }

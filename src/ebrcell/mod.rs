@@ -33,7 +33,7 @@ use std::ops::{Deref, DerefMut};
 /// abort a change, don't call commit and allow the write transaction to
 /// go out of scope. This causes the `EbrCell` to unlock allowing other
 /// writes to proceed.
-pub struct EbrCellWriteTxn<'a, T: 'static + Clone + Send> {
+pub struct EbrCellWriteTxn<'a, T: 'static + Clone + Send + Sync> {
     data: Option<T>,
     // This way we know who to contact for updating our data ....
     caller: &'a EbrCell<T>,
@@ -42,7 +42,7 @@ pub struct EbrCellWriteTxn<'a, T: 'static + Clone + Send> {
 
 impl<'a, T> EbrCellWriteTxn<'a, T>
 where
-    T: Clone + Send + 'static,
+    T: Clone + Sync + Send + 'static,
 {
     /// Access a mutable pointer of the data in the `EbrCell`. This data is only
     /// visible to this write transaction object in this thread until you call
@@ -66,7 +66,7 @@ where
 
 impl<'a, T> Deref for EbrCellWriteTxn<'a, T>
 where
-    T: Clone + Send,
+    T: Clone + Sync + Send,
 {
     type Target = T;
 
@@ -78,7 +78,7 @@ where
 
 impl<'a, T> DerefMut for EbrCellWriteTxn<'a, T>
 where
-    T: Clone + Send,
+    T: Clone + Sync + Send,
 {
     fn deref_mut(&mut self) -> &mut T {
         self.data.as_mut().unwrap()
@@ -130,14 +130,14 @@ where
 /// assert_eq!(*new_read_txn, 1);
 /// ```
 #[derive(Debug)]
-pub struct EbrCell<T: Clone + Send + 'static> {
+pub struct EbrCell<T: Clone + Sync + Send + 'static> {
     write: Mutex<()>,
     active: Atomic<T>,
 }
 
 impl<T> EbrCell<T>
 where
-    T: Clone + Send + 'static,
+    T: Clone + Sync + Send + 'static,
 {
     /// Create a new `EbrCell` storing type `T`. `T` must implement `Clone`.
     pub fn new(data: T) -> Self {
@@ -225,7 +225,7 @@ where
 
 impl<T> Drop for EbrCell<T>
 where
-    T: Clone + Send + 'static,
+    T: Clone + Sync + Send + 'static,
 {
     fn drop(&mut self) {
         // Right, we are dropping! Everything is okay here *except*

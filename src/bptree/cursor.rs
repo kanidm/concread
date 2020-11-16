@@ -99,6 +99,7 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
 
     fn get_txid(&self) -> u64;
 
+    #[cfg(test)]
     fn get_tree_density(&self) -> (usize, usize) {
         // Walk the tree and calculate the packing effeciency.
         let rref = self.get_root_ref();
@@ -474,6 +475,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         self.get_root_ref().get_txid()
     }
 
+    #[cfg(test)]
     pub(crate) fn tree_density(&self) -> (usize, usize) {
         self.get_root_ref().tree_density()
     }
@@ -2188,7 +2190,7 @@ mod tests {
         let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
-        let mut sblock = SuperBlock::default();
+        let sblock = SuperBlock::default();
         let mut wcurs = CursorWrite::new(&sblock);
 
         for v in ins.into_iter() {

@@ -73,7 +73,7 @@ enum CacheEvent<K, V> {
 #[derive(Hash, Ord, PartialOrd, Eq, PartialEq, Clone, Debug)]
 struct CacheItemInner<K>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
+    K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
 {
     k: K,
     txid: u64,
@@ -82,13 +82,26 @@ where
 #[derive(Clone, Debug)]
 enum CacheItem<K, V>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
+    K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
 {
     Freq(*mut LLNode<CacheItemInner<K>>, V),
     Rec(*mut LLNode<CacheItemInner<K>>, V),
     GhostFreq(*mut LLNode<CacheItemInner<K>>),
     GhostRec(*mut LLNode<CacheItemInner<K>>),
     Haunted(*mut LLNode<CacheItemInner<K>>),
+}
+
+unsafe impl<
+        K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Debug + Sync + Send + 'static,
+    > Send for CacheItem<K, V>
+{
+}
+unsafe impl<
+        K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Debug + Sync + Send + 'static,
+    > Sync for CacheItem<K, V>
+{
 }
 
 #[cfg(test)]
@@ -118,8 +131,8 @@ pub(crate) struct CStat {
 
 struct ArcInner<K, V>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
-    V: Clone + Debug,
+    K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Debug + Sync + Send + 'static,
 {
     // Weight of items between the two caches.
     p: usize,
@@ -134,8 +147,8 @@ where
 
 struct ArcShared<K, V>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
-    V: Clone + Debug,
+    K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Debug + Sync + Send + 'static,
 {
     // Max number of elements to cache.
     max: usize,
@@ -150,8 +163,8 @@ where
 /// cache via read and write operations.
 pub struct ARCache<K, V>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
-    V: Clone + Debug,
+    K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Debug + Sync + Send + 'static,
 {
     // Use a unified tree, allows simpler movement of items between the
     // cache types.
@@ -164,13 +177,23 @@ where
     stats: CowCell<CacheStats>,
 }
 
-unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Send for ARCache<K, V> {}
-unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Sync for ARCache<K, V> {}
+unsafe impl<
+        K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Debug + Sync + Send + 'static,
+    > Send for ARCache<K, V>
+{
+}
+unsafe impl<
+        K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Debug + Sync + Send + 'static,
+    > Sync for ARCache<K, V>
+{
+}
 
 struct ReadCache<K, V>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
-    V: Clone + Debug,
+    K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Debug + Sync + Send + 'static,
 {
     // cache of our missed items to send forward.
     // On drop we drain this to the channel
@@ -184,8 +207,8 @@ where
 /// miss via the "insert" function.
 pub struct ARCacheReadTxn<'a, K, V>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
-    V: Clone + Debug,
+    K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Debug + Sync + Send + 'static,
 {
     caller: &'a ARCache<K, V>,
     // ro_txn to cache
@@ -196,8 +219,18 @@ where
     ts: Instant,
 }
 
-unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Send for ARCacheReadTxn<'_, K, V> {}
-unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Sync for ARCacheReadTxn<'_, K, V> {}
+unsafe impl<
+        K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Debug + Sync + Send + 'static,
+    > Send for ARCacheReadTxn<'_, K, V>
+{
+}
+unsafe impl<
+        K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Debug + Sync + Send + 'static,
+    > Sync for ARCacheReadTxn<'_, K, V>
+{
+}
 
 /// An active write transaction over the cache. The data in this cache is isolated
 /// from readers, and may be rolled-back if an error occurs. Changes only become
@@ -205,8 +238,8 @@ unsafe impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Sync for ARCac
 /// a miss via "insert", and you can explicitly remove items by calling "remove".
 pub struct ARCacheWriteTxn<'a, K, V>
 where
-    K: Hash + Eq + Ord + Clone + Debug,
-    V: Clone + Debug,
+    K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Debug + Sync + Send + 'static,
 {
     caller: &'a ARCache<K, V>,
     // wr_txn to cache
@@ -225,7 +258,11 @@ pub struct ArcReadSnapshot<K, V> {
 }
 */
 
-impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> CacheItem<K, V> {
+impl<
+        K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Debug + Sync + Send + 'static,
+    > CacheItem<K, V>
+{
     fn to_vref(&self) -> Option<&V> {
         match &self {
             CacheItem::Freq(_, v) | CacheItem::Rec(_, v) => Some(&v),
@@ -375,7 +412,11 @@ macro_rules! evict_to_haunted_len {
     }};
 }
 
-impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCache<K, V> {
+impl<
+        K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Debug + Sync + Send + 'static,
+    > ARCache<K, V>
+{
     /// Create a new ARCache, that derives it's size based on your expected workload.
     ///
     /// The values are total number of items you want to have in memory, the number
@@ -1139,7 +1180,12 @@ impl<K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCache<K, V> {
     }
 }
 
-impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheWriteTxn<'a, K, V> {
+impl<
+        'a,
+        K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Debug + Sync + Send + 'static,
+    > ARCacheWriteTxn<'a, K, V>
+{
     /// Commit the changes of this writer, making them globally visible. This causes
     /// all items written to this thread's local store to become visible in the main
     /// cache.
@@ -1370,7 +1416,12 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheWriteTxn<'
     // to_snapshot
 }
 
-impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheReadTxn<'a, K, V> {
+impl<
+        'a,
+        K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Debug + Sync + Send + 'static,
+    > ARCacheReadTxn<'a, K, V>
+{
     /// Attempt to retieve a k-v pair from the cache. If it is present in the main cache OR
     /// the thread local cache, a `Some` is returned, else you will recieve a `None`. On a
     /// `None`, you must then consult the external data source that this structure is acting
@@ -1463,7 +1514,12 @@ impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> ARCacheReadTxn<'a
     }
 }
 
-impl<'a, K: Hash + Eq + Ord + Clone + Debug, V: Clone + Debug> Drop for ARCacheReadTxn<'a, K, V> {
+impl<
+        'a,
+        K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Debug + Sync + Send + 'static,
+    > Drop for ARCacheReadTxn<'a, K, V>
+{
     fn drop(&mut self) {
         self.caller.try_quiesce();
     }
