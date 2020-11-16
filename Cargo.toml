@@ -15,6 +15,7 @@ license = "MPL-2.0"
 [features]
 simd_support = ["packed_simd"]
 skinny = []
+unsoundness = []
 
 [dependencies]
 crossbeam-epoch = "0.8"
@@ -34,3 +35,10 @@ time = "0.2"
 name = "unsound"
 path = "src/unsound.rs"
 
+[[bin]]
+name = "unsound2"
+path = "src/unsound2.rs"
+
+[[bin]]
+name = "unsound3"
+path = "src/unsound3.rs"

@@ -12,20 +12,29 @@ macro_rules! debug_assert_branch {
 
 macro_rules! self_meta {
     ($x:expr) => {{
-        unsafe { &mut *($x as *mut Meta) }
+        #[allow(unused_unsafe)]
+        unsafe {
+            &mut *($x as *mut Meta)
+        }
     }};
 }
 
 macro_rules! branch_ref {
     ($x:expr, $k:ty, $v:ty) => {{
-        debug_assert!(unsafe { (*$x).meta.is_branch() });
-        unsafe { &mut *($x as *mut Branch<$k, $v>) }
+        #[allow(unused_unsafe)]
+        unsafe {
+            debug_assert!((*$x).meta.is_branch());
+            &mut *($x as *mut Branch<$k, $v>)
+        }
     }};
 }
 
 macro_rules! leaf_ref {
     ($x:expr, $k:ty, $v:ty) => {{
-        debug_assert!(unsafe { (*$x).meta.is_leaf() });
-        unsafe { &mut *($x as *mut Leaf<$k, $v>) }
+        #[allow(unused_unsafe)]
+        unsafe {
+            debug_assert!((*$x).meta.is_leaf());
+            &mut *($x as *mut Leaf<$k, $v>)
+        }
     }};
 }
