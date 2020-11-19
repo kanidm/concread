@@ -23,70 +23,97 @@ use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use rand::{thread_rng, Rng};
 use std::mem;
 
-// ranges of counts for different benchmarks:
-const INSERT_COUNT: (usize, usize) = (120, 140);
-const INSERT_COUNT_FOR_REMOVE: (usize, usize) = (340, 360);
-const REMOVE_COUNT: (usize, usize) = (120, 140);
-const INSERT_COUNT_FOR_SEARCH: (usize, usize) = (120, 140);
-const SEARCH_COUNT: (usize, usize) = (120, 140);
-// In the search benches, we randomly search for elements of a range of SEARCH_SIZE.0/SEARCH_SIZE.1
+// ranges of counts for different benchmarks (MINs are inclusive, MAXes exclusive):
+const INSERT_COUNT_MIN: usize = 120;
+const INSERT_COUNT_MAX: usize = 140;
+const INSERT_COUNT_FOR_REMOVE_MIN: usize = 340;
+const INSERT_COUNT_FOR_REMOVE_MAX: usize = 360;
+const REMOVE_COUNT_MIN: usize = 120;
+const REMOVE_COUNT_MAX: usize = 140;
+const INSERT_COUNT_FOR_SEARCH_MIN: usize = 120;
+const INSERT_COUNT_FOR_SEARCH_MAX: usize = 140;
+const SEARCH_COUNT_MIN: usize = 120;
+const SEARCH_COUNT_MAX: usize = 140;
+// In the search benches, we randomly search for elements of a range of SEARCH_SIZE_NUMERATOR / SEARCH_SIZE_DENOMINATOR
 // times the number of elements contained.
-const SEARCH_SIZE: (usize, usize) = (4, 3);
+const SEARCH_SIZE_NUMERATOR: usize = 4;
+const SEARCH_SIZE_DENOMINATOR: usize = 3;
 
-pub fn insert_empty_value(c: &mut Criterion) {
-    c.bench_function("insert_empty_value", |b| {
+pub fn insert_empty_value_rollback(c: &mut Criterion) {
+    c.bench_function("insert_empty_value_rollback", |b| {
         b.iter_batched(
-            || {
-                let mut rng = thread_rng();
-                let count = rng.gen_range(INSERT_COUNT.0, INSERT_COUNT.1);
-                let mut list = Vec::with_capacity(count);
-                for _ in 0..count {
-                    list.push(rng.gen_range(0, INSERT_COUNT.1 << 8) as u32)
-                }
-                (HashMap::new(), list)
-            },
-            |mut data| insert_vec(&mut data),
+            || prepare_empty_insert(),
+            |(ref mut map, ref list)| insert_vec(map, list, false),
+            BatchSize::SmallInput
+        )
+    });
+}
+
+pub fn insert_empty_value_commit(c: &mut Criterion) {
+    c.bench_function("insert_empty_value_commit", |b| {
+        b.iter_batched(
+            || prepare_empty_insert(),
+            |(ref mut map, ref list)| insert_vec(map, list, false),
+            BatchSize::SmallInput
+        )
+    });
+}
+
+pub fn insert_struct_value_rollback(c: &mut Criterion) {
+    c.bench_function("insert_struct_value_rollback", |b| {
+        b.iter_batched(
+            || prepare_struct_insert(),
+            |(ref mut map, ref mut list)| insert_struct_vec(map, list, false),
             BatchSize::SmallInput,
         )
     });
 }
 
-pub fn insert_struct_value(c: &mut Criterion) {
-    c.bench_function("insert_struct_value", |b| {
+pub fn insert_struct_value_commit(c: &mut Criterion) {
+    c.bench_function("insert_struct_value_commit", |b| {
         b.iter_batched(
-            || {
-                let mut rng = thread_rng();
-                let count = rng.gen_range(INSERT_COUNT.0, INSERT_COUNT.1);
-                let mut list = Vec::with_capacity(count);
-                for _ in 0..count {
-                    list.push((
-                        rng.gen_range(0, INSERT_COUNT.1 << 8) as u32,
-                        default_struct(),
-                    ))
-                }
-                (HashMap::<u32, Struct>::new(), list)
-            },
-            |mut data| insert_struct_vec(&mut data),
+            || prepare_struct_insert(),
+            |(ref mut map, ref mut list)| insert_struct_vec(map, list, true),
             BatchSize::SmallInput,
         )
     });
 }
 
-pub fn remove_empty_value(c: &mut Criterion) {
-    c.bench_function("remove_empty_value", |b| {
+pub fn remove_empty_value_rollback(c: &mut Criterion) {
+    c.bench_function("remove_empty_value_rollback", |b| {
         b.iter_batched(
             || prepare_remove(()),
-            |mut data| remove_vec(&mut data),
+            |(ref mut map, ref list)| remove_vec(map, list, false),
             BatchSize::SmallInput,
         )
     });
 }
 
-pub fn remove_struct_value_no_read(c: &mut Criterion) {
-    c.bench_function("remove_struct_value_no_read", |b| {
+pub fn remove_empty_value_commit(c: &mut Criterion) {
+    c.bench_function("remove_empty_value_commit", |b| {
+        b.iter_batched(
+            || prepare_remove(()),
+            |(ref mut map, ref list)| remove_vec(map, list, true),
+            BatchSize::SmallInput,
+        )
+    });
+}
+
+pub fn remove_struct_value_no_read_rollback(c: &mut Criterion) {
+    c.bench_function("remove_struct_value_no_read_rollback", |b| {
         b.iter_batched(
             || prepare_remove(Struct::default()),
-            |mut data| remove_vec(&mut data),
+            |(ref mut map, ref list)| remove_vec(map, list, false),
+            BatchSize::SmallInput,
+        )
+    });
+}
+
+pub fn remove_struct_value_no_read_commit(c: &mut Criterion) {
+    c.bench_function("remove_struct_value_no_read_commit", |b| {
+        b.iter_batched(
+            || prepare_remove(Struct::default()),
+            |(ref mut map, ref list)| remove_vec(map, list, true),
             BatchSize::SmallInput,
         )
     });
@@ -96,7 +123,7 @@ pub fn search_empty_value(c: &mut Criterion) {
     c.bench_function("search_empty_value", |b| {
         b.iter_batched(
             || prepare_search(()),
-            |data| search_vec(&data),
+            |(ref map, ref list)| search_vec(map, list),
             BatchSize::SmallInput,
         )
     });
@@ -106,41 +133,47 @@ pub fn search_struct_value(c: &mut Criterion) {
     c.bench_function("search_struct_value", |b| {
         b.iter_batched(
             || prepare_search(Struct::default()),
-            |data| search_vec(&data),
+            |(ref map, ref list)| search_vec(map, list),
             BatchSize::SmallInput,
         )
     });
 }
 
-criterion_group!(insert, insert_empty_value, insert_struct_value);
-criterion_group!(remove, remove_empty_value, remove_struct_value_no_read);
+criterion_group!(insert, insert_empty_value_rollback, insert_empty_value_commit, insert_struct_value_rollback, insert_struct_value_commit);
+criterion_group!(remove, remove_empty_value_rollback, remove_empty_value_commit, remove_struct_value_no_read_rollback, remove_struct_value_no_read_commit);
 criterion_group!(search, search_empty_value, search_struct_value);
 criterion_main!(insert, remove, search);
 
-fn insert_vec(pair: &mut (HashMap<u32, ()>, Vec<u32>)) {
-    let mut write_txn = pair.0.write();
-    for i in pair.1.iter() {
+
+// Utility functions:
+
+fn insert_vec(map: &mut HashMap<u32, ()>, list: &Vec<u32>, commit: bool) {
+    let mut write_txn = map.write();
+    for i in list.iter() {
         write_txn.insert(*i, ());
     }
+    if commit { write_txn.commit(); }
 }
 
-fn insert_struct_vec(pair: &mut (HashMap<u32, Struct>, Vec<(u32, StructValue)>)) {
-    let mut write_txn = pair.0.write();
-    for i in pair.1.iter_mut() {
+fn insert_struct_vec(map: &mut HashMap<u32, Struct>, list: &mut Vec<(u32, StructValue)>, commit: bool) {
+    let mut write_txn = map.write();
+    for i in list.iter_mut() {
         write_txn.insert(i.0, mem::replace(&mut i.1, None).unwrap());
     }
+    if commit { write_txn.commit(); }
 }
 
-fn remove_vec<V: Clone>(pair: &mut (HashMap<u32, V>, Vec<u32>)) {
-    let mut write_txn = pair.0.write();
-    for i in pair.1.iter() {
+fn remove_vec<V: Clone>(map: &mut HashMap<u32, V>, list: &Vec<u32>, commit: bool) {
+    let mut write_txn = map.write();
+    for i in list.iter() {
         write_txn.remove(i);
     }
+    if commit { write_txn.commit(); }
 }
 
-fn search_vec<V: Clone>(pair: &(HashMap<u32, V>, Vec<u32>)) {
-    let read_txn = pair.0.read();
-    for i in pair.1.iter() {
+fn search_vec<V: Clone>(map: &HashMap<u32, V>, list: &Vec<u32>) {
+    let read_txn = map.read();
+    for i in list.iter() {
         // ! This could potentially get optimized into nothing !
         read_txn.get(&i);
     }
@@ -162,11 +195,34 @@ fn default_struct() -> StructValue {
     Some(Default::default())
 }
 
+fn prepare_empty_insert() -> (HashMap<u32, ()>, Vec<u32>) {
+    let mut rng = thread_rng();
+    let count = rng.gen_range(INSERT_COUNT_MIN, INSERT_COUNT_MAX);
+    let mut list = Vec::with_capacity(count);
+    for _ in 0..count {
+        list.push(rng.gen_range(0, INSERT_COUNT_MAX << 8) as u32)
+    }
+    (HashMap::new(), list)
+}
+
+fn prepare_struct_insert() -> (HashMap<u32, Struct>, Vec<(u32, StructValue)>) {
+    let mut rng = thread_rng();
+    let count = rng.gen_range(INSERT_COUNT_MIN, INSERT_COUNT_MAX);
+    let mut list = Vec::with_capacity(count);
+    for _ in 0..count {
+        list.push((
+            rng.gen_range(0, INSERT_COUNT_MAX << 8) as u32,
+            default_struct(),
+        ))
+    }
+    (HashMap::<u32, Struct>::new(), list)
+}
+
 /// Prepares a remove benchmark with values in the HashMap being clones of the 'values' parameter
 fn prepare_remove<V: Clone>(values: V) -> (HashMap<u32, V>, Vec<u32>) {
     let mut rng = thread_rng();
-    let insert_count = rng.gen_range(INSERT_COUNT_FOR_REMOVE.0, INSERT_COUNT_FOR_REMOVE.1);
-    let remove_count = rng.gen_range(REMOVE_COUNT.0, REMOVE_COUNT.1);
+    let insert_count = rng.gen_range(INSERT_COUNT_FOR_REMOVE_MIN, INSERT_COUNT_FOR_REMOVE_MAX);
+    let remove_count = rng.gen_range(REMOVE_COUNT_MIN, REMOVE_COUNT_MAX);
     let map = HashMap::new();
     let mut write_txn = map.write();
     for i in random_order(insert_count, insert_count).iter() {
@@ -180,9 +236,9 @@ fn prepare_remove<V: Clone>(values: V) -> (HashMap<u32, V>, Vec<u32>) {
 
 fn prepare_search<V: Clone>(values: V) -> (HashMap<u32, V>, Vec<u32>) {
     let mut rng = thread_rng();
-    let insert_count = rng.gen_range(INSERT_COUNT_FOR_SEARCH.0, INSERT_COUNT_FOR_SEARCH.1);
-    let search_limit = insert_count * SEARCH_SIZE.0 / SEARCH_SIZE.1;
-    let search_count = rng.gen_range(SEARCH_COUNT.0, SEARCH_COUNT.1);
+    let insert_count = rng.gen_range(INSERT_COUNT_FOR_SEARCH_MIN, INSERT_COUNT_FOR_SEARCH_MAX);
+    let search_limit = insert_count * SEARCH_SIZE_NUMERATOR / SEARCH_SIZE_DENOMINATOR;
+    let search_count = rng.gen_range(SEARCH_COUNT_MIN, SEARCH_COUNT_MAX);
 
     // Create a HashMap with elements 0 through insert_count(-1)
     let map = HashMap::new();
