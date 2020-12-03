@@ -43,8 +43,10 @@ pub fn insert_empty_value_rollback(c: &mut Criterion) {
     c.bench_function("insert_empty_value_rollback", |b| {
         b.iter_batched(
             || prepare_insert::<()>(&|| Some(())),
-            |(ref mut map, ref mut list)| { insert_vec(map, list); },
-            BatchSize::SmallInput
+            |(ref mut map, ref mut list)| {
+                insert_vec(map, list);
+            },
+            BatchSize::SmallInput,
         )
     });
 }
@@ -54,7 +56,7 @@ pub fn insert_empty_value_commit(c: &mut Criterion) {
         b.iter_batched(
             || prepare_insert::<()>(&|| Some(())),
             |(ref mut map, ref mut list)| insert_vec(map, list).commit(),
-            BatchSize::SmallInput
+            BatchSize::SmallInput,
         )
     });
 }
@@ -63,7 +65,9 @@ pub fn insert_struct_value_rollback(c: &mut Criterion) {
     c.bench_function("insert_struct_value_rollback", |b| {
         b.iter_batched(
             || prepare_insert::<Struct>(&default_struct),
-            |(ref mut map, ref mut list)| { insert_vec(map, list); },
+            |(ref mut map, ref mut list)| {
+                insert_vec(map, list);
+            },
             BatchSize::SmallInput,
         )
     });
@@ -83,7 +87,9 @@ pub fn remove_empty_value_rollback(c: &mut Criterion) {
     c.bench_function("remove_empty_value_rollback", |b| {
         b.iter_batched(
             || prepare_remove(()),
-            |(ref mut map, ref list)| { remove_vec(map, list); },
+            |(ref mut map, ref list)| {
+                remove_vec(map, list);
+            },
             BatchSize::SmallInput,
         )
     });
@@ -103,7 +109,9 @@ pub fn remove_struct_value_no_read_rollback(c: &mut Criterion) {
     c.bench_function("remove_struct_value_no_read_rollback", |b| {
         b.iter_batched(
             || prepare_remove(Struct::default()),
-            |(ref mut map, ref list)| { remove_vec(map, list); },
+            |(ref mut map, ref list)| {
+                remove_vec(map, list);
+            },
             BatchSize::SmallInput,
         )
     });
@@ -139,15 +147,29 @@ pub fn search_struct_value(c: &mut Criterion) {
     });
 }
 
-criterion_group!(insert, insert_empty_value_rollback, insert_empty_value_commit, insert_struct_value_rollback, insert_struct_value_commit);
-criterion_group!(remove, remove_empty_value_rollback, remove_empty_value_commit, remove_struct_value_no_read_rollback, remove_struct_value_no_read_commit);
+criterion_group!(
+    insert,
+    insert_empty_value_rollback,
+    insert_empty_value_commit,
+    insert_struct_value_rollback,
+    insert_struct_value_commit
+);
+criterion_group!(
+    remove,
+    remove_empty_value_rollback,
+    remove_empty_value_commit,
+    remove_struct_value_no_read_rollback,
+    remove_struct_value_no_read_commit
+);
 criterion_group!(search, search_empty_value, search_struct_value);
 criterion_main!(insert, remove, search);
 
-
 // Utility functions:
 
-fn insert_vec<'a, V: Clone>(map: &'a mut HashMap<u32, V>, list: &mut Vec<(u32, Option<V>)>) -> HashMapWriteTxn<'a, u32, V> {
+fn insert_vec<'a, V: Clone>(
+    map: &'a mut HashMap<u32, V>,
+    list: &mut Vec<(u32, Option<V>)>,
+) -> HashMapWriteTxn<'a, u32, V> {
     let mut write_txn = map.write();
     for i in list.iter_mut() {
         write_txn.insert(i.0, mem::replace(&mut i.1, None).unwrap());
@@ -155,7 +177,10 @@ fn insert_vec<'a, V: Clone>(map: &'a mut HashMap<u32, V>, list: &mut Vec<(u32, O
     write_txn
 }
 
-fn remove_vec<'a, V: Clone>(map: &'a mut HashMap<u32, V>, list: &Vec<u32>) -> HashMapWriteTxn<'a, u32, V> {
+fn remove_vec<'a, V: Clone>(
+    map: &'a mut HashMap<u32, V>,
+    list: &Vec<u32>,
+) -> HashMapWriteTxn<'a, u32, V> {
     let mut write_txn = map.write();
     for i in list.iter() {
         write_txn.remove(i);
@@ -187,15 +212,14 @@ fn default_struct() -> StructValue {
     Some(Default::default())
 }
 
-fn prepare_insert<V: Clone>(get_value: &dyn Fn() -> Option<V>) -> (HashMap<u32, V>, Vec<(u32, Option<V>)>) {
+fn prepare_insert<V: Clone>(
+    get_value: &dyn Fn() -> Option<V>,
+) -> (HashMap<u32, V>, Vec<(u32, Option<V>)>) {
     let mut rng = thread_rng();
     let count = rng.gen_range(INSERT_COUNT_MIN, INSERT_COUNT_MAX);
     let mut list = Vec::with_capacity(count);
     for _ in 0..count {
-        list.push((
-            rng.gen_range(0, INSERT_COUNT_MAX << 8) as u32,
-            get_value()
-        ));
+        list.push((rng.gen_range(0, INSERT_COUNT_MAX << 8) as u32, get_value()));
     }
     (HashMap::new(), list)
 }
