@@ -42,8 +42,8 @@ const SEARCH_SIZE_DENOMINATOR: usize = 3;
 pub fn insert_empty_value_rollback(c: &mut Criterion) {
     c.bench_function("insert_empty_value_rollback", |b| {
         b.iter_batched(
-            || prepare_empty_insert(),
-            |(ref mut map, ref list)| insert_vec(map, list, false),
+            || prepare_insert::<()>(&|| Some(())),
+            |(ref mut map, ref mut list)| { insert_vec(map, list); },
             BatchSize::SmallInput
         )
     });
@@ -52,8 +52,8 @@ pub fn insert_empty_value_rollback(c: &mut Criterion) {
 pub fn insert_empty_value_commit(c: &mut Criterion) {
     c.bench_function("insert_empty_value_commit", |b| {
         b.iter_batched(
-            || prepare_empty_insert(),
-            |(ref mut map, ref list)| insert_vec(map, list, false),
+            || prepare_insert::<()>(&|| Some(())),
+            |(ref mut map, ref mut list)| insert_vec(map, list).commit(),
             BatchSize::SmallInput
         )
     });
@@ -62,8 +62,8 @@ pub fn insert_empty_value_commit(c: &mut Criterion) {
 pub fn insert_struct_value_rollback(c: &mut Criterion) {
     c.bench_function("insert_struct_value_rollback", |b| {
         b.iter_batched(
-            || prepare_struct_insert(),
-            |(ref mut map, ref mut list)| insert_struct_vec(map, list, false),
+            || prepare_insert::<Struct>(&default_struct),
+            |(ref mut map, ref mut list)| { insert_vec(map, list); },
             BatchSize::SmallInput,
         )
     });
@@ -72,8 +72,8 @@ pub fn insert_struct_value_rollback(c: &mut Criterion) {
 pub fn insert_struct_value_commit(c: &mut Criterion) {
     c.bench_function("insert_struct_value_commit", |b| {
         b.iter_batched(
-            || prepare_struct_insert(),
-            |(ref mut map, ref mut list)| insert_struct_vec(map, list, true),
+            || prepare_insert::<Struct>(&default_struct),
+            |(ref mut map, ref mut list)| insert_vec(map, list).commit(),
             BatchSize::SmallInput,
         )
     });
@@ -83,7 +83,7 @@ pub fn remove_empty_value_rollback(c: &mut Criterion) {
     c.bench_function("remove_empty_value_rollback", |b| {
         b.iter_batched(
             || prepare_remove(()),
-            |(ref mut map, ref list)| remove_vec(map, list, false),
+            |(ref mut map, ref list)| { remove_vec(map, list); },
             BatchSize::SmallInput,
         )
     });
@@ -93,7 +93,7 @@ pub fn remove_empty_value_commit(c: &mut Criterion) {
     c.bench_function("remove_empty_value_commit", |b| {
         b.iter_batched(
             || prepare_remove(()),
-            |(ref mut map, ref list)| remove_vec(map, list, true),
+            |(ref mut map, ref list)| remove_vec(map, list).commit(),
             BatchSize::SmallInput,
         )
     });
@@ -103,7 +103,7 @@ pub fn remove_struct_value_no_read_rollback(c: &mut Criterion) {
     c.bench_function("remove_struct_value_no_read_rollback", |b| {
         b.iter_batched(
             || prepare_remove(Struct::default()),
-            |(ref mut map, ref list)| remove_vec(map, list, false),
+            |(ref mut map, ref list)| { remove_vec(map, list); },
             BatchSize::SmallInput,
         )
     });
@@ -113,7 +113,7 @@ pub fn remove_struct_value_no_read_commit(c: &mut Criterion) {
     c.bench_function("remove_struct_value_no_read_commit", |b| {
         b.iter_batched(
             || prepare_remove(Struct::default()),
-            |(ref mut map, ref list)| remove_vec(map, list, true),
+            |(ref mut map, ref list)| remove_vec(map, list).commit(),
             BatchSize::SmallInput,
         )
     });
@@ -147,28 +147,20 @@ criterion_main!(insert, remove, search);
 
 // Utility functions:
 
-fn insert_vec(map: &mut HashMap<u32, ()>, list: &Vec<u32>, commit: bool) {
-    let mut write_txn = map.write();
-    for i in list.iter() {
-        write_txn.insert(*i, ());
-    }
-    if commit { write_txn.commit(); }
-}
-
-fn insert_struct_vec(map: &mut HashMap<u32, Struct>, list: &mut Vec<(u32, StructValue)>, commit: bool) {
+fn insert_vec<'a, V: Clone>(map: &'a mut HashMap<u32, V>, list: &mut Vec<(u32, Option<V>)>) -> HashMapWriteTxn<'a, u32, V> {
     let mut write_txn = map.write();
     for i in list.iter_mut() {
         write_txn.insert(i.0, mem::replace(&mut i.1, None).unwrap());
     }
-    if commit { write_txn.commit(); }
+    write_txn
 }
 
-fn remove_vec<V: Clone>(map: &mut HashMap<u32, V>, list: &Vec<u32>, commit: bool) {
+fn remove_vec<'a, V: Clone>(map: &'a mut HashMap<u32, V>, list: &Vec<u32>) -> HashMapWriteTxn<'a, u32, V> {
     let mut write_txn = map.write();
     for i in list.iter() {
         write_txn.remove(i);
     }
-    if commit { write_txn.commit(); }
+    write_txn
 }
 
 fn search_vec<V: Clone>(map: &HashMap<u32, V>, list: &Vec<u32>) {
@@ -195,27 +187,17 @@ fn default_struct() -> StructValue {
     Some(Default::default())
 }
 
-fn prepare_empty_insert() -> (HashMap<u32, ()>, Vec<u32>) {
-    let mut rng = thread_rng();
-    let count = rng.gen_range(INSERT_COUNT_MIN, INSERT_COUNT_MAX);
-    let mut list = Vec::with_capacity(count);
-    for _ in 0..count {
-        list.push(rng.gen_range(0, INSERT_COUNT_MAX << 8) as u32)
-    }
-    (HashMap::new(), list)
-}
-
-fn prepare_struct_insert() -> (HashMap<u32, Struct>, Vec<(u32, StructValue)>) {
+fn prepare_insert<V: Clone>(get_value: &dyn Fn() -> Option<V>) -> (HashMap<u32, V>, Vec<(u32, Option<V>)>) {
     let mut rng = thread_rng();
     let count = rng.gen_range(INSERT_COUNT_MIN, INSERT_COUNT_MAX);
     let mut list = Vec::with_capacity(count);
     for _ in 0..count {
         list.push((
             rng.gen_range(0, INSERT_COUNT_MAX << 8) as u32,
-            default_struct(),
-        ))
+            get_value()
+        ));
     }
-    (HashMap::<u32, Struct>::new(), list)
+    (HashMap::new(), list)
 }
 
 /// Prepares a remove benchmark with values in the HashMap being clones of the 'values' parameter
