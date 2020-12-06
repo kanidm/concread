@@ -49,8 +49,8 @@ macro_rules! hash_key {
 /// the `HashMapWriteTxn` without calling `commit()`.
 pub struct HashMap<K, V>
 where
-    K: Hash + Eq + Clone + Debug,
-    V: Clone,
+    K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
 {
     write: Mutex<()>,
     active: Mutex<Arc<SuperBlock<K, V>>>,
@@ -58,19 +58,25 @@ where
     key2: u128,
 }
 
-unsafe impl<K: Hash + Eq + Clone + Debug, V: Clone> Send for HashMap<K, V> {}
-unsafe impl<K: Hash + Eq + Clone + Debug, V: Clone> Sync for HashMap<K, V> {}
+unsafe impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    Send for HashMap<K, V>
+{
+}
+unsafe impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    Sync for HashMap<K, V>
+{
+}
 
 /// An active read transaction over a `HashMap`. The data in this tree
 /// is guaranteed to not change and will remain consistent for the life
 /// of this transaction.
 pub struct HashMapReadTxn<'a, K, V>
 where
-    K: Hash + Eq + Clone + Debug,
-    V: Clone,
+    K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
 {
     _caller: &'a HashMap<K, V>,
-    pin: Arc<SuperBlock<K, V>>,
+    _pin: Arc<SuperBlock<K, V>>,
     work: CursorRead<K, V>,
     key1: u128,
     key2: u128,
@@ -83,8 +89,8 @@ where
 /// able to access and percieve changes in new transactions.
 pub struct HashMapWriteTxn<'a, K, V>
 where
-    K: Hash + Eq + Clone + Debug,
-    V: Clone,
+    K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
 {
     work: CursorWrite<K, V>,
     caller: &'a HashMap<K, V>,
@@ -95,8 +101,8 @@ where
 
 enum SnapshotType<'a, K, V>
 where
-    K: Hash + Eq + Clone + Debug,
-    V: Clone,
+    K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
 {
     R(&'a CursorRead<K, V>),
     W(&'a CursorWrite<K, V>),
@@ -112,21 +118,25 @@ where
 /// same thread while the read snapshot is open.
 pub struct HashMapReadSnapshot<'a, K, V>
 where
-    K: Hash + Eq + Clone + Debug,
-    V: Clone,
+    K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
 {
     work: SnapshotType<'a, K, V>,
     key1: u128,
     key2: u128,
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Clone> Default for HashMap<K, V> {
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Default
+    for HashMap<K, V>
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Clone> HashMap<K, V> {
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    HashMap<K, V>
+{
     /// Construct a new concurrent hashmap
     pub fn new() -> Self {
         HashMap {
@@ -145,7 +155,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> HashMap<K, V> {
         let work = CursorRead::new(pin.as_ref());
         HashMapReadTxn {
             _caller: self,
-            pin,
+            _pin: pin,
             work,
             key1: self.key1,
             key2: self.key2,
@@ -216,7 +226,9 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> HashMap<K, V> {
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Clone> FromIterator<(K, V)> for HashMap<K, V> {
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    FromIterator<(K, V)> for HashMap<K, V>
+{
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let hmap = HashMap::new();
         let mut hmap_write = hmap.write();
@@ -226,7 +238,12 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> FromIterator<(K, V)> for HashMap<K,
     }
 }
 
-impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> Extend<(K, V)> for HashMapWriteTxn<'a, K, V> {
+impl<
+        'a,
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+    > Extend<(K, V)> for HashMapWriteTxn<'a, K, V>
+{
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         iter.into_iter().for_each(|(k, v)| {
             let _ = self.insert(k, v);
@@ -234,7 +251,12 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> Extend<(K, V)> for HashMapWrite
     }
 }
 
-impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapWriteTxn<'a, K, V> {
+impl<
+        'a,
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+    > HashMapWriteTxn<'a, K, V>
+{
     pub(crate) fn get_txid(&self) -> u64 {
         self.work.get_txid()
     }
@@ -358,7 +380,12 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapWriteTxn<'a, K, V> {
     }
 }
 
-impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapReadTxn<'a, K, V> {
+impl<
+        'a,
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+    > HashMapReadTxn<'a, K, V>
+{
     pub(crate) fn get_txid(&self) -> u64 {
         self.work.get_txid()
     }
@@ -435,7 +462,12 @@ impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapReadTxn<'a, K, V> {
     }
 }
 
-impl<'a, K: Hash + Eq + Clone + Debug, V: Clone> HashMapReadSnapshot<'a, K, V> {
+impl<
+        'a,
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+    > HashMapReadSnapshot<'a, K, V>
+{
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
     pub fn get<'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>

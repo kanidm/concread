@@ -39,26 +39,32 @@ use std::sync::Arc;
 /// the `BptreeMapWriteTxn` without calling `commit()`.
 pub struct BptreeMap<K, V>
 where
-    K: Ord + Clone + Debug,
-    V: Clone,
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
 {
     write: Mutex<()>,
     active: Mutex<Arc<SuperBlock<K, V>>>,
 }
 
-unsafe impl<K: Clone + Ord + Debug, V: Clone> Send for BptreeMap<K, V> {}
-unsafe impl<K: Clone + Ord + Debug, V: Clone> Sync for BptreeMap<K, V> {}
+unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Send
+    for BptreeMap<K, V>
+{
+}
+unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync
+    for BptreeMap<K, V>
+{
+}
 
 /// An active read transaction over a `BptreeMap`. The data in this tree
 /// is guaranteed to not change and will remain consistent for the life
 /// of this transaction.
 pub struct BptreeMapReadTxn<'a, K, V>
 where
-    K: Ord + Clone + Debug,
-    V: Clone,
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
 {
     _caller: &'a BptreeMap<K, V>,
-    pin: Arc<SuperBlock<K, V>>,
+    _pin: Arc<SuperBlock<K, V>>,
     work: CursorRead<K, V>,
 }
 
@@ -69,8 +75,8 @@ where
 /// able to access and percieve changes in new transactions.
 pub struct BptreeMapWriteTxn<'a, K, V>
 where
-    K: Ord + Clone + Debug,
-    V: Clone,
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
 {
     work: CursorWrite<K, V>,
     caller: &'a BptreeMap<K, V>,
@@ -79,8 +85,8 @@ where
 
 enum SnapshotType<'a, K, V>
 where
-    K: Ord + Clone + Debug,
-    V: Clone,
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
 {
     R(&'a CursorRead<K, V>),
     W(&'a CursorWrite<K, V>),
@@ -96,19 +102,23 @@ where
 /// same thread while the read snapshot is open.
 pub struct BptreeMapReadSnapshot<'a, K, V>
 where
-    K: Ord + Clone + Debug,
-    V: Clone,
+    K: Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
 {
     work: SnapshotType<'a, K, V>,
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> Default for BptreeMap<K, V> {
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Default
+    for BptreeMap<K, V>
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> BptreeMap<K, V> {
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    BptreeMap<K, V>
+{
     /// Construct a new concurrent tree
     pub fn new() -> Self {
         BptreeMap {
@@ -125,7 +135,7 @@ impl<K: Clone + Ord + Debug, V: Clone> BptreeMap<K, V> {
         let work = CursorRead::new(pin.as_ref());
         BptreeMapReadTxn {
             _caller: self,
-            pin,
+            _pin: pin,
             work,
         }
     }
@@ -191,7 +201,9 @@ impl<K: Clone + Ord + Debug, V: Clone> BptreeMap<K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> FromIterator<(K, V)> for BptreeMap<K, V> {
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    FromIterator<(K, V)> for BptreeMap<K, V>
+{
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let temp_sb = SuperBlock::default();
         let mut cursor = CursorWrite::new(&temp_sb);
@@ -207,13 +219,17 @@ impl<K: Clone + Ord + Debug, V: Clone> FromIterator<(K, V)> for BptreeMap<K, V> 
     }
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> Extend<(K, V)> for BptreeMapWriteTxn<'a, K, V> {
+impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    Extend<(K, V)> for BptreeMapWriteTxn<'a, K, V>
+{
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         self.work.extend(iter);
     }
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
+impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    BptreeMapWriteTxn<'a, K, V>
+{
     // == RO methods
 
     /// Retrieve a value from the tree. If the value exists, a reference is returned
@@ -266,6 +282,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
 
     // (adv) values
 
+    #[cfg(test)]
     pub(crate) fn get_txid(&self) -> u64 {
         self.work.get_txid()
     }
@@ -402,7 +419,9 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapWriteTxn<'a, K, V> {
     }
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapReadTxn<'a, K, V> {
+impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    BptreeMapReadTxn<'a, K, V>
+{
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
     pub fn get<Q: ?Sized>(&'a self, k: &'a Q) -> Option<&'a V>
@@ -433,6 +452,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapReadTxn<'a, K, V> {
     }
 
     // (adv) range
+    #[cfg(test)]
     pub(crate) fn get_txid(&self) -> u64 {
         self.work.get_txid()
     }
@@ -467,7 +487,9 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapReadTxn<'a, K, V> {
     }
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> BptreeMapReadSnapshot<'a, K, V> {
+impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    BptreeMapReadSnapshot<'a, K, V>
+{
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
     pub fn get<Q: ?Sized>(&'a self, k: &'a Q) -> Option<&'a V>

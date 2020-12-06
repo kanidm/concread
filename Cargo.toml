@@ -1,6 +1,6 @@
 [package]
 name = "concread"
-version = "0.2.5"
+version = "0.2.6"
 authors = ["William Brown <william@blackhats.net.au>"]
 
 description = "Concurrently Readable Data-Structures for Rust"
@@ -15,6 +15,7 @@ license = "MPL-2.0"
 [features]
 simd_support = ["packed_simd"]
 skinny = []
+unsoundness = []
 
 [dependencies]
 crossbeam-epoch = "0.8"
@@ -35,7 +36,14 @@ criterion = "0.3"
 name = "unsound"
 path = "src/unsound.rs"
 
+[[bin]]
+name = "unsound2"
+path = "src/unsound2.rs"
+
+[[bin]]
+name = "unsound3"
+path = "src/unsound3.rs"
+
 [[bench]]
 name = "hashmap_benchmark"
 harness = false
-
