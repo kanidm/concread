@@ -21,7 +21,6 @@ extern crate rand;
 use concread::hashmap::*;
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use rand::{thread_rng, Rng};
-use std::mem;
 
 // ranges of counts for different benchmarks (MINs are inclusive, MAXes exclusive):
 const INSERT_COUNT_MIN: usize = 120;
@@ -42,9 +41,9 @@ const SEARCH_SIZE_DENOMINATOR: usize = 3;
 pub fn insert_empty_value_rollback(c: &mut Criterion) {
     c.bench_function("insert_empty_value_rollback", |b| {
         b.iter_batched(
-            || prepare_insert::<()>(&|| Some(())),
-            |(ref mut map, ref mut list)| {
-                insert_vec(map, list);
+            || prepare_insert(()),
+            |(mut map, list)| {
+                insert_vec(&mut map, list);
             },
             BatchSize::SmallInput,
         )
@@ -54,8 +53,8 @@ pub fn insert_empty_value_rollback(c: &mut Criterion) {
 pub fn insert_empty_value_commit(c: &mut Criterion) {
     c.bench_function("insert_empty_value_commit", |b| {
         b.iter_batched(
-            || prepare_insert::<()>(&|| Some(())),
-            |(ref mut map, ref mut list)| insert_vec(map, list).commit(),
+            || prepare_insert(()),
+            |(mut map, list)| insert_vec(&mut map, list).commit(),
             BatchSize::SmallInput,
         )
     });
@@ -64,9 +63,9 @@ pub fn insert_empty_value_commit(c: &mut Criterion) {
 pub fn insert_struct_value_rollback(c: &mut Criterion) {
     c.bench_function("insert_struct_value_rollback", |b| {
         b.iter_batched(
-            || prepare_insert::<Struct>(&default_struct),
-            |(ref mut map, ref mut list)| {
-                insert_vec(map, list);
+            || prepare_insert(Struct::default()),
+            |(mut map, list)| {
+                insert_vec(&mut map, list);
             },
             BatchSize::SmallInput,
         )
@@ -76,8 +75,8 @@ pub fn insert_struct_value_rollback(c: &mut Criterion) {
 pub fn insert_struct_value_commit(c: &mut Criterion) {
     c.bench_function("insert_struct_value_commit", |b| {
         b.iter_batched(
-            || prepare_insert::<Struct>(&default_struct),
-            |(ref mut map, ref mut list)| insert_vec(map, list).commit(),
+            || prepare_insert(Struct::default()),
+            |(mut map, list)| insert_vec(&mut map, list).commit(),
             BatchSize::SmallInput,
         )
     });
@@ -168,11 +167,11 @@ criterion_main!(insert, remove, search);
 
 fn insert_vec<'a, V: Clone>(
     map: &'a mut HashMap<u32, V>,
-    list: &mut Vec<(u32, Option<V>)>,
+    list: Vec<(u32, V)>,
 ) -> HashMapWriteTxn<'a, u32, V> {
     let mut write_txn = map.write();
-    for i in list.iter_mut() {
-        write_txn.insert(i.0, mem::replace(&mut i.1, None).unwrap());
+    for (key, val) in list.into_iter() {
+        write_txn.insert(key, val);
     }
     write_txn
 }
@@ -196,8 +195,6 @@ fn search_vec<V: Clone>(map: &HashMap<u32, V>, list: &Vec<u32>) {
     }
 }
 
-type StructValue = Option<Struct>;
-
 #[derive(Default, Clone)]
 struct Struct {
     var1: i64, var2: i64, var3: i64, var4: i64, var5: i64, var6: i64, var7: i64, var8: i64,
@@ -208,24 +205,21 @@ struct Struct {
     var41: i64, var42: i64
 }
 
-fn default_struct() -> StructValue {
-    Some(Default::default())
-}
-
-fn prepare_insert<V: Clone>(
-    get_value: &dyn Fn() -> Option<V>,
-) -> (HashMap<u32, V>, Vec<(u32, Option<V>)>) {
+fn prepare_insert<V: Clone>(value: V) -> (HashMap<u32, V>, Vec<(u32, V)>) {
     let mut rng = thread_rng();
     let count = rng.gen_range(INSERT_COUNT_MIN, INSERT_COUNT_MAX);
     let mut list = Vec::with_capacity(count);
     for _ in 0..count {
-        list.push((rng.gen_range(0, INSERT_COUNT_MAX << 8) as u32, get_value()));
+        list.push((
+            rng.gen_range(0, INSERT_COUNT_MAX << 8) as u32,
+            value.clone(),
+        ));
     }
     (HashMap::new(), list)
 }
 
-/// Prepares a remove benchmark with values in the HashMap being clones of the 'values' parameter
-fn prepare_remove<V: Clone>(values: V) -> (HashMap<u32, V>, Vec<u32>) {
+/// Prepares a remove benchmark with values in the HashMap being clones of the 'value' parameter
+fn prepare_remove<V: Clone>(value: V) -> (HashMap<u32, V>, Vec<u32>) {
     let mut rng = thread_rng();
     let insert_count = rng.gen_range(INSERT_COUNT_FOR_REMOVE_MIN, INSERT_COUNT_FOR_REMOVE_MAX);
     let remove_count = rng.gen_range(REMOVE_COUNT_MIN, REMOVE_COUNT_MAX);
@@ -234,13 +228,13 @@ fn prepare_remove<V: Clone>(values: V) -> (HashMap<u32, V>, Vec<u32>) {
     for i in random_order(insert_count, insert_count).iter() {
         // We could count on the hash function alone to make the order random, but it seems
         // better to count on every possible implementation.
-        write_txn.insert(i.clone(), values.clone());
+        write_txn.insert(i.clone(), value.clone());
     }
     write_txn.commit();
     (map, random_order(insert_count, remove_count))
 }
 
-fn prepare_search<V: Clone>(values: V) -> (HashMap<u32, V>, Vec<u32>) {
+fn prepare_search<V: Clone>(value: V) -> (HashMap<u32, V>, Vec<u32>) {
     let mut rng = thread_rng();
     let insert_count = rng.gen_range(INSERT_COUNT_FOR_SEARCH_MIN, INSERT_COUNT_FOR_SEARCH_MAX);
     let search_limit = insert_count * SEARCH_SIZE_NUMERATOR / SEARCH_SIZE_DENOMINATOR;
@@ -250,7 +244,7 @@ fn prepare_search<V: Clone>(values: V) -> (HashMap<u32, V>, Vec<u32>) {
     let map = HashMap::new();
     let mut write_txn = map.write();
     for k in 0..insert_count {
-        write_txn.insert(k as u32, values.clone());
+        write_txn.insert(k as u32, value.clone());
     }
     write_txn.commit();
 
