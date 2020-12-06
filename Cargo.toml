@@ -30,6 +30,7 @@ packed_simd = { version = "0.3", optional = true, package = "packed_simd_2" }
 
 [dev-dependencies]
 time = "0.2"
+criterion = "0.3"
 
 [[bin]]
 name = "unsound"
@@ -42,3 +43,7 @@ path = "src/unsound2.rs"
 [[bin]]
 name = "unsound3"
 path = "src/unsound3.rs"
+
+[[bench]]
+name = "hashmap_benchmark"
+harness = false
