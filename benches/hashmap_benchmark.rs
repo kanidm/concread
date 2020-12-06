@@ -165,7 +165,7 @@ criterion_main!(insert, remove, search);
 
 // Utility functions:
 
-fn insert_vec<'a, V: Clone>(
+fn insert_vec<'a, V: Clone + Sync + Send + 'static>(
     map: &'a mut HashMap<u32, V>,
     list: Vec<(u32, V)>,
 ) -> HashMapWriteTxn<'a, u32, V> {
@@ -176,7 +176,7 @@ fn insert_vec<'a, V: Clone>(
     write_txn
 }
 
-fn remove_vec<'a, V: Clone>(
+fn remove_vec<'a, V: Clone + Sync + Send + 'static>(
     map: &'a mut HashMap<u32, V>,
     list: &Vec<u32>,
 ) -> HashMapWriteTxn<'a, u32, V> {
@@ -187,7 +187,7 @@ fn remove_vec<'a, V: Clone>(
     write_txn
 }
 
-fn search_vec<V: Clone>(map: &HashMap<u32, V>, list: &Vec<u32>) {
+fn search_vec<V: Clone + Sync + Send + 'static>(map: &HashMap<u32, V>, list: &Vec<u32>) {
     let read_txn = map.read();
     for i in list.iter() {
         // ! This could potentially get optimized into nothing !
@@ -205,7 +205,7 @@ struct Struct {
     var41: i64, var42: i64
 }
 
-fn prepare_insert<V: Clone>(value: V) -> (HashMap<u32, V>, Vec<(u32, V)>) {
+fn prepare_insert<V: Clone + Sync + Send + 'static>(value: V) -> (HashMap<u32, V>, Vec<(u32, V)>) {
     let mut rng = thread_rng();
     let count = rng.gen_range(INSERT_COUNT_MIN, INSERT_COUNT_MAX);
     let mut list = Vec::with_capacity(count);
@@ -219,7 +219,7 @@ fn prepare_insert<V: Clone>(value: V) -> (HashMap<u32, V>, Vec<(u32, V)>) {
 }
 
 /// Prepares a remove benchmark with values in the HashMap being clones of the 'value' parameter
-fn prepare_remove<V: Clone>(value: V) -> (HashMap<u32, V>, Vec<u32>) {
+fn prepare_remove<V: Clone + Sync + Send + 'static>(value: V) -> (HashMap<u32, V>, Vec<u32>) {
     let mut rng = thread_rng();
     let insert_count = rng.gen_range(INSERT_COUNT_FOR_REMOVE_MIN, INSERT_COUNT_FOR_REMOVE_MAX);
     let remove_count = rng.gen_range(REMOVE_COUNT_MIN, REMOVE_COUNT_MAX);
@@ -234,7 +234,7 @@ fn prepare_remove<V: Clone>(value: V) -> (HashMap<u32, V>, Vec<u32>) {
     (map, random_order(insert_count, remove_count))
 }
 
-fn prepare_search<V: Clone>(value: V) -> (HashMap<u32, V>, Vec<u32>) {
+fn prepare_search<V: Clone + Sync + Send + 'static>(value: V) -> (HashMap<u32, V>, Vec<u32>) {
     let mut rng = thread_rng();
     let insert_count = rng.gen_range(INSERT_COUNT_FOR_SEARCH_MIN, INSERT_COUNT_FOR_SEARCH_MAX);
     let search_limit = insert_count * SEARCH_SIZE_NUMERATOR / SEARCH_SIZE_DENOMINATOR;
