@@ -112,15 +112,22 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
         K: Borrow<Q>,
         Q: Hash + Eq,
     {
-        // Search for and return if a value exists at key.
-        let rref = self.get_root_ref();
-        rref.get_ref(h, k)
-            // You know, I don't even want to talk about the poor life decisions
-            // that lead to this code existing.
-            .map(|v| unsafe {
-                let x = v as *const V;
-                &*x as &V
-            })
+        let mut node = self.get_root_ref();
+        loop {
+            // Corrupted flags not checked
+            if node.is_leaf() {
+                let lref = unsafe { &*(node as *const _ as *const Leaf<K, V>) };
+                return lref.get_ref(h, k)
+                    .map(|v| unsafe {
+                        let x = v as *const V;
+                        &*x as &V
+                    })
+            } else {
+                let bref = unsafe { &*(node as *const _ as *const Branch<K, V>) };
+                let idx = bref.locate_node(h);
+                node = unsafe { &*bref.nodes[idx] };
+            }
+        }
     }
 
     #[allow(clippy::needless_lifetimes)]

@@ -121,7 +121,7 @@ where
     pub key: [u64; H_CAPACITY],
     #[cfg(all(test, not(miri)))]
     poison: u64,
-    nodes: [*mut Node<K, V>; HBV_CAPACITY],
+    pub(crate) nodes: [*mut Node<K, V>; HBV_CAPACITY],
     #[cfg(all(test, not(miri)))]
     pub nid: usize,
 }
