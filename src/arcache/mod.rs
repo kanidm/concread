@@ -36,8 +36,10 @@ const READ_THREAD_RATIO: usize = 16;
 /// Statistics related to the Arc
 #[derive(Clone, Debug, PartialEq)]
 pub struct CacheStats {
-    /// The number of hits during all read operations.
+    /// The number of hits during all read operations on the primary cache.
     pub reader_hits: usize,
+    /// The number of hits during all read operations on the thread local caches.
+    pub reader_tlocal_hits: usize,
     /// The number of inclusions through read operations.
     pub reader_includes: usize,
     /// The number of hits during all write operations.
@@ -66,7 +68,7 @@ enum ThreadCacheItem<V> {
 }
 
 enum CacheEvent<K, V> {
-    Hit(Instant, u64),
+    Hit(Instant, u64, bool),
     Include(Instant, K, V, u64),
 }
 
@@ -478,6 +480,7 @@ impl<
         });
         let stats = CowCell::new(CacheStats {
             reader_hits: 0,
+            reader_tlocal_hits: 0,
             reader_includes: 0,
             write_hits: 0,
             write_inc_or_mod: 0,
@@ -730,8 +733,12 @@ impl<
         while let Ok(ce) = inner.rx.try_recv() {
             let t = match ce {
                 // Update if it was hit.
-                CacheEvent::Hit(t, k_hash) => {
-                    stats.reader_hits += 1;
+                CacheEvent::Hit(t, k_hash, is_tlocal) => {
+                    if is_tlocal {
+                        stats.reader_tlocal_hits += 1;
+                    } else {
+                        stats.reader_hits += 1;
+                    }
                     if let Some(ref mut ci_slots) = unsafe { cache.get_slot_mut(k_hash) } {
                         for ref mut ci in ci_slots.iter_mut() {
                             let mut next_state = match &ci.v {
@@ -1438,6 +1445,10 @@ impl<
             .as_ref()
             .and_then(|cache| {
                 cache.set.get(k).and_then(|v| unsafe {
+                    // Indicate a hit on the tlocal cache.
+                    self.tx
+                        .send(CacheEvent::Hit(self.ts, k_hash, true))
+                        .expect("Invalid tx state");
                     let v = &(**v).as_ref().1 as *const _;
                     // This discards the lifetime and repins it to &'b.
                     Some(&(*v))
@@ -1446,17 +1457,17 @@ impl<
             .or_else(|| {
                 self.cache.get_prehashed(k, k_hash).and_then(|v| {
                     (*v).to_vref().map(|vin| unsafe {
+                        // Indicate a hit on the main cache.
+                        self.tx
+                            .send(CacheEvent::Hit(self.ts, k_hash, false))
+                            .expect("Invalid tx state");
+
                         let vin = vin as *const _;
                         &(*vin)
                     })
                 })
             });
 
-        if r.is_some() {
-            self.tx
-                .send(CacheEvent::Hit(self.ts, k_hash))
-                .expect("Invalid tx state");
-        }
         r
     }
 
