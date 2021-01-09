@@ -112,15 +112,26 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
         K: Borrow<Q>,
         Q: Hash + Eq,
     {
-        // Search for and return if a value exists at key.
-        let rref = self.get_root_ref();
-        rref.get_ref(h, k)
-            // You know, I don't even want to talk about the poor life decisions
-            // that lead to this code existing.
-            .map(|v| unsafe {
-                let x = v as *const V;
-                &*x as &V
-            })
+        let mut node = self.get_root();
+        for _i in 0..65536 {
+            if unsafe { (*node).is_leaf() } {
+                let lref = leaf_ref!(node, K, V);
+                return lref.get_ref(h, k)
+                    .map(|v| unsafe {
+                        // Strip the lifetime and rebind to the 'a self.
+                        // This is safe because we know that these nodes will NOT
+                        // be altered during the lifetime of this txn, so the references
+                        // will remain stable.
+                        let x = v as *const V;
+                        &*x as &V
+                    })
+            } else {
+                let bref = branch_ref!(node, K, V);
+                let idx = bref.locate_node(h);
+                node = bref.get_idx_unchecked(idx);
+            }
+        }
+        panic!("Tree depth exceeded max limit (65536). This may indicate memory corruption.");
     }
 
     #[allow(clippy::needless_lifetimes)]
