@@ -116,15 +116,14 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
         for _i in 0..65536 {
             if unsafe { (*node).is_leaf() } {
                 let lref = leaf_ref!(node, K, V);
-                return lref.get_ref(h, k)
-                    .map(|v| unsafe {
-                        // Strip the lifetime and rebind to the 'a self.
-                        // This is safe because we know that these nodes will NOT
-                        // be altered during the lifetime of this txn, so the references
-                        // will remain stable.
-                        let x = v as *const V;
-                        &*x as &V
-                    })
+                return lref.get_ref(h, k).map(|v| unsafe {
+                    // Strip the lifetime and rebind to the 'a self.
+                    // This is safe because we know that these nodes will NOT
+                    // be altered during the lifetime of this txn, so the references
+                    // will remain stable.
+                    let x = v as *const V;
+                    &*x as &V
+                });
             } else {
                 let bref = branch_ref!(node, K, V);
                 let idx = bref.locate_node(h);
@@ -289,8 +288,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
                 //
                 // Note, that we have to briefly take an extra RC on the root so
                 // that we can get it into the branch.
-                let mut nroot =
-                    Node::new_branch(self.txid, self.root.clone(), rnode) as *mut Node<K, V>;
+                let mut nroot = Node::new_branch(self.txid, self.root, rnode) as *mut Node<K, V>;
                 self.first_seen.push(nroot);
                 // println!("ls push 2");
                 // self.last_seen.push(self.root);
@@ -300,8 +298,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
                 None
             }
             CRInsertState::RevSplit(lnode) => {
-                let mut nroot =
-                    Node::new_branch(self.txid, lnode, self.root.clone()) as *mut Node<K, V>;
+                let mut nroot = Node::new_branch(self.txid, lnode, self.root) as *mut Node<K, V>;
                 self.first_seen.push(nroot);
                 // println!("ls push 3");
                 // self.last_seen.push(self.root);
@@ -433,10 +430,12 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
         self.get_root_ref().get_txid()
     }
 
+    /*
     #[cfg(test)]
     pub(crate) fn tree_density(&self) -> (usize, usize, usize) {
         self.get_root_ref().tree_density()
     }
+    */
 }
 
 /*
@@ -758,7 +757,7 @@ fn clone_and_insert<K: Clone + Hash + Eq + Debug, V: Clone>(
     } // end if leaf
 }
 
-fn path_clone<'a, K: Clone + Hash + Eq + Debug, V: Clone>(
+fn path_clone<K: Clone + Hash + Eq + Debug, V: Clone>(
     node: *mut Node<K, V>,
     txid: u64,
     h: u64,
@@ -813,7 +812,7 @@ fn path_clone<'a, K: Clone + Hash + Eq + Debug, V: Clone>(
     }
 }
 
-fn clone_and_remove<'a, K: Clone + Hash + Eq + Debug, V: Clone>(
+fn clone_and_remove<K: Clone + Hash + Eq + Debug, V: Clone>(
     node: *mut Node<K, V>,
     txid: u64,
     h: u64,

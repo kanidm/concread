@@ -129,7 +129,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 
     /// Initiate a read transaction for the tree, concurrent to any
     /// other readers or writers.
-    pub fn read<'a>(&'a self) -> BptreeMapReadTxn<'a, K, V> {
+    pub fn read(&self) -> BptreeMapReadTxn<K, V> {
         let rguard = self.active.lock();
         let pin = rguard.clone();
         let work = CursorRead::new(pin.as_ref());
@@ -282,7 +282,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
 
     // (adv) values
 
-    #[cfg(test)]
+    #[allow(unused)]
     pub(crate) fn get_txid(&self) -> u64 {
         self.work.get_txid()
     }
@@ -389,12 +389,12 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
         // std::mem::swap(&mut self.work, &mut par_cursor);
         unimplemented!();
     }
+    */
 
     #[cfg(test)]
     pub(crate) fn tree_density(&self) -> (usize, usize) {
         self.work.tree_density()
     }
-    */
 
     #[cfg(test)]
     pub(crate) fn verify(&self) -> bool {
@@ -452,7 +452,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     }
 
     // (adv) range
-    #[cfg(test)]
+    #[allow(unused)]
     pub(crate) fn get_txid(&self) -> u64 {
         self.work.get_txid()
     }
@@ -639,6 +639,7 @@ mod tests {
         {
             let w = map.write();
             assert!(w.verify());
+            println!("{:?}", w.tree_density());
         }
         // assert!(w.tree_density() == ((L_CAPACITY << 4), (L_CAPACITY << 4)));
         std::mem::drop(map);
@@ -786,6 +787,8 @@ mod tests {
         assert!(rd.get(&1) == None);
     }
 
+    #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_bptree2_map_basic_concurrency_small() {
         bptree_map_basic_concurrency(100, 200)
     }

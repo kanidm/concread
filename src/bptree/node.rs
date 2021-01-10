@@ -11,9 +11,9 @@ use std::slice;
 
 #[cfg(test)]
 use std::collections::BTreeSet;
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 use std::sync::Mutex;
 
 pub(crate) const TXID_MASK: u64 = 0x0fff_ffff_ffff_fff0;
@@ -40,12 +40,12 @@ const L_CAPACITY_N1: usize = L_CAPACITY - 1;
 #[cfg(not(feature = "skinny"))]
 pub(crate) const BV_CAPACITY: usize = L_CAPACITY + 1;
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 thread_local!(static NODE_COUNTER: AtomicUsize = AtomicUsize::new(1));
 #[cfg(all(test, not(miri)))]
 thread_local!(static ALLOC_LIST: Mutex<BTreeSet<usize>> = Mutex::new(BTreeSet::new()));
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 fn alloc_nid() -> usize {
     let nid: usize = NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel));
     #[cfg(all(test, not(miri)))]
@@ -182,8 +182,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
             #[cfg(all(test, not(miri)))]
             nid: alloc_nid(),
         }));
-        let nnode = Box::into_raw(x) as *mut Leaf<K, V>;
-        nnode
+        Box::into_raw(x) as *mut Leaf<K, V>
     }
 
     pub(crate) fn new_branch(
@@ -262,8 +261,8 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         self.meta.is_leaf()
     }
 
+    #[allow(unused)]
     #[inline(always)]
-    #[cfg(test)]
     pub(crate) fn is_branch(&self) -> bool {
         self.meta.is_branch()
     }
@@ -307,6 +306,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
+    #[cfg(test)]
     #[inline(always)]
     pub(crate) fn get_ref<Q: ?Sized>(&self, k: &Q) -> Option<&V>
     where
@@ -825,8 +825,8 @@ impl<K: Ord + Clone + Debug, V: Clone> Drop for Leaf<K, V> {
 }
 
 impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
+    #[allow(unused)]
     #[inline(always)]
-    #[cfg(test)]
     fn set_count(&mut self, c: usize) {
         debug_assert_branch!(self);
         self.meta.set_count(c)
@@ -884,7 +884,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
                 meta: Meta(new_txid),
                 key: unsafe { MaybeUninit::uninit().assume_init() },
                 // We can simply clone the pointers.
-                nodes: self.nodes.clone(),
+                nodes: self.nodes,
                 #[cfg(all(test, not(miri)))]
                 nid: alloc_nid(),
             }));
@@ -932,6 +932,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn get_ref<Q: ?Sized>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -1594,13 +1595,13 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
 
         // If it did clone, it's a some, so we map that to have the from and new ptrs for
         // the memory management.
-        res.map(|n_ptr| {
+        if let Some(n_ptr) = res {
             // println!("ls push 101 {:?}", sib_ptr);
             first_seen.push(n_ptr);
             last_seen.push(sib_ptr);
             // Put the pointer in place.
             self.nodes[idx] = n_ptr;
-        });
+        };
         // Now return the right index
         ridx
     }
