@@ -16,9 +16,9 @@ use packed_simd::u64x8;
 
 #[cfg(test)]
 use std::collections::BTreeSet;
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 use std::sync::Mutex;
 
 pub(crate) const TXID_MASK: u64 = 0x0fff_ffff_ffff_fff0;
@@ -47,6 +47,9 @@ pub struct u64x8 {
 
 #[cfg(not(feature = "simd_support"))]
 impl u64x8 {
+    #[allow(clippy::many_single_char_names)]
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
     fn new(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64) -> Self {
         Self {
             _data: [a, b, c, d, e, f, g, h],
@@ -54,12 +57,12 @@ impl u64x8 {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 thread_local!(static NODE_COUNTER: AtomicUsize = AtomicUsize::new(1));
 #[cfg(all(test, not(miri)))]
 thread_local!(static ALLOC_LIST: Mutex<BTreeSet<usize>> = Mutex::new(BTreeSet::new()));
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 fn alloc_nid() -> usize {
     let nid: usize = NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel));
     #[cfg(all(test, not(miri)))]
@@ -70,11 +73,10 @@ fn alloc_nid() -> usize {
     nid
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 fn release_nid(nid: usize) {
     // println!("Release -> {:?}", nid);
     // debug_assert!(nid != 3);
-    #[cfg(all(test, not(miri)))]
     {
         let r = ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
         assert!(r == true);
@@ -232,8 +234,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
             #[cfg(all(test, not(miri)))]
             nid: alloc_nid(),
         }));
-        let nnode = Box::into_raw(x) as *mut Leaf<K, V>;
-        nnode
+        Box::into_raw(x) as *mut Leaf<K, V>
     }
 
     fn new_leaf_ins(flags: u64, h: u64, k: K, v: V) -> *mut Leaf<K, V> {
@@ -296,7 +297,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
     }
 
     #[inline(always)]
-    #[cfg(test)]
+    #[allow(unused)]
     pub(crate) fn is_branch(&self) -> bool {
         self.meta.is_branch()
     }
@@ -342,6 +343,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
         }
     }
 
+    #[cfg(test)]
     #[inline(always)]
     pub(crate) fn get_ref<Q: ?Sized>(&self, h: u64, k: &Q) -> Option<&V>
     where
@@ -964,7 +966,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Drop for Leaf<K, V> {
 
 impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
     #[inline(always)]
-    #[cfg(test)]
+    #[allow(unused)]
     fn set_slots(&mut self, c: usize) {
         debug_assert_branch!(self);
         self.meta.set_slots(c)
@@ -1033,7 +1035,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 #[cfg(all(test, not(miri)))]
                 poison: FLAG_POISON,
                 // Can clone the node pointers.
-                nodes: self.nodes.clone(),
+                nodes: self.nodes,
                 #[cfg(all(test, not(miri)))]
                 nid: alloc_nid(),
             }));
@@ -1088,6 +1090,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn get_ref<Q: ?Sized>(&self, h: u64, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -1766,13 +1769,13 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
 
         // If it did clone, it's a some, so we map that to have the from and new ptrs for
         // the memory management.
-        res.map(|n_ptr| {
+        if let Some(n_ptr) = res {
             // println!("ls push 101 {:?}", sib_ptr);
             first_seen.push(n_ptr);
             last_seen.push(sib_ptr);
             // Put the pointer in place.
             self.nodes[idx] = n_ptr;
-        });
+        };
         // Now return the right index
         ridx
     }

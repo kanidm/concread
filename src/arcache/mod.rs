@@ -1444,14 +1444,14 @@ impl<
             .tlocal
             .as_ref()
             .and_then(|cache| {
-                cache.set.get(k).and_then(|v| unsafe {
+                cache.set.get(k).map(|v| unsafe {
                     // Indicate a hit on the tlocal cache.
                     self.tx
                         .send(CacheEvent::Hit(self.ts, k_hash, true))
                         .expect("Invalid tx state");
                     let v = &(**v).as_ref().1 as *const _;
                     // This discards the lifetime and repins it to &'b.
-                    Some(&(*v))
+                    &(*v)
                 })
             })
             .or_else(|| {

@@ -42,7 +42,7 @@ where
             return Err(i);
         }
     }
-    return Err(branch.slots());
+    Err(branch.slots())
 }
 
 #[cfg(feature = "simd_support")]
@@ -211,7 +211,7 @@ where
             return KeyLoc::Missing(i);
         }
     }
-    return KeyLoc::Missing(leaf.slots());
+    KeyLoc::Missing(leaf.slots())
 }
 
 #[cfg(feature = "simd_support")]

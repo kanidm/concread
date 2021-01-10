@@ -111,15 +111,25 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         K: Borrow<Q>,
         Q: Ord,
     {
-        // Search for and return if a value exists at key.
-        let rref = self.get_root_ref();
-        rref.get_ref(k)
-            // You know, I don't even want to talk about the poor life decisions
-            // that lead to this code existing.
-            .map(|v| unsafe {
-                let x = v as *const V;
-                &*x as &V
-            })
+        let mut node = self.get_root();
+        for _i in 0..65536 {
+            if unsafe { (*node).is_leaf() } {
+                let lref = leaf_ref!(node, K, V);
+                return lref.get_ref(k).map(|v| unsafe {
+                    // Strip the lifetime and rebind to the 'a self.
+                    // This is safe because we know that these nodes will NOT
+                    // be altered during the lifetime of this txn, so the references
+                    // will remain stable.
+                    let x = v as *const V;
+                    &*x as &V
+                });
+            } else {
+                let bref = branch_ref!(node, K, V);
+                let idx = bref.locate_node(k);
+                node = bref.get_idx_unchecked(idx);
+            }
+        }
+        panic!("Tree depth exceeded max limit (65536). This may indicate memory corruption.");
     }
 
     #[allow(clippy::needless_lifetimes)]
@@ -272,8 +282,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                 //
                 // Note, that we have to briefly take an extra RC on the root so
                 // that we can get it into the branch.
-                let mut nroot =
-                    Node::new_branch(self.txid, self.root.clone(), rnode) as *mut Node<K, V>;
+                let mut nroot = Node::new_branch(self.txid, self.root, rnode) as *mut Node<K, V>;
                 self.first_seen.push(nroot);
                 // println!("ls push 2");
                 // self.last_seen.push(self.root);
@@ -283,8 +292,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                 None
             }
             CRInsertState::RevSplit(lnode) => {
-                let mut nroot =
-                    Node::new_branch(self.txid, lnode, self.root.clone()) as *mut Node<K, V>;
+                let mut nroot = Node::new_branch(self.txid, lnode, self.root) as *mut Node<K, V>;
                 self.first_seen.push(nroot);
                 // println!("ls push 3");
                 // self.last_seen.push(self.root);
@@ -807,7 +815,7 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
     } // end if leaf
 }
 
-fn path_clone<'a, K: Clone + Ord + Debug, V: Clone>(
+fn path_clone<K: Clone + Ord + Debug, V: Clone>(
     node: *mut Node<K, V>,
     txid: u64,
     k: &K,
@@ -862,7 +870,7 @@ fn path_clone<'a, K: Clone + Ord + Debug, V: Clone>(
     }
 }
 
-fn clone_and_remove<'a, K: Clone + Ord + Debug, V: Clone>(
+fn clone_and_remove<K: Clone + Ord + Debug, V: Clone>(
     node: *mut Node<K, V>,
     txid: u64,
     k: &K,
