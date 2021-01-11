@@ -1490,7 +1490,8 @@ impl<
     /// values that are relevant to this read transaction and this point in time. If you do not
     /// heed this warning, you may alter the fabric of time and space and have some interesting
     /// distortions in your data over time.
-    pub fn insert(&mut self, k: K, mut v: V) {
+    pub fn insert(&mut self, k: K, v: V) {
+        let mut v = v;
         // Send a copy forward through time and space.
         self.tx
             .send(CacheEvent::Include(
