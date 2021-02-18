@@ -9,7 +9,7 @@ homepage = "https://github.com/kanidm/concread/"
 repostiory = "https://github.com/kanidm/concread/"
 readme = "README.md"
 keywords = ["data-structures", "concread", "concurrency", "parallel",]
-categories = ["data-structures", "memory-management",]
+categories = ["data-structures", "memory-management", "caching", "lru", "arc"]
 license = "MPL-2.0"
 
 [features]
