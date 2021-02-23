@@ -24,7 +24,7 @@ crossbeam = "0.8"
 parking_lot = "0.11"
 num = "0.3.0"
 smallvec = "1.4"
-ahash = "0.6"
+ahash = "0.7"
 rand = "0.8"
 packed_simd = { version = "0.3", optional = true, package = "packed_simd_2" }
 

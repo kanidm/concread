@@ -17,7 +17,7 @@
 
 use crossbeam_epoch as epoch;
 use crossbeam_epoch::{Atomic, Guard, Owned};
-use std::sync::atomic::Ordering::{Acquire, Release};
+use std::sync::atomic::Ordering::{Acquire, Release, Relaxed};
 
 use parking_lot::{Mutex, MutexGuard};
 use std::marker::Send;
@@ -196,7 +196,7 @@ where
         let owned_data: Owned<T> = Owned::new(element.unwrap());
         let _shared_data = self
             .active
-            .compare_and_set(prev_data, owned_data, Release, &guard);
+            .compare_exchange(prev_data, owned_data, Release, Relaxed, &guard);
         // Finally, set our previous data for cleanup.
         unsafe { guard.defer_destroy(prev_data) };
         // Then return the current data with a readtxn. Do we need a new guard scope?
