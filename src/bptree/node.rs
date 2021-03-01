@@ -22,6 +22,7 @@ const COUNT_MASK: u64 = 0x0000_0000_0000_000f;
 pub(crate) const TXID_SHF: usize = 4;
 const FLAG_BRANCH: u64 = 0x1000_0000_0000_0000;
 const FLAG_LEAF: u64 = 0x2000_0000_0000_0000;
+const FLAG_INVALID: u64 = 0x4000_0000_0000_0000;
 // const FLAG_HASH: u64 = 0x4000_0000_0000_0000;
 // const FLAG_BUCKET: u64 = 0x8000_0000_0000_0000;
 const FLAG_DROPPED: u64 = 0xaaaa_bbbb_cccc_dddd;
@@ -573,7 +574,10 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
             // println!("Req clone leaf");
             // debug_assert!(false);
             // Diff txn, must clone.
-            let new_txid = (self.meta.0 & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF);
+            // # https://github.com/kanidm/concread/issues/55
+            // We flag the node as unable to drop it's internals.
+            let new_txid =
+                (self.meta.0 & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF) | FLAG_INVALID;
             let mut x: Box<CachePadded<Leaf<K, V>>> = Box::new(CachePadded::new(Leaf {
                 // Need to preserve count.
                 meta: Meta(new_txid),
@@ -582,6 +586,8 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
                 #[cfg(all(test, not(miri)))]
                 nid: alloc_nid(),
             }));
+
+            debug_assert!((x.meta.0 & FLAG_INVALID) != 0);
 
             // Copy in the values to the correct location.
             for idx in 0..self.count() {
@@ -592,6 +598,10 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
                     x.values[idx].as_mut_ptr().write(lvalue);
                 }
             }
+            // Finally undo the invalid flag to allow drop to proceed.
+            x.meta.0 = x.meta.0 & !FLAG_INVALID;
+
+            debug_assert!((x.meta.0 & FLAG_INVALID) == 0);
 
             Some(Box::into_raw(x) as *mut Node<K, V>)
         }
@@ -810,10 +820,15 @@ impl<K: Ord + Clone + Debug, V: Clone> Drop for Leaf<K, V> {
         #[cfg(all(test, not(miri)))]
         release_nid(self.nid);
         // Due to the use of maybe uninit we have to drop any contained values.
-        unsafe {
-            for idx in 0..self.count() {
-                ptr::drop_in_place(self.key[idx].as_mut_ptr());
-                ptr::drop_in_place(self.values[idx].as_mut_ptr());
+        // https://github.com/kanidm/concread/issues/55
+        // if we are invalid, do NOT drop our internals as they MAY be inconsistent.
+        // this WILL leak memory, but it's better than crashing.
+        if self.meta.0 & FLAG_INVALID == 0 {
+            unsafe {
+                for idx in 0..self.count() {
+                    ptr::drop_in_place(self.key[idx].as_mut_ptr());
+                    ptr::drop_in_place(self.values[idx].as_mut_ptr());
+                }
             }
         }
         // Done
@@ -878,7 +893,10 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         } else {
             // println!("Req clone branch");
             // Diff txn, must clone.
-            let new_txid = (self.meta.0 & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF);
+            // # https://github.com/kanidm/concread/issues/55
+            // We flag the node as unable to drop it's internals.
+            let new_txid =
+                (self.meta.0 & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF) | FLAG_INVALID;
             let mut x: Box<CachePadded<Branch<K, V>>> = Box::new(CachePadded::new(Branch {
                 // Need to preserve count.
                 meta: Meta(new_txid),
@@ -888,6 +906,9 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
                 #[cfg(all(test, not(miri)))]
                 nid: alloc_nid(),
             }));
+
+            debug_assert!((x.meta.0 & FLAG_INVALID) != 0);
+
             // Copy in the keys to the correct location.
             for idx in 0..self.count() {
                 unsafe {
@@ -895,6 +916,11 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
                     x.key[idx].as_mut_ptr().write(lkey);
                 }
             }
+            // Finally undo the invalid flag to allow drop to proceed.
+            x.meta.0 = x.meta.0 & !FLAG_INVALID;
+
+            debug_assert!((x.meta.0 & FLAG_INVALID) == 0);
+
             Some(Box::into_raw(x) as *mut Node<K, V>)
         }
     }
@@ -1826,9 +1852,14 @@ impl<K: Ord + Clone + Debug, V: Clone> Drop for Branch<K, V> {
         #[cfg(all(test, not(miri)))]
         release_nid(self.nid);
         // Due to the use of maybe uninit we have to drop any contained values.
-        unsafe {
-            for idx in 0..self.count() {
-                ptr::drop_in_place(self.key[idx].as_mut_ptr());
+        // https://github.com/kanidm/concread/issues/55
+        // if we are invalid, do NOT drop our internals as they MAY be inconsistent.
+        // this WILL leak memory, but it's better than crashing.
+        if self.meta.0 & FLAG_INVALID == 0 {
+            unsafe {
+                for idx in 0..self.count() {
+                    ptr::drop_in_place(self.key[idx].as_mut_ptr());
+                }
             }
         }
         // Done
