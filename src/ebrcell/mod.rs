@@ -17,7 +17,7 @@
 
 use crossbeam_epoch as epoch;
 use crossbeam_epoch::{Atomic, Guard, Owned};
-use std::sync::atomic::Ordering::{Acquire, Release, Relaxed};
+use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use parking_lot::{Mutex, MutexGuard};
 use std::marker::Send;

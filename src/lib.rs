@@ -42,20 +42,20 @@ extern crate packed_simd;
 // This is where the gud rust lives.
 mod utils;
 
+// This is where the scary rust lives.
+pub mod internals;
+
 // pub mod hpcell;
 pub mod cowcell;
 pub mod ebrcell;
+pub mod lincowcell;
 
 pub mod arcache;
 pub mod bptree;
 pub mod hashmap;
 
-// #[cfg(test)]
-// mod maple_tree;
 #[cfg(test)]
 extern crate crossbeam_utils;
-#[cfg(test)]
-mod lincowcell;
 
 pub use cowcell::CowCell;
 pub use ebrcell::EbrCell;

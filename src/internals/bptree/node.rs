@@ -71,7 +71,7 @@ pub(crate) fn assert_released() {
     {
         let is_empt = ALLOC_LIST.with(|llist| {
             let x = llist.lock().unwrap();
-            // println!("Remaining -> {:?}", x);
+            eprintln!("Remaining -> {:?}", x);
             x.is_empty()
         });
         assert!(is_empt);
@@ -571,7 +571,8 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
             // Same txn, no action needed.
             None
         } else {
-            // println!("Req clone leaf");
+            debug_assert!(txid > self.get_txid());
+            // eprintln!("Req clone leaf");
             // debug_assert!(false);
             // Diff txn, must clone.
             // # https://github.com/kanidm/concread/issues/55
