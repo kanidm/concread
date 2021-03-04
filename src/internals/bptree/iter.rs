@@ -287,7 +287,7 @@ mod tests {
         assert!(rref.min() == &20);
         assert!(test_iter.next().is_none());
         // This drops everything.
-        let _sb: SuperBlock<usize, usize> = SuperBlock::new_test(1, lnode as *mut _);
+        let _sb: SuperBlock<usize, usize> = SuperBlock::new_test(1, root as *mut _);
     }
 
     #[test]
