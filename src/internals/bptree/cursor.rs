@@ -5,7 +5,7 @@
 // throughout the structure and how to handle that effectively
 
 use super::node::*;
-use crate::lincowcell::LinCowCellCapable;
+use crate::internals::lincowcell::LinCowCellCapable;
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::mem;
@@ -1218,7 +1218,7 @@ mod tests {
     use super::super::states::*;
     use super::SuperBlock;
     use super::{CursorRead, CursorReadOps};
-    use crate::lincowcell::LinCowCellCapable;
+    use crate::internals::lincowcell::LinCowCellCapable;
     use rand::seq::SliceRandom;
     use std::mem;
 

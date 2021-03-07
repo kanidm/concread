@@ -3,8 +3,8 @@
 use crate::internals::bptree::cursor::CursorReadOps;
 use crate::internals::bptree::cursor::{CursorRead, CursorWrite, SuperBlock};
 use crate::internals::bptree::iter::{Iter, KeyIter, ValueIter};
-use crate::lincowcell::LinCowCellCapable;
-use crate::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
+use crate::internals::lincowcell::LinCowCellCapable;
+use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::iter::FromIterator;

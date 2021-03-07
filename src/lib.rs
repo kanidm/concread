@@ -48,7 +48,6 @@ pub mod internals;
 // pub mod hpcell;
 pub mod cowcell;
 pub mod ebrcell;
-pub mod lincowcell;
 
 pub mod arcache;
 pub mod bptree;

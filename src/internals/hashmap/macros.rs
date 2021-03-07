@@ -1,3 +1,12 @@
+macro_rules! hash_key {
+    ($k:expr, $key1:expr, $key2:expr) => {{
+        // let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::new_with_keys($key1, $key2);
+        $k.hash(&mut hasher);
+        hasher.finish()
+    }};
+}
+
 macro_rules! debug_assert_leaf {
     ($x:expr) => {{
         debug_assert!($x.meta.is_leaf());

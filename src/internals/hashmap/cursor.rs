@@ -4,6 +4,7 @@
 // Additionally, the cursor also is responsible for general movement
 // throughout the structure and how to handle that effectively
 
+use rand::Rng;
 use super::node::*;
 use std::borrow::Borrow;
 use std::fmt::Debug;
@@ -11,10 +12,13 @@ use std::hash::Hash;
 use std::mem;
 use std::sync::Arc;
 
+use ahash::AHasher;
+
 use super::iter::{Iter, KeyIter, ValueIter};
 use super::states::*;
 use parking_lot::Mutex;
-// use std::iter::Extend;
+
+use crate::internals::lincowcell::LinCowCellCapable;
 
 /// The internal root of the tree, with associated garbage lists etc.
 #[derive(Debug)]
@@ -26,42 +30,36 @@ where
     root: *mut Node<K, V>,
     size: usize,
     txid: u64,
-    /// Last seen has a mutex to allow descendant transactions to push back
-    /// last_seen into older transactions. Because this is arced, we know
-    ///  it will exist, and the mutex is ONLY locked/dropped when the
-    /// superblock itself is dropping.
-    pub(crate) last_seen: Mutex<Option<Vec<*mut Node<K, V>>>>,
-    /// This is the SUPERBLOCKCHAIN that let's us pin future
-    /// nodes so that we drop IN ORDER.
-    pub(crate) pin_next: Mutex<Option<Arc<SuperBlock<K, V>>>>,
+    key1: u128,
+    key2: u128,
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
-    pub(crate) fn commit_prep(&self, older: &Self) {
-        // println!("commit_prep {:?} -> {:?}", self.txid, older.txid);
-        let mut active_last_seen = older.last_seen.lock();
-        let mut new_last_seen = self.last_seen.lock();
-        debug_assert!((*active_last_seen).is_none());
-        debug_assert!((*new_last_seen).is_some());
-        // Now swap the two.
-        std::mem::swap(&mut (*active_last_seen), &mut (*new_last_seen));
-        debug_assert!((*active_last_seen).is_some());
-        debug_assert!((*new_last_seen).is_none());
-        // Done, unlock the guards.
-        // std::mem::drop(new_last_seen);
-        // std::mem::drop(active_last_seen);
+impl<K: Hash + Eq + Clone + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, CursorWrite<K, V>>
+for SuperBlock<K, V> {
+    fn create_reader(&self) -> CursorRead<K, V> {
+    }
+
+    fn create_writer(&self) -> CursorWrite<K, V> {
+    }
+
+    fn pre_commit(
+        &mut self,
+        mut new: CursorWrite<K, V>,
+        prev: &CursorRead<K, V>,
+    ) -> CursorRead<K, V> {
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Clone> Default for SuperBlock<K, V> {
-    fn default() -> Self {
+impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
+    /// 🔥 🔥 🔥
+    unsafe fn new() -> Self {
         let leaf: *mut Leaf<K, V> = Node::new_leaf(1);
         SuperBlock {
             root: leaf as *mut Node<K, V>,
             size: 0,
             txid: 1,
-            last_seen: Mutex::new(None),
-            pin_next: Mutex::new(None),
+            key1: rand::thread_rng().gen::<u128>(),
+            key2: rand::thread_rng().gen::<u128>(),
         }
     }
 }
@@ -72,6 +70,8 @@ where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
+    key1: u128,
+    key2: u128,
     txid: u64,
     length: usize,
     root: *mut Node<K, V>,
@@ -87,6 +87,8 @@ where
     txid: u64,
     length: usize,
     root: *mut Node<K, V>,
+    key1: u128,
+    key2: u128,
     last_seen: Vec<*mut Node<K, V>>,
     first_seen: Vec<*mut Node<K, V>>,
 }
