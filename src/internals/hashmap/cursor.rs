@@ -94,6 +94,37 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
             key2: rand::thread_rng().gen::<u128>(),
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn new_test(txid: u64, root: *mut Node<K, V>) -> Self {
+        assert!(txid < (TXID_MASK >> TXID_SHF));
+        assert!(txid > 0);
+        // Do a pre-verify to be sure it's sane.
+        assert!(unsafe { (*root).verify() });
+        // Collect anythinng from root into this txid if needed.
+        // Set txid to txid on all tree nodes from the root.
+        // first_seen.push(root);
+        // unsafe { (*root).sblock_collect(&mut first_seen) };
+        // Lock them all
+        /*
+        first_seen.iter().for_each(|n| unsafe {
+            (**n).make_ro();
+        });
+        */
+        // Determine our count internally.
+        let (size, _, _) = unsafe { (*root).tree_density() };
+        // Gen keys.
+        let key1 = rand::thread_rng().gen::<u128>();
+        let key2 = rand::thread_rng().gen::<u128>();
+        // Good to go!
+        SuperBlock {
+            txid,
+            size,
+            root,
+            key1,
+            key2,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -223,36 +254,6 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
             first_seen,
             key1: sblock.key1,
             key2: sblock.key2,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new_test(txid: u64, root: *mut Node<K, V>) -> Self {
-        assert!(txid < (TXID_MASK >> TXID_SHF));
-        assert!(txid > 0);
-        let last_seen = Vec::with_capacity(16);
-        let mut first_seen = Vec::with_capacity(16);
-        // Do a pre-verify to be sure it's sane.
-        assert!(unsafe { (*root).verify() });
-        // Collect anythinng from root into this txid if needed.
-        // Set txid to txid on all tree nodes from the root.
-        first_seen.push(root);
-        unsafe { (*root).sblock_collect(&mut first_seen) };
-        // Lock them all
-        /*
-        first_seen.iter().for_each(|n| unsafe {
-            (**n).make_ro();
-        });
-        */
-        // Determine our count internally.
-        let (length, _, _) = unsafe { (*root).tree_density() };
-        // Good to go!
-        CursorWrite {
-            txid,
-            length,
-            root,
-            last_seen,
-            first_seen,
         }
     }
 
@@ -1068,12 +1069,13 @@ mod tests {
     use super::super::node::*;
     use super::super::states::*;
     use super::SuperBlock;
-    use super::{CursorReadOps, CursorWrite};
+    use super::{CursorRead, CursorReadOps};
+    use crate::internals::lincowcell::LinCowCellCapable;
     use rand::seq::SliceRandom;
     use std::mem;
 
     fn create_leaf_node(v: usize) -> *mut Node<usize, usize> {
-        let node = Node::new_leaf(0);
+        let node = Node::new_leaf(1);
         {
             let nmut: &mut Leaf<_, _> = leaf_ref!(node, usize, usize);
             nmut.insert_or_update(v as u64, v, v);
@@ -1083,7 +1085,7 @@ mod tests {
 
     fn create_leaf_node_full(vbase: usize) -> *mut Node<usize, usize> {
         assert!(vbase % 10 == 0);
-        let node = Node::new_leaf(0);
+        let node = Node::new_leaf(1);
         {
             let nmut = leaf_ref!(node, usize, usize);
             for idx in 0..H_CAPACITY {
@@ -1098,7 +1100,7 @@ mod tests {
     fn create_branch_node_full(vbase: usize) -> *mut Node<usize, usize> {
         let l1 = create_leaf_node(vbase);
         let l2 = create_leaf_node(vbase + 10);
-        let lbranch = Node::new_branch(0, l1, l2);
+        let lbranch = Node::new_branch(1, l1, l2);
         let bref = branch_ref!(lbranch, usize, usize);
         for i in 2..HBV_CAPACITY {
             let l = create_leaf_node(vbase + (10 * i));
@@ -1116,7 +1118,8 @@ mod tests {
     fn test_hashmap2_cursor_insert_leaf() {
         // First create the node + cursor
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let sb = SuperBlock::new_test(1, node);
+        let mut wcurs = sb.create_writer();
         let prev_txid = wcurs.root_txid();
 
         // Now insert - the txid should be different.
@@ -1151,7 +1154,8 @@ mod tests {
         // as leaf needs a clone AND to split to achieve the new root.
 
         let node = create_leaf_node_full(10);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let sb = SuperBlock::new_test(1, node);
+        let mut wcurs = sb.create_writer();
         let prev_txid = wcurs.root_txid();
 
         let r = wcurs.insert(1, 1, 1);
@@ -1162,6 +1166,7 @@ mod tests {
         // println!("{:?}", wcurs);
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1171,7 +1176,8 @@ mod tests {
         // leaf needs to be below max to start, and we insert enough in-txn
         // to trigger a clone of leaf AND THEN to cause the split.
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let sb = SuperBlock::new_test(1, node);
+        let mut wcurs = sb.create_writer();
 
         for v in 1..(H_CAPACITY + 1) {
             // println!("ITER v {}", v);
@@ -1182,6 +1188,7 @@ mod tests {
         // println!("{:?}", wcurs);
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1197,7 +1204,9 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
+
         assert!(wcurs.verify());
         // println!("{:?}", wcurs);
 
@@ -1208,6 +1217,7 @@ mod tests {
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1224,7 +1234,8 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         let r = wcurs.insert(29, 29, 29);
@@ -1234,6 +1245,7 @@ mod tests {
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1250,7 +1262,8 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         // Now insert to trigger the needed actions.
@@ -1266,6 +1279,7 @@ mod tests {
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1282,7 +1296,8 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         // Now insert to trigger the needed actions.
@@ -1298,6 +1313,7 @@ mod tests {
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1311,7 +1327,8 @@ mod tests {
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         let r = wcurs.insert(11, 11, 11);
@@ -1326,6 +1343,7 @@ mod tests {
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1344,7 +1362,8 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         let r = wcurs.insert(19, 19, 19);
@@ -1359,6 +1378,7 @@ mod tests {
 
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1367,7 +1387,8 @@ mod tests {
         // Insert ascending - we want to ensure the tree is a few levels deep
         // so we do this to a reasonable number.
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let sb = SuperBlock::new_test(1, node);
+        let mut wcurs = sb.create_writer();
 
         for v in 1..(H_CAPACITY << 4) {
             // println!("ITER v {}", v);
@@ -1379,6 +1400,7 @@ mod tests {
         // println!("DENSITY -> {:?}", wcurs.get_tree_density());
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1386,7 +1408,8 @@ mod tests {
     fn test_hashmap2_cursor_insert_stress_2() {
         // Insert descending
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let sb = SuperBlock::new_test(1, node);
+        let mut wcurs = sb.create_writer();
 
         for v in (1..(H_CAPACITY << 4)).rev() {
             // println!("ITER v {}", v);
@@ -1398,6 +1421,7 @@ mod tests {
         // println!("DENSITY -> {:?}", wcurs.get_tree_density());
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1409,7 +1433,8 @@ mod tests {
         ins.shuffle(&mut rng);
 
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let sb = SuperBlock::new_test(1, node);
+        let mut wcurs = sb.create_writer();
 
         for v in ins.into_iter() {
             let r = wcurs.insert(v as u64, v, v);
@@ -1420,6 +1445,7 @@ mod tests {
         // println!("DENSITY -> {:?}", wcurs.get_tree_density());
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1428,42 +1454,42 @@ mod tests {
     fn test_hashmap2_cursor_insert_stress_4() {
         // Insert ascending - we want to ensure the tree is a few levels deep
         // so we do this to a reasonable number.
-        let mut sblock = SuperBlock::default();
+        let mut sb = unsafe { SuperBlock::new() };
+        let mut rdr = sb.create_reader();
 
         for v in 1..(H_CAPACITY << 4) {
-            let mut wcurs = CursorWrite::new(&sblock);
+            let mut wcurs = sb.create_writer();
             // println!("ITER v {}", v);
             let r = wcurs.insert(v as u64, v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
-            let new_sblock = wcurs.finalise();
-            new_sblock.commit_prep(&sblock);
-            sblock = new_sblock;
+            rdr = sb.pre_commit(wcurs, &rdr);
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
-        std::mem::drop(sblock);
+        mem::drop(rdr);
+        mem::drop(sb);
         assert_released();
     }
 
     #[test]
     fn test_hashmap2_cursor_insert_stress_5() {
         // Insert descending
-        let mut sblock = SuperBlock::default();
+        let mut sb = unsafe { SuperBlock::new() };
+        let mut rdr = sb.create_reader();
 
         for v in (1..(H_CAPACITY << 4)).rev() {
-            let mut wcurs = CursorWrite::new(&sblock);
+            let mut wcurs = sb.create_writer();
             // println!("ITER v {}", v);
             let r = wcurs.insert(v as u64, v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
-            let new_sblock = wcurs.finalise();
-            new_sblock.commit_prep(&sblock);
-            sblock = new_sblock;
+            rdr = sb.pre_commit(wcurs, &rdr);
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
-        std::mem::drop(sblock);
+        mem::drop(rdr);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1474,27 +1500,28 @@ mod tests {
         let mut ins: Vec<usize> = (1..(H_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
-        let mut sblock = SuperBlock::default();
+        let mut sb = unsafe { SuperBlock::new() };
+        let mut rdr = sb.create_reader();
 
         for v in ins.into_iter() {
-            let mut wcurs = CursorWrite::new(&sblock);
+            let mut wcurs = sb.create_writer();
             let r = wcurs.insert(v as u64, v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
-            let new_sblock = wcurs.finalise();
-            new_sblock.commit_prep(&sblock);
-            sblock = new_sblock;
+            rdr = sb.pre_commit(wcurs, &rdr);
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
-        std::mem::drop(sblock);
+        mem::drop(rdr);
+        mem::drop(sb);
         assert_released();
     }
 
     #[test]
     fn test_hashmap2_cursor_search_1() {
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let sb = SuperBlock::new_test(1, node);
+        let mut wcurs = sb.create_writer();
 
         for v in 1..(H_CAPACITY << 4) {
             let r = wcurs.insert(v as u64, v, v);
@@ -1509,6 +1536,7 @@ mod tests {
         }
         // On shutdown, check we dropped all as needed.
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1516,7 +1544,8 @@ mod tests {
     fn test_hashmap2_cursor_length_1() {
         // Check the length is consistent on operations.
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let sb = SuperBlock::new_test(1, node);
+        let mut wcurs = sb.create_writer();
 
         for v in 1..(H_CAPACITY << 4) {
             let r = wcurs.insert(v as u64, v, v);
@@ -1524,6 +1553,9 @@ mod tests {
         }
         // println!("{} == {}", wcurs.len(), H_CAPACITY << 4);
         assert!(wcurs.len() == H_CAPACITY << 4);
+        mem::drop(wcurs);
+        mem::drop(sb);
+        assert_released();
     }
 
     #[test]
@@ -1535,7 +1567,8 @@ mod tests {
         //
         //
         let lnode = create_leaf_node_full(0);
-        let mut wcurs = CursorWrite::new_test(1, lnode);
+        let sb = SuperBlock::new_test(1, lnode);
+        let mut wcurs = sb.create_writer();
         // println!("{:?}", wcurs);
 
         for v in 0..H_CAPACITY {
@@ -1550,18 +1583,21 @@ mod tests {
         }
 
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
     #[test]
     fn test_hashmap2_cursor_remove_01_p1() {
         let node = create_leaf_node(0);
-        let mut wcurs = CursorWrite::new_test(1, node);
+        let sb = SuperBlock::new_test(1, node);
+        let mut wcurs = sb.create_writer();
 
         let _ = wcurs.remove(0, &0);
         // println!("{:?}", wcurs);
 
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1580,12 +1616,14 @@ mod tests {
         let root = Node::new_branch(0, znode, lnode);
         // Prevent the tree shrinking.
         unsafe { (*root).add_node(rnode) };
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         println!("{:?}", wcurs);
         assert!(wcurs.verify());
         wcurs.remove(20, &20);
         assert!(wcurs.verify());
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1604,12 +1642,14 @@ mod tests {
         let root = Node::new_branch(0, lnode, rnode);
         // Prevent the tree shrinking.
         unsafe { (*root).add_node(znode) };
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         wcurs.remove(10, &10);
         assert!(wcurs.verify());
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1628,7 +1668,8 @@ mod tests {
         let root = Node::new_branch(0, znode, lnode);
         // Prevent the tree shrinking.
         unsafe { (*root).add_node(rnode) };
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         // Setup sibling leaf to already be cloned.
@@ -1638,6 +1679,7 @@ mod tests {
         wcurs.remove(20, &20);
         assert!(wcurs.verify());
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1656,7 +1698,8 @@ mod tests {
         let root = Node::new_branch(0, znode, lnode);
         // Prevent the tree shrinking.
         unsafe { (*root).add_node(rnode) };
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         // Setup leaf to already be cloned.
@@ -1666,6 +1709,7 @@ mod tests {
         wcurs.remove(20, &20);
         assert!(wcurs.verify());
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1684,7 +1728,8 @@ mod tests {
         let root = Node::new_branch(0, lnode, rnode);
         // Prevent the tree shrinking.
         unsafe { (*root).add_node(znode) };
-        let mut wcurs = CursorWrite::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         // Setup leaf to already be cloned.
@@ -1693,6 +1738,7 @@ mod tests {
         wcurs.remove(10, &10);
         assert!(wcurs.verify());
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1721,7 +1767,9 @@ mod tests {
         let rbranch = Node::new_branch(0, r1, r2);
         let root: *mut Branch<usize, usize> =
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
-        let mut wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
+
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
 
         assert!(wcurs.verify());
 
@@ -1729,6 +1777,7 @@ mod tests {
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1757,13 +1806,15 @@ mod tests {
         let rbranch = Node::new_branch(0, r1, r2);
         let root: *mut Branch<usize, usize> =
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
-        let mut wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         wcurs.remove(10, &10);
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1792,13 +1843,15 @@ mod tests {
 
         let root: *mut Branch<usize, usize> =
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
-        let mut wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         wcurs.remove(80, &80);
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1827,13 +1880,15 @@ mod tests {
 
         let root: *mut Branch<usize, usize> =
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
-        let mut wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         wcurs.remove(10, &10);
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1862,7 +1917,8 @@ mod tests {
         let rbranch = Node::new_branch(0, r1, r2);
         let root: *mut Branch<usize, usize> =
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
-        let mut wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
 
         assert!(wcurs.verify());
 
@@ -1873,6 +1929,7 @@ mod tests {
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1901,7 +1958,8 @@ mod tests {
         let rbranch = Node::new_branch(0, r1, r2);
         let root: *mut Branch<usize, usize> =
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
-        let mut wcurs: CursorWrite<usize, usize> = CursorWrite::new_test(1, root as *mut _);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         wcurs.path_clone(20);
@@ -1911,6 +1969,7 @@ mod tests {
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1940,7 +1999,8 @@ mod tests {
         let root =
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _) as *mut Node<usize, usize>;
         // let count = HBV_CAPACITY + 2;
-        let mut wcurs = CursorWrite::new_test(1, root);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         wcurs.path_clone(0);
@@ -1951,6 +2011,7 @@ mod tests {
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -1979,7 +2040,8 @@ mod tests {
 
         let root =
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _) as *mut Node<usize, usize>;
-        let mut wcurs = CursorWrite::new_test(1, root);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         for i in 0..HBV_CAPACITY {
@@ -1992,6 +2054,7 @@ mod tests {
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -2001,13 +2064,15 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode) as *mut Node<usize, usize>;
-        let mut wcurs = CursorWrite::new_test(1, root);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         wcurs.remove(20, &20);
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
@@ -2017,40 +2082,43 @@ mod tests {
         let lnode = create_leaf_node(10) as *mut Node<usize, usize>;
         let rnode = create_leaf_node_full(20) as *mut Node<usize, usize>;
         let root = Node::new_branch(0, lnode, rnode) as *mut Node<usize, usize>;
-        let mut wcurs = CursorWrite::new_test(1, root);
+        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
         wcurs.remove(10, &10);
 
         assert!(wcurs.verify());
         mem::drop(wcurs);
+        mem::drop(sb);
         assert_released();
     }
 
-    fn tree_create_rand() -> SuperBlock<usize, usize> {
+    fn tree_create_rand() -> (SuperBlock<usize, usize>, CursorRead<usize, usize>) {
         let mut rng = rand::thread_rng();
         let mut ins: Vec<usize> = (1..(H_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
-        let sblock = SuperBlock::default();
-        let mut wcurs = CursorWrite::new(&sblock);
+        let mut sb = unsafe { SuperBlock::new() };
+        let rdr = sb.create_reader();
+        let mut wcurs = sb.create_writer();
 
         for v in ins.into_iter() {
             let r = wcurs.insert(v as u64, v, v);
             assert!(r.is_none());
             assert!(wcurs.verify());
         }
-        let new_sblock = wcurs.finalise();
-        new_sblock.commit_prep(&sblock);
-        new_sblock
+
+        let rdr = sb.pre_commit(wcurs, &rdr);
+        (sb, rdr)
     }
 
     #[test]
     fn test_hashmap2_cursor_remove_stress_1() {
         // Insert ascending - we want to ensure the tree is a few levels deep
         // so we do this to a reasonable number.
-        let sblock = tree_create_rand();
-        let mut wcurs = CursorWrite::new(&sblock);
+        let (mut sb, rdr) = tree_create_rand();
+        let mut wcurs = sb.create_writer();
 
         for v in 1..(H_CAPACITY << 4) {
             // println!("-- ITER v {}", v);
@@ -2060,18 +2128,18 @@ mod tests {
         }
         // println!("{:?}", wcurs);
         // On shutdown, check we dropped all as needed.
-        let new_sblock = wcurs.finalise();
-        new_sblock.commit_prep(&sblock);
-        std::mem::drop(sblock);
-        std::mem::drop(new_sblock);
+        let rdr2 = sb.pre_commit(wcurs, &rdr);
+        std::mem::drop(rdr2);
+        std::mem::drop(rdr);
+        std::mem::drop(sb);
         assert_released();
     }
 
     #[test]
     fn test_hashmap2_cursor_remove_stress_2() {
         // Insert descending
-        let sblock = tree_create_rand();
-        let mut wcurs = CursorWrite::new(&sblock);
+        let (mut sb, rdr) = tree_create_rand();
+        let mut wcurs = sb.create_writer();
 
         for v in (1..(H_CAPACITY << 4)).rev() {
             // println!("ITER v {}", v);
@@ -2082,10 +2150,10 @@ mod tests {
         // println!("{:?}", wcurs);
         // println!("DENSITY -> {:?}", wcurs.get_tree_density());
         // On shutdown, check we dropped all as needed.
-        let new_sblock = wcurs.finalise();
-        new_sblock.commit_prep(&sblock);
-        std::mem::drop(sblock);
-        std::mem::drop(new_sblock);
+        let rdr2 = sb.pre_commit(wcurs, &rdr);
+        std::mem::drop(rdr2);
+        std::mem::drop(rdr);
+        std::mem::drop(sb);
         assert_released();
     }
 
@@ -2096,8 +2164,8 @@ mod tests {
         let mut ins: Vec<usize> = (1..(H_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
-        let sblock = tree_create_rand();
-        let mut wcurs = CursorWrite::new(&sblock);
+        let (mut sb, rdr) = tree_create_rand();
+        let mut wcurs = sb.create_writer();
 
         for v in ins.into_iter() {
             let r = wcurs.remove(v as u64, &v);
@@ -2107,10 +2175,10 @@ mod tests {
         // println!("{:?}", wcurs);
         // println!("DENSITY -> {:?}", wcurs.get_tree_density());
         // On shutdown, check we dropped all as needed.
-        let new_sblock = wcurs.finalise();
-        new_sblock.commit_prep(&sblock);
-        std::mem::drop(sblock);
-        std::mem::drop(new_sblock);
+        let rdr2 = sb.pre_commit(wcurs, &rdr);
+        std::mem::drop(rdr2);
+        std::mem::drop(rdr);
+        std::mem::drop(sb);
         assert_released();
     }
 
@@ -2119,43 +2187,41 @@ mod tests {
     fn test_hashmap2_cursor_remove_stress_4() {
         // Insert ascending - we want to ensure the tree is a few levels deep
         // so we do this to a reasonable number.
-        let mut sblock = tree_create_rand();
+        let (mut sb, mut rdr) = tree_create_rand();
 
         for v in 1..(H_CAPACITY << 4) {
-            let mut wcurs = CursorWrite::new(&sblock);
+            let mut wcurs = sb.create_writer();
             // println!("ITER v {}", v);
             let r = wcurs.remove(v as u64, &v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
-            let new_sblock = wcurs.finalise();
-            new_sblock.commit_prep(&sblock);
-            sblock = new_sblock;
+            rdr = sb.pre_commit(wcurs, &rdr);
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
-        std::mem::drop(sblock);
+        std::mem::drop(rdr);
+        std::mem::drop(sb);
         assert_released();
     }
 
     #[test]
     fn test_hashmap2_cursor_remove_stress_5() {
         // Insert descending
-        let mut sblock = tree_create_rand();
+        let (mut sb, mut rdr) = tree_create_rand();
 
         for v in (1..(H_CAPACITY << 4)).rev() {
-            let mut wcurs = CursorWrite::new(&sblock);
+            let mut wcurs = sb.create_writer();
             // println!("ITER v {}", v);
             let r = wcurs.remove(v as u64, &v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
-            let new_sblock = wcurs.finalise();
-            new_sblock.commit_prep(&sblock);
-            sblock = new_sblock;
+            rdr = sb.pre_commit(wcurs, &rdr);
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
         // mem::drop(node);
-        std::mem::drop(sblock);
+        std::mem::drop(rdr);
+        std::mem::drop(sb);
         assert_released();
     }
 
@@ -2166,21 +2232,20 @@ mod tests {
         let mut ins: Vec<usize> = (1..(H_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
-        let mut sblock = tree_create_rand();
+        let (mut sb, mut rdr) = tree_create_rand();
 
         for v in ins.into_iter() {
-            let mut wcurs = CursorWrite::new(&sblock);
+            let mut wcurs = sb.create_writer();
             let r = wcurs.remove(v as u64, &v);
             assert!(r == Some(v));
             assert!(wcurs.verify());
-            let new_sblock = wcurs.finalise();
-            new_sblock.commit_prep(&sblock);
-            sblock = new_sblock;
+            rdr = sb.pre_commit(wcurs, &rdr);
         }
         // println!("{:?}", node);
         // On shutdown, check we dropped all as needed.
         // mem::drop(node);
-        std::mem::drop(sblock);
+        std::mem::drop(rdr);
+        std::mem::drop(sb);
         assert_released();
     }
 
