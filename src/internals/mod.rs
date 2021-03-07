@@ -9,6 +9,6 @@
 //!
 //! ⚠️   ⚠️   ⚠️
 
-pub mod lincowcell;
 pub mod bptree;
 pub mod hashmap;
+pub mod lincowcell;

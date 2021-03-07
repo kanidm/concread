@@ -21,7 +21,6 @@
 mod macros;
 pub mod cursor;
 pub mod iter;
-pub mod node;
+mod node;
 mod simd;
 mod states;
-

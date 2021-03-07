@@ -1,24 +1,36 @@
-// The cursor is what actually knits a tree together from the parts
-// we have, and has an important role to keep the system consistent.
-//
-// Additionally, the cursor also is responsible for general movement
-// throughout the structure and how to handle that effectively
+//! The cursor is what actually knits a tree together from the parts
+//! we have, and has an important role to keep the system consistent.
+//!
+//! Additionally, the cursor also is responsible for general movement
+//! throughout the structure and how to handle that effectively
 
-use rand::Rng;
 use super::node::*;
+use rand::Rng;
 use std::borrow::Borrow;
 use std::fmt::Debug;
-use std::hash::Hash;
 use std::mem;
-use std::sync::Arc;
 
 use ahash::AHasher;
+use std::hash::{Hash, Hasher};
 
 use super::iter::{Iter, KeyIter, ValueIter};
 use super::states::*;
 use parking_lot::Mutex;
 
 use crate::internals::lincowcell::LinCowCellCapable;
+
+/// A stored K/V in the hash bucket.
+#[derive(Clone)]
+pub struct Datum<K, V>
+where
+    K: Hash + Eq + Clone + Debug,
+    V: Clone,
+{
+    /// The K in K:V.
+    pub k: K,
+    /// The V in K:V.
+    pub v: V,
+}
 
 /// The internal root of the tree, with associated garbage lists etc.
 #[derive(Debug)]
@@ -35,11 +47,14 @@ where
 }
 
 impl<K: Hash + Eq + Clone + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, CursorWrite<K, V>>
-for SuperBlock<K, V> {
+    for SuperBlock<K, V>
+{
     fn create_reader(&self) -> CursorRead<K, V> {
+        CursorRead::new(self)
     }
 
     fn create_writer(&self) -> CursorWrite<K, V> {
+        CursorWrite::new(self)
     }
 
     fn pre_commit(
@@ -47,12 +62,29 @@ for SuperBlock<K, V> {
         mut new: CursorWrite<K, V>,
         prev: &CursorRead<K, V>,
     ) -> CursorRead<K, V> {
+        let mut prev_last_seen = prev.last_seen.lock();
+        debug_assert!((*prev_last_seen).is_empty());
+
+        let new_last_seen = &mut new.last_seen;
+        std::mem::swap(&mut (*prev_last_seen), &mut (*new_last_seen));
+        debug_assert!((*new_last_seen).is_empty());
+
+        // Now when the lock is dropped, both sides see the correct info and garbage for drops.
+        // Clear first seen, we won't be dropping them from here.
+        new.first_seen.clear();
+
+        self.root = new.root;
+        self.size = new.length;
+        self.txid = new.txid;
+
+        // Create the new reader.
+        CursorRead::new(&self)
     }
 }
 
 impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
     /// 🔥 🔥 🔥
-    unsafe fn new() -> Self {
+    pub unsafe fn new() -> Self {
         let leaf: *mut Leaf<K, V> = Node::new_leaf(1);
         SuperBlock {
             root: leaf as *mut Node<K, V>,
@@ -64,7 +96,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct CursorRead<K, V>
 where
     K: Hash + Eq + Clone + Debug,
@@ -75,6 +107,7 @@ where
     txid: u64,
     length: usize,
     root: *mut Node<K, V>,
+    last_seen: Mutex<Vec<*mut Node<K, V>>>,
 }
 
 #[derive(Debug)]
@@ -101,6 +134,11 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
     fn len(&self) -> usize;
 
     fn get_txid(&self) -> u64;
+
+    fn hash_key<'a, 'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq;
 
     #[cfg(test)]
     fn get_tree_density(&self) -> (usize, usize, usize) {
@@ -183,6 +221,8 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
             root,
             last_seen,
             first_seen,
+            key1: sblock.key1,
+            key2: sblock.key2,
         }
     }
 
@@ -213,31 +253,6 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
             root,
             last_seen,
             first_seen,
-        }
-    }
-
-    pub(crate) fn finalise(mut self) -> SuperBlock<K, V> {
-        // Return the new root for replacement into the txn manager.
-        // We are done, time to seal everything.
-        /*
-        self.first_seen.iter().for_each(|n| unsafe {
-            (**n).make_ro();
-        });
-        */
-        // first_seen is cleared.
-        self.first_seen.clear();
-        // We put in a dummy to last_seen.
-        // We have to do this because CursorWrite is drop we can't destructure
-        // so we need to swap it out to prevent the rollback handler triggering.
-        let mut dummy = Vec::with_capacity(0);
-        mem::swap(&mut dummy, &mut self.last_seen);
-
-        SuperBlock {
-            root: self.root,
-            size: self.length,
-            txid: self.txid,
-            last_seen: Mutex::new(Some(dummy)),
-            pin_next: Mutex::new(None),
         }
     }
 
@@ -440,17 +455,14 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
     */
 }
 
-/*
-// Should be in map!
 impl<K: Clone + Hash + Eq + Debug, V: Clone> Extend<(K, V)> for CursorWrite<K, V> {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         iter.into_iter().for_each(|(k, v)| {
-            let h = ();
+            let h = self.hash_key(&k);
             let _ = self.insert(h, k, v);
         });
     }
 }
-*/
 
 impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for CursorWrite<K, V> {
     fn drop(&mut self) {
@@ -461,28 +473,28 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for CursorWrite<K, V> {
     }
 }
 
-impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for SuperBlock<K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for CursorRead<K, V> {
     fn drop(&mut self) {
-        // println!("dropping txid -> {:?}", self.txid);
-        // If a superblock is dropped, we need to remove anything that was
-        // last seen in this generation.
+        // If there is content in last_seen, a future generation wants us to remove it!
         let last_seen_guard = self
             .last_seen
             .try_lock()
             .expect("Unable to lock, something is horridly wrong!");
+        last_seen_guard.iter().for_each(|n| Node::free(*n));
+        std::mem::drop(last_seen_guard);
+    }
+}
 
-        if let Some(ls) = &(*last_seen_guard) {
-            // println!("Releasing prev SB LS -> {:?}", ls);
-            // Releasing prev txn
-            ls.iter().for_each(|n| Node::free(*n))
-        } else {
-            // println!("Releasing active SB LS -> None");
-            // We must be the last SB. Drop the tree now.
-            let mut first_seen = Vec::with_capacity(16);
-            first_seen.push(self.root);
-            unsafe { (*self.root).sblock_collect(&mut first_seen) };
-            first_seen.iter().for_each(|n| Node::free(*n));
-        }
+impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for SuperBlock<K, V> {
+    fn drop(&mut self) {
+        eprintln!("Releasing SuperBlock ...");
+        // We must be the last SB and no txns exist. Drop the tree now.
+        // TODO: Calc this based on size.
+        let mut first_seen = Vec::with_capacity(16);
+        eprintln!("{:?}", self.root);
+        first_seen.push(self.root);
+        unsafe { (*self.root).sblock_collect(&mut first_seen) };
+        first_seen.iter().for_each(|n| Node::free(*n));
     }
 }
 
@@ -493,6 +505,9 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorRead<K, V> {
             txid: sblock.txid,
             length: sblock.size,
             root: sblock.root,
+            last_seen: Mutex::new(Vec::with_capacity(0)),
+            key1: sblock.key1,
+            key2: sblock.key2,
         }
     }
 }
@@ -521,6 +536,14 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<
     fn get_txid(&self) -> u64 {
         self.txid
     }
+
+    fn hash_key<'a, 'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        hash_key!(self, k)
+    }
 }
 
 impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite<K, V> {
@@ -538,6 +561,14 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite
 
     fn get_txid(&self) -> u64 {
         self.txid
+    }
+
+    fn hash_key<'a, 'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        hash_key!(self, k)
     }
 }
 

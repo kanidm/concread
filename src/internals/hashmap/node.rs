@@ -1,3 +1,4 @@
+use super::cursor::Datum;
 use super::simd::*;
 use super::states::*;
 use crate::utils::*;
@@ -126,16 +127,6 @@ where
     nodes: [*mut Node<K, V>; HBV_CAPACITY],
     #[cfg(all(test, not(miri)))]
     pub nid: usize,
-}
-
-#[derive(Clone)]
-pub(crate) struct Datum<K, V>
-where
-    K: Hash + Eq + Clone + Debug,
-    V: Clone,
-{
-    pub k: K,
-    pub v: V,
 }
 
 type Bucket<K, V> = SmallVec<[Datum<K, V>; DEFAULT_BUCKET_ALLOC]>;

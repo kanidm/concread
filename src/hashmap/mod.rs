@@ -1,4 +1,3 @@
-
 //! HashMap - A concurrently readable HashMap
 //!
 //! This is a specialisation of the `BptreeMap`, allowing a concurrently readable
@@ -21,17 +20,16 @@
 // TODO:
 #![allow(clippy::implicit_hasher)]
 
-use std::borrow::Borrow;
 use crate::internals::hashmap::cursor::CursorReadOps;
-use crate::internals::hashmap::cursor::{CursorRead, CursorWrite, SuperBlock};
+use crate::internals::hashmap::cursor::{CursorRead, CursorWrite, Datum, SuperBlock};
 use crate::internals::hashmap::iter::*;
-use crate::internals::hashmap::node::Datum;
+use std::borrow::Borrow;
 
 use crate::internals::lincowcell::LinCowCellCapable;
 use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
 
 use std::fmt::Debug;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::iter::FromIterator;
 
 /// A concurrently readable map based on a modified B+Tree structured with fast
@@ -141,18 +139,14 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     /// other readers or writers.
     pub fn read(&self) -> HashMapReadTxn<K, V> {
         let inner = self.inner.read();
-        HashMapReadTxn {
-            inner
-        }
+        HashMapReadTxn { inner }
     }
 
     /// Initiate a write transaction for the map, exclusive to this
     /// writer, and concurrently to all existing reads.
     pub fn write(&self) -> HashMapWriteTxn<K, V> {
         let inner = self.inner.write();
-        HashMapWriteTxn {
-            inner
-        }
+        HashMapWriteTxn { inner }
     }
 
     /// Attempt to create a new write, returns None if another writer
@@ -160,11 +154,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     pub fn try_write(&self) -> Option<HashMapWriteTxn<K, V>> {
         self.inner
             .try_write()
-            .map(|inner|
-            HashMapWriteTxn {
-                inner
-            }
-            )
+            .map(|inner| HashMapWriteTxn { inner })
     }
 }
 
@@ -192,9 +182,7 @@ impl<
     > Extend<(K, V)> for HashMapWriteTxn<'a, K, V>
 {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
-        iter.into_iter().for_each(|(k, v)| {
-            let _ = self.insert(k, v);
-        });
+        self.inner.as_mut().extend(iter);
     }
 }
 
@@ -280,7 +268,7 @@ impl<
     /// as `Some(V)`. If the value did not previously exist this returns `None`.
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         // Hash the key.
-        let k_hash = self.inner.as_ref().hash_key(k);
+        let k_hash = self.inner.as_ref().hash_key(&k);
         self.inner.as_mut().insert(k_hash, k, v)
     }
 
