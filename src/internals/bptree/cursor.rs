@@ -239,6 +239,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
     pub(crate) fn clear(&mut self) {
         // Reset the values in this tree.
         // We need to mark everything as disposable, and create a new root!
+        self.last_seen.push(self.root);
         unsafe { (*self.root).sblock_collect(&mut self.last_seen) };
         let nroot: *mut Leaf<K, V> = Node::new_leaf(self.txid);
         let mut nroot = nroot as *mut Node<K, V>;
@@ -262,7 +263,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
                 // We have a new root node, swap it in.
                 // !!! It's already been cloned and marked for cleaning by the clone_and_insert
                 // call.
-                eprintln!("swap: {:?}, {:?}", self.root, nnode);
+                // eprintln!("swap: {:?}, {:?}", self.root, nnode);
                 mem::swap(&mut self.root, &mut nnode);
                 // Return the insert result
                 res
@@ -523,11 +524,11 @@ impl<K: Clone + Ord + Debug, V: Clone> Drop for CursorRead<K, V> {
 
 impl<K: Clone + Ord + Debug, V: Clone> Drop for SuperBlock<K, V> {
     fn drop(&mut self) {
-        eprintln!("Releasing SuperBlock ...");
+        // eprintln!("Releasing SuperBlock ...");
         // We must be the last SB and no txns exist. Drop the tree now.
         // TODO: Calc this based on size.
         let mut first_seen = Vec::with_capacity(16);
-        eprintln!("{:?}", self.root);
+        // eprintln!("{:?}", self.root);
         first_seen.push(self.root);
         unsafe { (*self.root).sblock_collect(&mut first_seen) };
         first_seen.iter().for_each(|n| Node::free(*n));
