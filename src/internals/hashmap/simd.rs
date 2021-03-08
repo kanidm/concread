@@ -69,8 +69,8 @@ where
             | (0b1000_0000, 6)
             | (0b0000_0000, 7) => true,
             _ => {
-                println!("branch mask -> {:b}", mask);
-                println!("branch slots -> {:?}", branch.slots());
+                eprintln!("branch mask -> {:b}", mask);
+                eprintln!("branch slots -> {:?}", branch.slots());
                 false
             }
         }

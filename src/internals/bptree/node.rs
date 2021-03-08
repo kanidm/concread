@@ -1,18 +1,13 @@
-use super::simd::*;
 use super::states::*;
 use crate::utils::*;
+// use libc::{c_void, mprotect, PROT_READ, PROT_WRITE};
 use crossbeam::utils::CachePadded;
 use std::borrow::Borrow;
 use std::fmt::{self, Debug, Error};
-use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ptr;
-
-use smallvec::SmallVec;
-
-#[cfg(feature = "simd_support")]
-use packed_simd::u64x8;
+use std::slice;
 
 #[cfg(test)]
 use std::collections::BTreeSet;
@@ -25,37 +20,26 @@ pub(crate) const TXID_MASK: u64 = 0x0fff_ffff_ffff_fff0;
 const FLAG_MASK: u64 = 0xf000_0000_0000_0000;
 const COUNT_MASK: u64 = 0x0000_0000_0000_000f;
 pub(crate) const TXID_SHF: usize = 4;
-// const FLAG__BRANCH: u64 = 0x1000_0000_0000_0000;
-// const FLAG__LEAF: u64 = 0x2000_0000_0000_0000;
-const FLAG_HASH_LEAF: u64 = 0x4000_0000_0000_0000;
-const FLAG_HASH_BRANCH: u64 = 0x8000_0000_0000_0000;
-const FLAG_DROPPED: u64 = 0xeeee_ffff_aaaa_bbbb;
-#[cfg(all(test, not(miri)))]
-const FLAG_POISON: u64 = 0xabcd_abcd_abcd_abcd;
+const FLAG_BRANCH: u64 = 0x1000_0000_0000_0000;
+const FLAG_LEAF: u64 = 0x2000_0000_0000_0000;
+const FLAG_INVALID: u64 = 0x4000_0000_0000_0000;
+// const FLAG_HASH: u64 = 0x4000_0000_0000_0000;
+// const FLAG_BUCKET: u64 = 0x8000_0000_0000_0000;
+const FLAG_DROPPED: u64 = 0xaaaa_bbbb_cccc_dddd;
 
-pub(crate) const H_CAPACITY: usize = 7;
-const H_CAPACITY_N1: usize = H_CAPACITY - 1;
-pub(crate) const HBV_CAPACITY: usize = H_CAPACITY + 1;
+#[cfg(feature = "skinny")]
+pub(crate) const L_CAPACITY: usize = 3;
+#[cfg(feature = "skinny")]
+const L_CAPACITY_N1: usize = L_CAPACITY - 1;
+#[cfg(feature = "skinny")]
+pub(crate) const BV_CAPACITY: usize = L_CAPACITY + 1;
 
-const DEFAULT_BUCKET_ALLOC: usize = 1;
-
-#[cfg(not(feature = "simd_support"))]
-#[allow(non_camel_case_types)]
-pub struct u64x8 {
-    _data: [u64; 8],
-}
-
-#[cfg(not(feature = "simd_support"))]
-impl u64x8 {
-    #[allow(clippy::many_single_char_names)]
-    #[allow(clippy::too_many_arguments)]
-    #[inline(always)]
-    fn new(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64) -> Self {
-        Self {
-            _data: [a, b, c, d, e, f, g, h],
-        }
-    }
-}
+#[cfg(not(feature = "skinny"))]
+pub(crate) const L_CAPACITY: usize = 7;
+#[cfg(not(feature = "skinny"))]
+const L_CAPACITY_N1: usize = L_CAPACITY - 1;
+#[cfg(not(feature = "skinny"))]
+pub(crate) const BV_CAPACITY: usize = L_CAPACITY + 1;
 
 #[cfg(all(test, not(miri)))]
 thread_local!(static NODE_COUNTER: AtomicUsize = AtomicUsize::new(1));
@@ -77,10 +61,8 @@ fn alloc_nid() -> usize {
 fn release_nid(nid: usize) {
     // println!("Release -> {:?}", nid);
     // debug_assert!(nid != 3);
-    {
-        let r = ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
-        assert!(r == true);
-    }
+    let r = ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
+    assert!(r == true);
 }
 
 #[cfg(test)]
@@ -89,7 +71,7 @@ pub(crate) fn assert_released() {
     {
         let is_empt = ALLOC_LIST.with(|llist| {
             let x = llist.lock().unwrap();
-            // println!("Remaining -> {:?}", x);
+            eprintln!("Remaining -> {:?}", x);
             x.is_empty()
         });
         assert!(is_empt);
@@ -100,103 +82,57 @@ pub(crate) fn assert_released() {
 pub(crate) struct Meta(u64);
 
 #[repr(C)]
-pub(crate) struct BranchSimd<K, V>
+pub(crate) struct Branch<K, V>
 where
-    K: Hash + Eq + Clone + Debug,
+    K: Ord + Clone + Debug,
     V: Clone,
 {
-    pub(crate) ctrl: u64x8,
-    #[cfg(all(test, not(miri)))]
-    poison: u64,
-    nodes: [*mut Node<K, V>; HBV_CAPACITY],
+    pub(crate) meta: Meta,
+    key: [MaybeUninit<K>; L_CAPACITY],
+    nodes: [*mut Node<K, V>; BV_CAPACITY],
     #[cfg(all(test, not(miri)))]
     pub(crate) nid: usize,
 }
 
 #[repr(C)]
-pub(crate) struct Branch<K, V>
-where
-    K: Hash + Eq + Clone + Debug,
-    V: Clone,
-{
-    pub meta: Meta,
-    pub key: [u64; H_CAPACITY],
-    #[cfg(all(test, not(miri)))]
-    poison: u64,
-    nodes: [*mut Node<K, V>; HBV_CAPACITY],
-    #[cfg(all(test, not(miri)))]
-    pub nid: usize,
-}
-
-#[derive(Clone)]
-pub(crate) struct Datum<K, V>
-where
-    K: Hash + Eq + Clone + Debug,
-    V: Clone,
-{
-    pub k: K,
-    pub v: V,
-}
-
-type Bucket<K, V> = SmallVec<[Datum<K, V>; DEFAULT_BUCKET_ALLOC]>;
-
-#[repr(C)]
-pub(crate) struct LeafSimd<K, V>
-where
-    K: Hash + Eq + Clone + Debug,
-    V: Clone,
-{
-    pub ctrl: u64x8,
-    #[cfg(all(test, not(miri)))]
-    poison: u64,
-    pub values: [MaybeUninit<Bucket<K, V>>; H_CAPACITY],
-    #[cfg(all(test, not(miri)))]
-    pub nid: usize,
-}
-
-#[repr(C)]
 pub(crate) struct Leaf<K, V>
 where
-    K: Hash + Eq + Clone + Debug,
+    K: Ord + Clone + Debug,
     V: Clone,
 {
-    pub meta: Meta,
-    pub key: [u64; H_CAPACITY],
+    pub(crate) meta: Meta,
+    key: [MaybeUninit<K>; L_CAPACITY],
+    values: [MaybeUninit<V>; L_CAPACITY],
     #[cfg(all(test, not(miri)))]
-    poison: u64,
-    pub values: [MaybeUninit<Bucket<K, V>>; H_CAPACITY],
-    #[cfg(all(test, not(miri)))]
-    pub nid: usize,
+    pub(crate) nid: usize,
 }
 
 #[repr(C)]
-pub(crate) struct Node<K, V>
-where
-    K: Hash + Eq + Clone + Debug,
-    V: Clone,
-{
+pub(crate) struct Node<K, V> {
     pub(crate) meta: Meta,
     k: PhantomData<K>,
     v: PhantomData<V>,
 }
 
-impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
+/*
+pub(crate) union NodeX<K, V>
+where
+    K: Ord + Clone + Debug,
+    V: Clone,
+{
+    meta: Meta,
+    leaf: Leaf<K, V>,
+    branch: Branch<K, V>,
+}
+*/
+
+impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     pub(crate) fn new_leaf(txid: u64) -> *mut Leaf<K, V> {
-        // println!("Req new hash leaf");
+        // println!("Req new leaf");
         debug_assert!(txid < (TXID_MASK >> TXID_SHF));
-        let x: Box<CachePadded<LeafSimd<K, V>>> = Box::new(CachePadded::new(LeafSimd {
-            ctrl: u64x8::new(
-                (txid << TXID_SHF) | FLAG_HASH_LEAF,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-            ),
-            #[cfg(all(test, not(miri)))]
-            poison: FLAG_POISON,
+        let x: Box<CachePadded<Leaf<K, V>>> = Box::new(CachePadded::new(Leaf {
+            meta: Meta((txid << TXID_SHF) | FLAG_LEAF),
+            key: unsafe { MaybeUninit::uninit().assume_init() },
             values: unsafe { MaybeUninit::uninit().assume_init() },
             #[cfg(all(test, not(miri)))]
             nid: alloc_nid(),
@@ -204,26 +140,39 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
         Box::into_raw(x) as *mut Leaf<K, V>
     }
 
-    fn new_leaf_bk(flags: u64, h: u64, bk: Bucket<K, V>) -> *mut Leaf<K, V> {
-        // println!("Req new hash leaf ins");
+    fn new_leaf_ins(flags: u64, k: K, v: V) -> *mut Leaf<K, V> {
+        // println!("Req new leaf ins");
         // debug_assert!(false);
-        debug_assert!((flags & FLAG_MASK) == FLAG_HASH_LEAF);
-        let x: Box<CachePadded<LeafSimd<K, V>>> = Box::new(CachePadded::new(LeafSimd {
-            // Let the flag, txid and the slots of value 1 through.
-            ctrl: u64x8::new(
-                flags & (TXID_MASK | FLAG_MASK | 1),
-                h,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-            ),
-            #[cfg(all(test, not(miri)))]
-            poison: FLAG_POISON,
+        debug_assert!((flags & FLAG_MASK) == FLAG_LEAF);
+        // Let the flag, txid and the count of value 1 through.
+        let txid = flags & (TXID_MASK | FLAG_MASK | 1);
+        let x: Box<CachePadded<Leaf<K, V>>> = Box::new(CachePadded::new(Leaf {
+            meta: Meta(txid),
+            #[cfg(feature = "skinny")]
+            key: [
+                MaybeUninit::new(k),
+                MaybeUninit::uninit(),
+                MaybeUninit::uninit(),
+            ],
+            #[cfg(not(feature = "skinny"))]
+            key: [
+                MaybeUninit::new(k),
+                MaybeUninit::uninit(),
+                MaybeUninit::uninit(),
+                MaybeUninit::uninit(),
+                MaybeUninit::uninit(),
+                MaybeUninit::uninit(),
+                MaybeUninit::uninit(),
+            ],
+            #[cfg(feature = "skinny")]
             values: [
-                MaybeUninit::new(bk),
+                MaybeUninit::new(v),
+                MaybeUninit::uninit(),
+                MaybeUninit::uninit(),
+            ],
+            #[cfg(not(feature = "skinny"))]
+            values: [
+                MaybeUninit::new(v),
                 MaybeUninit::uninit(),
                 MaybeUninit::uninit(),
                 MaybeUninit::uninit(),
@@ -235,10 +184,6 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
             nid: alloc_nid(),
         }));
         Box::into_raw(x) as *mut Leaf<K, V>
-    }
-
-    fn new_leaf_ins(flags: u64, h: u64, k: K, v: V) -> *mut Leaf<K, V> {
-        Self::new_leaf_bk(flags, h, smallvec![Datum { k, v }])
     }
 
     pub(crate) fn new_branch(
@@ -252,21 +197,28 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
         debug_assert!(unsafe { (*l).verify() });
         debug_assert!(unsafe { (*r).verify() });
         debug_assert!(txid < (TXID_MASK >> TXID_SHF));
-        let pivot = unsafe { (*r).min() };
-        let x: Box<CachePadded<BranchSimd<K, V>>> = Box::new(CachePadded::new(BranchSimd {
-            // This sets the default (key) slots to 1, since we take an l/r
-            ctrl: u64x8::new(
-                (txid << TXID_SHF) | FLAG_HASH_BRANCH | 1,
-                pivot,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-            ),
-            #[cfg(all(test, not(miri)))]
-            poison: FLAG_POISON,
+        let x: Box<CachePadded<Branch<K, V>>> = Box::new(CachePadded::new(Branch {
+            // This sets the default (key) count to 1, since we take an l/r
+            meta: Meta((txid << TXID_SHF) | FLAG_BRANCH | 1),
+            #[cfg(feature = "skinny")]
+            key: [
+                MaybeUninit::new(unsafe { (*r).min().clone() }),
+                MaybeUninit::uninit(),
+                MaybeUninit::uninit(),
+            ],
+            #[cfg(not(feature = "skinny"))]
+            key: [
+                MaybeUninit::new(unsafe { (*r).min().clone() }),
+                MaybeUninit::uninit(),
+                MaybeUninit::uninit(),
+                MaybeUninit::uninit(),
+                MaybeUninit::uninit(),
+                MaybeUninit::uninit(),
+                MaybeUninit::uninit(),
+            ],
+            #[cfg(feature = "skinny")]
+            nodes: [l, r, ptr::null_mut(), ptr::null_mut()],
+            #[cfg(not(feature = "skinny"))]
             nodes: [
                 l,
                 r,
@@ -280,9 +232,23 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
             #[cfg(all(test, not(miri)))]
             nid: alloc_nid(),
         }));
-        let b = Box::into_raw(x) as *mut Branch<K, V>;
-        debug_assert!(unsafe { (*b).verify() });
-        b
+        debug_assert!(x.verify());
+        Box::into_raw(x) as *mut Branch<K, V>
+    }
+
+    #[inline(always)]
+    pub(crate) fn make_ro(&self) {
+        match self.meta.0 & FLAG_MASK {
+            FLAG_LEAF => {
+                let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
+                lref.make_ro()
+            }
+            FLAG_BRANCH => {
+                let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
+                bref.make_ro()
+            }
+            _ => unreachable!(),
+        }
     }
 
     #[inline(always)]
@@ -296,32 +262,30 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
         self.meta.is_leaf()
     }
 
-    #[inline(always)]
     #[allow(unused)]
+    #[inline(always)]
     pub(crate) fn is_branch(&self) -> bool {
         self.meta.is_branch()
     }
 
     #[cfg(test)]
-    pub(crate) fn tree_density(&self) -> (usize, usize, usize) {
+    pub(crate) fn tree_density(&self) -> (usize, usize) {
         match self.meta.0 & FLAG_MASK {
-            FLAG_HASH_LEAF => {
+            FLAG_LEAF => {
                 let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
-                (lref.count(), lref.slots(), H_CAPACITY)
+                (lref.count(), L_CAPACITY)
             }
-            FLAG_HASH_BRANCH => {
+            FLAG_BRANCH => {
                 let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
-                let mut lcount = 0; // leaf count
-                let mut lslots = 0; // leaf populated slots
-                let mut mslots = 0; // leaf max possible
-                for idx in 0..(bref.slots() + 1) {
+                let mut lcount = 0; // leaf populated
+                let mut mcount = 0; // leaf max possible
+                for idx in 0..(bref.count() + 1) {
                     let n = bref.nodes[idx] as *mut Node<K, V>;
-                    let (c, l, m) = unsafe { (*n).tree_density() };
-                    lcount += c;
-                    lslots += l;
-                    mslots += m;
+                    let (l, m) = unsafe { (*n).tree_density() };
+                    lcount += l;
+                    mcount += m;
                 }
-                (lcount, lslots, mslots)
+                (lcount, mcount)
             }
             _ => unreachable!(),
         }
@@ -329,11 +293,11 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
 
     pub(crate) fn leaf_count(&self) -> usize {
         match self.meta.0 & FLAG_MASK {
-            FLAG_HASH_LEAF => 1,
-            FLAG_HASH_BRANCH => {
+            FLAG_LEAF => 1,
+            FLAG_BRANCH => {
                 let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
                 let mut lcount = 0; // leaf count
-                for idx in 0..(bref.slots() + 1) {
+                for idx in 0..(bref.count() + 1) {
                     let n = bref.nodes[idx] as *mut Node<K, V>;
                     lcount += unsafe { (*n).leaf_count() };
                 }
@@ -345,19 +309,19 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
 
     #[cfg(test)]
     #[inline(always)]
-    pub(crate) fn get_ref<Q: ?Sized>(&self, h: u64, k: &Q) -> Option<&V>
+    pub(crate) fn get_ref<Q: ?Sized>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Eq,
+        Q: Ord,
     {
         match self.meta.0 & FLAG_MASK {
-            FLAG_HASH_LEAF => {
+            FLAG_LEAF => {
                 let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
-                lref.get_ref(h, k)
+                lref.get_ref(k)
             }
-            FLAG_HASH_BRANCH => {
+            FLAG_BRANCH => {
                 let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
-                bref.get_ref(h, k)
+                bref.get_ref(k)
             }
             _ => {
                 // println!("FLAGS: {:x}", self.meta.0);
@@ -367,13 +331,13 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
     }
 
     #[inline(always)]
-    pub(crate) fn min(&self) -> u64 {
+    pub(crate) fn min(&self) -> &K {
         match self.meta.0 & FLAG_MASK {
-            FLAG_HASH_LEAF => {
+            FLAG_LEAF => {
                 let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
                 lref.min()
             }
-            FLAG_HASH_BRANCH => {
+            FLAG_BRANCH => {
                 let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
                 bref.min()
             }
@@ -382,13 +346,13 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
     }
 
     #[inline(always)]
-    pub(crate) fn max(&self) -> u64 {
+    pub(crate) fn max(&self) -> &K {
         match self.meta.0 & FLAG_MASK {
-            FLAG_HASH_LEAF => {
+            FLAG_LEAF => {
                 let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
                 lref.max()
             }
-            FLAG_HASH_BRANCH => {
+            FLAG_BRANCH => {
                 let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
                 bref.max()
             }
@@ -399,11 +363,11 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
     #[inline(always)]
     pub(crate) fn verify(&self) -> bool {
         match self.meta.0 & FLAG_MASK {
-            FLAG_HASH_LEAF => {
+            FLAG_LEAF => {
                 let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
                 lref.verify()
             }
-            FLAG_HASH_BRANCH => {
+            FLAG_BRANCH => {
                 let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
                 bref.verify()
             }
@@ -414,15 +378,15 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
     #[cfg(test)]
     fn no_cycles_inner(&self, track: &mut BTreeSet<*const Self>) -> bool {
         match self.meta.0 & FLAG_MASK {
-            FLAG_HASH_LEAF => {
+            FLAG_LEAF => {
                 // check if we are in the set?
                 track.insert(self as *const Self)
             }
-            FLAG_HASH_BRANCH => {
+            FLAG_BRANCH => {
                 if track.insert(self as *const Self) {
                     // check
                     let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
-                    for i in 0..(bref.slots() + 1) {
+                    for i in 0..(bref.count() + 1) {
                         let n = bref.nodes[i];
                         let r = unsafe { (*n).no_cycles_inner(track) };
                         if r == false {
@@ -454,9 +418,9 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
         // self.meta.0 &= FLAG_MASK | COUNT_MASK;
         // self.meta.0 |= txid << TXID_SHF;
 
-        if (self.meta.0 & FLAG_MASK) == FLAG_HASH_BRANCH {
+        if (self.meta.0 & FLAG_MASK) == FLAG_BRANCH {
             let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
-            for idx in 0..(bref.slots() + 1) {
+            for idx in 0..(bref.count() + 1) {
                 alloc.push(bref.nodes[idx]);
                 let n = bref.nodes[idx] as *mut Node<K, V>;
                 unsafe { (*n).sblock_collect(alloc) };
@@ -467,8 +431,8 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
     pub(crate) fn free(node: *mut Node<K, V>) {
         let self_meta = self_meta!(node);
         match self_meta.0 & FLAG_MASK {
-            FLAG_HASH_LEAF => Leaf::free(node as *mut Leaf<K, V>),
-            FLAG_HASH_BRANCH => Branch::free(node as *mut Branch<K, V>),
+            FLAG_LEAF => Leaf::free(node as *mut Leaf<K, V>),
+            FLAG_BRANCH => Branch::free(node as *mut Branch<K, V>),
             _ => unreachable!(),
         }
     }
@@ -476,35 +440,35 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
 
 impl Meta {
     #[inline(always)]
-    fn set_slots(&mut self, c: usize) {
+    fn set_count(&mut self, c: usize) {
         debug_assert!(c < 16);
-        // Zero the bits in the flag from the slots.
+        // Zero the bits in the flag from the count.
         self.0 &= FLAG_MASK | TXID_MASK;
         // Assign them.
         self.0 |= c as u8 as u64;
     }
 
     #[inline(always)]
-    pub(crate) fn slots(&self) -> usize {
+    pub(crate) fn count(&self) -> usize {
         (self.0 & COUNT_MASK) as usize
     }
 
     #[inline(always)]
-    fn add_slots(&mut self, x: usize) {
-        self.set_slots(self.slots() + x);
+    fn add_count(&mut self, x: usize) {
+        self.set_count(self.count() + x);
     }
 
     #[inline(always)]
-    fn inc_slots(&mut self) {
-        debug_assert!(self.slots() < 15);
-        // Since slots is the lowest bits, we can just inc
+    fn inc_count(&mut self) {
+        debug_assert!(self.count() < 15);
+        // Since count is the lowest bits, we can just inc
         // dec this as normal.
         self.0 += 1;
     }
 
     #[inline(always)]
-    fn dec_slots(&mut self) {
-        debug_assert!(self.slots() > 0);
+    fn dec_count(&mut self) {
+        debug_assert!(self.count() > 0);
         self.0 -= 1;
     }
 
@@ -515,39 +479,39 @@ impl Meta {
 
     #[inline(always)]
     pub(crate) fn is_leaf(&self) -> bool {
-        (self.0 & FLAG_MASK) == FLAG_HASH_LEAF
+        (self.0 & FLAG_MASK) == FLAG_LEAF
     }
 
     #[inline(always)]
     pub(crate) fn is_branch(&self) -> bool {
-        (self.0 & FLAG_MASK) == FLAG_HASH_BRANCH
+        (self.0 & FLAG_MASK) == FLAG_BRANCH
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
+impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
     #[inline(always)]
     #[cfg(test)]
-    fn set_slots(&mut self, c: usize) {
+    fn set_count(&mut self, c: usize) {
         debug_assert_leaf!(self);
-        self.meta.set_slots(c)
+        self.meta.set_count(c)
     }
 
     #[inline(always)]
-    pub(crate) fn slots(&self) -> usize {
+    pub(crate) fn count(&self) -> usize {
         debug_assert_leaf!(self);
-        self.meta.slots()
+        self.meta.count()
     }
 
     #[inline(always)]
-    fn inc_slots(&mut self) {
+    fn inc_count(&mut self) {
         debug_assert_leaf!(self);
-        self.meta.inc_slots()
+        self.meta.inc_count()
     }
 
     #[inline(always)]
-    fn dec_slots(&mut self) {
+    fn dec_count(&mut self) {
         debug_assert_leaf!(self);
-        self.meta.dec_slots()
+        self.meta.dec_count()
     }
 
     #[inline(always)]
@@ -556,74 +520,48 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
         self.meta.get_txid()
     }
 
-    pub(crate) fn count(&self) -> usize {
-        let mut c = 0;
-        for slot_idx in 0..self.slots() {
-            c += unsafe { (*self.values[slot_idx].as_ptr()).len() };
-        }
-        c
-    }
-
-    pub(crate) fn get_ref<Q: ?Sized>(&self, h: u64, k: &Q) -> Option<&V>
+    pub(crate) fn get_ref<Q: ?Sized>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Eq,
+        Q: Ord,
     {
         debug_assert_leaf!(self);
-        leaf_simd_search(self, h, k)
+        key_search!(self, k)
             .ok()
-            .map(|(slot_idx, bk_idx)| unsafe {
-                let bucket = (*self.values[slot_idx].as_ptr()).as_slice();
-                &(bucket.get_unchecked(bk_idx).v)
-            })
+            .map(|idx| unsafe { &*self.values[idx].as_ptr() })
     }
 
-    pub(crate) fn get_mut_ref<Q: ?Sized>(&mut self, h: u64, k: &Q) -> Option<&mut V>
+    pub(crate) fn get_mut_ref<Q: ?Sized>(&mut self, k: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
-        Q: Eq,
+        Q: Ord,
     {
         debug_assert_leaf!(self);
-        leaf_simd_search(self, h, k)
+        key_search!(self, k)
             .ok()
-            .map(|(slot_idx, bk_idx)| unsafe {
-                let bucket = (*self.values[slot_idx].as_mut_ptr()).as_mut_slice();
-                &mut (bucket.get_unchecked_mut(bk_idx).v)
-            })
-    }
-
-    pub(crate) unsafe fn get_slot_mut_ref<Q: ?Sized>(
-        &mut self,
-        h: u64,
-    ) -> Option<&mut [Datum<K, V>]>
-    where
-        K: Borrow<Q>,
-        Q: Eq,
-    {
-        debug_assert_leaf!(self);
-        leaf_simd_get_slot(self, h)
-            .map(|slot_idx| (*self.values[slot_idx].as_mut_ptr()).as_mut_slice())
+            .map(|idx| unsafe { &mut *self.values[idx].as_mut_ptr() })
     }
 
     #[inline(always)]
-    pub(crate) fn get_kv_idx_checked(&self, slot_idx: usize, bk_idx: usize) -> Option<(&K, &V)> {
+    pub(crate) fn get_kv_idx_checked(&self, idx: usize) -> Option<(&K, &V)> {
         debug_assert_leaf!(self);
-        if slot_idx < self.slots() {
-            let bucket = unsafe { (*self.values[slot_idx].as_ptr()).as_slice() };
-            bucket.get(bk_idx).map(|d| (&d.k, &d.v))
+        if idx < self.count() {
+            Some((unsafe { &*self.key[idx].as_ptr() }, unsafe {
+                &*self.values[idx].as_ptr()
+            }))
         } else {
             None
         }
     }
 
-    pub(crate) fn min(&self) -> u64 {
-        debug_assert!(self.slots() > 0);
-        self.key[0]
+    pub(crate) fn min(&self) -> &K {
+        debug_assert!(self.count() > 0);
+        unsafe { &*self.key[0].as_ptr() }
     }
 
-    pub(crate) fn max(&self) -> u64 {
-        debug_assert!(self.slots() > 0);
-        self.key[self.slots() - 1]
+    pub(crate) fn max(&self) -> &K {
+        debug_assert!(self.count() > 0);
+        unsafe { &*self.key[self.count() - 1].as_ptr() }
     }
 
     pub(crate) fn req_clone(&self, txid: u64) -> Option<*mut Node<K, V>> {
@@ -633,161 +571,115 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             // Same txn, no action needed.
             None
         } else {
-            // println!("Req clone leaf");
+            debug_assert!(txid > self.get_txid());
+            // eprintln!("Req clone leaf");
             // debug_assert!(false);
             // Diff txn, must clone.
-            let new_txid = (self.meta.0 & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF);
-            let x: Box<CachePadded<LeafSimd<K, V>>> = Box::new(CachePadded::new(LeafSimd {
-                ctrl: u64x8::new(
-                    new_txid,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                ),
-                #[cfg(all(test, not(miri)))]
-                poison: FLAG_POISON,
+            // # https://github.com/kanidm/concread/issues/55
+            // We flag the node as unable to drop it's internals.
+            let new_txid =
+                (self.meta.0 & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF) | FLAG_INVALID;
+            let mut x: Box<CachePadded<Leaf<K, V>>> = Box::new(CachePadded::new(Leaf {
+                // Need to preserve count.
+                meta: Meta(new_txid),
+                key: unsafe { MaybeUninit::uninit().assume_init() },
                 values: unsafe { MaybeUninit::uninit().assume_init() },
                 #[cfg(all(test, not(miri)))]
                 nid: alloc_nid(),
             }));
 
-            let x = Box::into_raw(x);
-            let xr = x as *mut Leaf<K, V>;
-            // Dup the keys
-            unsafe {
-                ptr::copy_nonoverlapping(
-                    &self.key as *const u64,
-                    (*xr).key.as_mut_ptr(),
-                    H_CAPACITY,
-                )
-            }
+            debug_assert!((x.meta.0 & FLAG_INVALID) != 0);
 
             // Copy in the values to the correct location.
-            for idx in 0..self.slots() {
+            for idx in 0..self.count() {
                 unsafe {
+                    let lkey = (*self.key[idx].as_ptr()).clone();
+                    x.key[idx].as_mut_ptr().write(lkey);
                     let lvalue = (*self.values[idx].as_ptr()).clone();
-                    (*x).values[idx].as_mut_ptr().write(lvalue);
+                    x.values[idx].as_mut_ptr().write(lvalue);
                 }
             }
+            // Finally undo the invalid flag to allow drop to proceed.
+            x.meta.0 = x.meta.0 & !FLAG_INVALID;
 
-            Some(x as *mut Node<K, V>)
+            debug_assert!((x.meta.0 & FLAG_INVALID) == 0);
+
+            Some(Box::into_raw(x) as *mut Node<K, V>)
         }
     }
 
-    pub(crate) fn insert_or_update(&mut self, h: u64, k: K, mut v: V) -> LeafInsertState<K, V> {
+    pub(crate) fn insert_or_update(&mut self, k: K, v: V) -> LeafInsertState<K, V> {
         debug_assert_leaf!(self);
         // Find the location we need to update
-        let r = leaf_simd_search(self, h, &k);
+        let r = key_search!(self, &k);
         match r {
-            KeyLoc::Ok(slot_idx, bk_idx) => {
-                // It exists at idx, replace the value.
-                let bucket = unsafe { &mut (*self.values[slot_idx].as_mut_ptr()) };
-                let prev = unsafe { bucket.as_mut_slice().get_unchecked_mut(bk_idx) };
-                std::mem::swap(&mut prev.v, &mut v);
+            Ok(idx) => {
+                // It exists at idx, replace
+                let prev = unsafe { self.values[idx].as_mut_ptr().replace(v) };
                 // Prev now contains the original value, return it!
-                LeafInsertState::Ok(Some(v))
+                LeafInsertState::Ok(Some(prev))
             }
-            KeyLoc::Collision(slot_idx) => {
-                // The hash collided, but that's okay! We just append to the slice.
-                let bucket = unsafe { &mut (*self.values[slot_idx].as_mut_ptr()) };
-                bucket.push(Datum { k, v });
-                LeafInsertState::Ok(None)
-            }
-            KeyLoc::Missing(idx) => {
-                if self.slots() >= H_CAPACITY {
+            Err(idx) => {
+                if self.count() >= L_CAPACITY {
                     // Overflow to a new node
-                    if idx >= self.slots() {
+                    if idx >= self.count() {
                         // Greate than all else, split right
-                        let rnode = Node::new_leaf_ins(self.meta.0, h, k, v);
+                        let rnode = Node::new_leaf_ins(self.meta.0, k, v);
                         LeafInsertState::Split(rnode)
                     } else if idx == 0 {
                         // Lower than all else, split left.
                         // let lnode = ...;
-                        let lnode = Node::new_leaf_ins(self.meta.0, h, k, v);
+                        let lnode = Node::new_leaf_ins(self.meta.0, k, v);
                         LeafInsertState::RevSplit(lnode)
                     } else {
-                        // Within our range, pop max, insert, and split right.
-                        // This is not a bucket add, it's a new bucket!
-                        let pk = unsafe { slice_remove(&mut self.key, H_CAPACITY - 1) };
-                        let pbk =
-                            unsafe { slice_remove(&mut self.values, H_CAPACITY - 1).assume_init() };
-
-                        let rnode = Node::new_leaf_bk(self.meta.0, pk, pbk);
-
+                        // Within our range, pop max, insert, and split
+                        // right.
+                        let pk =
+                            unsafe { slice_remove(&mut self.key, L_CAPACITY - 1).assume_init() };
+                        let pv =
+                            unsafe { slice_remove(&mut self.values, L_CAPACITY - 1).assume_init() };
                         unsafe {
-                            slice_insert(&mut self.key, h, idx);
-                            slice_insert(
-                                &mut self.values,
-                                MaybeUninit::new(smallvec![Datum { k, v }]),
-                                idx,
-                            );
+                            slice_insert(&mut self.key, MaybeUninit::new(k), idx);
+                            slice_insert(&mut self.values, MaybeUninit::new(v), idx);
                         }
 
-                        #[cfg(all(test, not(miri)))]
-                        debug_assert!(self.poison == FLAG_POISON);
-
+                        let rnode = Node::new_leaf_ins(self.meta.0, pk, pv);
                         LeafInsertState::Split(rnode)
                     }
                 } else {
                     // We have space.
                     unsafe {
-                        // self.key[idx] = h;
-                        slice_insert(&mut self.key, h, idx);
-                        slice_insert(
-                            &mut self.values,
-                            MaybeUninit::new(smallvec![Datum { k, v }]),
-                            idx,
-                        );
+                        slice_insert(&mut self.key, MaybeUninit::new(k), idx);
+                        slice_insert(&mut self.values, MaybeUninit::new(v), idx);
                     }
-                    #[cfg(all(test, not(miri)))]
-                    debug_assert!(self.poison == FLAG_POISON);
-                    self.inc_slots();
+                    self.inc_count();
                     LeafInsertState::Ok(None)
                 }
             }
         }
     }
 
-    pub(crate) fn remove<Q: ?Sized>(&mut self, h: u64, k: &Q) -> LeafRemoveState<V>
+    pub(crate) fn remove<Q: ?Sized>(&mut self, k: &Q) -> LeafRemoveState<V>
     where
         K: Borrow<Q>,
-        Q: Eq,
+        Q: Ord,
     {
         debug_assert_leaf!(self);
-        if self.slots() == 0 {
+        if self.count() == 0 {
             return LeafRemoveState::Shrink(None);
         }
         // We must have a value - where are you ....
-        match leaf_simd_search(self, h, k).ok() {
+        match key_search!(self, k).ok() {
             // Count still greater than 0, so Ok and None,
             None => LeafRemoveState::Ok(None),
-            Some((slot_idx, bk_idx)) => {
-                // pop from the bucket.
-                let Datum { k: _pk, v: pv } =
-                    unsafe { (*self.values[slot_idx].as_mut_ptr()).remove(bk_idx) };
-
-                // How much remains?
-                if unsafe { (*self.values[slot_idx].as_ptr()).is_empty() } {
-                    // Get the kv out
-                    let _ = unsafe { slice_remove(&mut self.key, slot_idx) };
-                    // AFTER the remove, set the top value to u64::MAX
-                    self.key[H_CAPACITY - 1] = u64::MAX;
-
-                    // Remove the bucket.
-                    let _ = unsafe { slice_remove(&mut self.values, slot_idx).assume_init() };
-
-                    self.dec_slots();
-                    if self.slots() == 0 {
-                        LeafRemoveState::Shrink(Some(pv))
-                    } else {
-                        LeafRemoveState::Ok(Some(pv))
-                    }
+            Some(idx) => {
+                // Get the kv out
+                let _pk = unsafe { slice_remove(&mut self.key, idx).assume_init() };
+                let pv = unsafe { slice_remove(&mut self.values, idx).assume_init() };
+                self.dec_count();
+                if self.count() == 0 {
+                    LeafRemoveState::Shrink(Some(pv))
                 } else {
-                    // The bucket lives!
                     LeafRemoveState::Ok(Some(pv))
                 }
             }
@@ -795,70 +687,48 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
     }
 
     pub(crate) fn take_from_l_to_r(&mut self, right: &mut Self) {
-        debug_assert!(right.slots() == 0);
-        let slots = self.slots() / 2;
-        let start_idx = self.slots() - slots;
+        debug_assert!(right.count() == 0);
+        let count = self.count() / 2;
+        let start_idx = self.count() - count;
 
         //move key and values
         unsafe {
-            slice_move(&mut right.key, 0, &mut self.key, start_idx, slots);
-            slice_move(&mut right.values, 0, &mut self.values, start_idx, slots);
-            // Update the left keys to be valid.
-            // so we took from:
-            //  [ a, b, c, d, e, f, g ]
-            //                ^     ^
-            //                |     slots
-            //                start
-            //  so we need to fill from start_idx + slots
-            let tgt_ptr = self.key.as_mut_ptr().add(start_idx);
-            // https://doc.rust-lang.org/std/ptr/fn.write_bytes.html
-            // Sets count * size_of::<T>() bytes of memory starting at dst to val.
-            ptr::write_bytes::<u64>(tgt_ptr, 0xff, slots);
-            #[cfg(all(test, not(miri)))]
-            debug_assert!(self.poison == FLAG_POISON);
+            slice_move(&mut right.key, 0, &mut self.key, start_idx, count);
+            slice_move(&mut right.values, 0, &mut self.values, start_idx, count);
         }
 
-        // update the slotss
-        self.meta.set_slots(start_idx);
-        right.meta.set_slots(slots);
+        // update the counts
+        self.meta.set_count(start_idx);
+        right.meta.set_count(count);
     }
 
     pub(crate) fn take_from_r_to_l(&mut self, right: &mut Self) {
-        debug_assert!(self.slots() == 0);
-        let slots = right.slots() / 2;
-        let start_idx = right.slots() - slots;
+        debug_assert!(self.count() == 0);
+        let count = right.count() / 2;
+        let start_idx = right.count() - count;
 
         // Move values from right to left.
         unsafe {
-            slice_move(&mut self.key, 0, &mut right.key, 0, slots);
-            slice_move(&mut self.values, 0, &mut right.values, 0, slots);
+            slice_move(&mut self.key, 0, &mut right.key, 0, count);
+            slice_move(&mut self.values, 0, &mut right.values, 0, count);
         }
         // Shift the values in right down.
         unsafe {
             ptr::copy(
-                right.key.as_ptr().add(slots),
+                right.key.as_ptr().add(count),
                 right.key.as_mut_ptr(),
                 start_idx,
             );
             ptr::copy(
-                right.values.as_ptr().add(slots),
+                right.values.as_ptr().add(count),
                 right.values.as_mut_ptr(),
                 start_idx,
             );
         }
 
-        // Fix the slotss.
-        self.meta.set_slots(slots);
-        right.meta.set_slots(start_idx);
-        // Update the upper keys in right
-        unsafe {
-            let tgt_ptr = right.key.as_mut_ptr().add(start_idx);
-            // https://doc.rust-lang.org/std/ptr/fn.write_bytes.html
-            // Sets count * size_of::<T>() bytes of memory starting at dst to val.
-            ptr::write_bytes::<u64>(tgt_ptr, 0xff, H_CAPACITY - start_idx);
-            #[cfg(all(test, not(miri)))]
-            debug_assert!(right.poison == FLAG_POISON);
-        }
+        // Fix the counts.
+        self.meta.set_count(count);
+        right.meta.set_count(start_idx);
     }
 
     /*
@@ -872,39 +742,44 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
     */
 
     #[inline(always)]
+    pub(crate) fn make_ro(&self) {
+        debug_assert_leaf!(self);
+        /*
+        let r = unsafe {
+            mprotect(
+                self as *const Leaf<K, V> as *mut c_void,
+                size_of::<Leaf<K, V>>(),
+                PROT_READ
+            )
+        };
+        assert!(r == 0);
+        */
+    }
+
+    #[inline(always)]
     pub(crate) fn merge(&mut self, right: &mut Self) {
         debug_assert_leaf!(self);
         debug_assert_leaf!(right);
-        let sc = self.slots();
-        let rc = right.slots();
+        let sc = self.count();
+        let rc = right.count();
         unsafe {
             slice_merge(&mut self.key, sc, &mut right.key, rc);
             slice_merge(&mut self.values, sc, &mut right.values, rc);
         }
-        #[cfg(all(test, not(miri)))]
-        debug_assert!(self.poison == FLAG_POISON);
-        self.meta.add_slots(right.count());
-        right.meta.set_slots(0);
-        debug_assert!(self.verify());
+        self.meta.add_count(right.count());
+        right.meta.set_count(0);
     }
 
     pub(crate) fn verify(&self) -> bool {
         debug_assert_leaf!(self);
-        #[cfg(all(test, not(miri)))]
-        debug_assert!(self.poison == FLAG_POISON);
         // println!("verify leaf -> {:?}", self);
-        if self.meta.slots() == 0 {
+        // Check key sorting
+        if self.meta.count() == 0 {
             return true;
         }
-        // Check everything above slots is u64::max
-        for work_idx in self.meta.slots()..H_CAPACITY {
-            debug_assert!(self.key[work_idx] == u64::MAX);
-        }
-        // Check key sorting
-        let mut lk: &u64 = &self.key[0];
-        for work_idx in 1..self.meta.slots() {
-            let rk: &u64 = &self.key[work_idx];
-            // Eq not ok as we have buckets.
+        let mut lk: &K = unsafe { &*self.key[0].as_ptr() };
+        for work_idx in 1..self.meta.count() {
+            let rk: &K = unsafe { &*self.key[work_idx].as_ptr() };
             if lk >= rk {
                 // println!("{:?}", self);
                 if cfg!(test) {
@@ -926,68 +801,69 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Clone> Debug for Leaf<K, V> {
+impl<K: Ord + Clone + Debug, V: Clone> Debug for Leaf<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), Error> {
         debug_assert_leaf!(self);
-        write!(f, "Leaf -> {}", self.slots())?;
+        write!(f, "Leaf -> {}", self.count())?;
         #[cfg(all(test, not(miri)))]
         write!(f, " nid: {}", self.nid)?;
         write!(f, "  \\-> [ ")?;
-        for idx in 0..self.slots() {
-            write!(f, "{:?}, ", self.key[idx])?;
-            write!(f, "[")?;
-            for d in unsafe { (*self.values[idx].as_ptr()).as_slice().iter() } {
-                write!(f, "{:?}, ", d.k)?;
-            }
-            write!(f, "], ")?;
+        for idx in 0..self.count() {
+            write!(f, "{:?}, ", unsafe { &*self.key[idx].as_ptr() })?;
         }
         write!(f, " ]")
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Clone> Drop for Leaf<K, V> {
+impl<K: Ord + Clone + Debug, V: Clone> Drop for Leaf<K, V> {
     fn drop(&mut self) {
         debug_assert_leaf!(self);
         #[cfg(all(test, not(miri)))]
         release_nid(self.nid);
         // Due to the use of maybe uninit we have to drop any contained values.
-        unsafe {
-            for idx in 0..self.slots() {
-                ptr::drop_in_place(self.values[idx].as_mut_ptr());
+        // https://github.com/kanidm/concread/issues/55
+        // if we are invalid, do NOT drop our internals as they MAY be inconsistent.
+        // this WILL leak memory, but it's better than crashing.
+        if self.meta.0 & FLAG_INVALID == 0 {
+            unsafe {
+                for idx in 0..self.count() {
+                    ptr::drop_in_place(self.key[idx].as_mut_ptr());
+                    ptr::drop_in_place(self.values[idx].as_mut_ptr());
+                }
             }
         }
         // Done
         self.meta.0 = FLAG_DROPPED;
-        debug_assert!(self.meta.0 & FLAG_MASK != FLAG_HASH_LEAF);
+        debug_assert!(self.meta.0 & FLAG_MASK != FLAG_LEAF);
         // #[cfg(test)]
         // println!("set leaf {:?} to {:x}", self.nid, self.meta.0);
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
-    #[inline(always)]
+impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
     #[allow(unused)]
-    fn set_slots(&mut self, c: usize) {
+    #[inline(always)]
+    fn set_count(&mut self, c: usize) {
         debug_assert_branch!(self);
-        self.meta.set_slots(c)
+        self.meta.set_count(c)
     }
 
     #[inline(always)]
-    pub(crate) fn slots(&self) -> usize {
+    pub(crate) fn count(&self) -> usize {
         debug_assert_branch!(self);
-        self.meta.slots()
+        self.meta.count()
     }
 
     #[inline(always)]
-    fn inc_slots(&mut self) {
+    fn inc_count(&mut self) {
         debug_assert_branch!(self);
-        self.meta.inc_slots()
+        self.meta.inc_count()
     }
 
     #[inline(always)]
-    fn dec_slots(&mut self) {
+    fn dec_count(&mut self) {
         debug_assert_branch!(self);
-        self.meta.dec_slots()
+        self.meta.dec_count()
     }
 
     #[inline(always)]
@@ -997,17 +873,17 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
     }
 
     // Can't inline as this is recursive!
-    pub(crate) fn min(&self) -> u64 {
+    pub(crate) fn min(&self) -> &K {
         debug_assert_branch!(self);
         unsafe { (*self.nodes[0]).min() }
     }
 
     // Can't inline as this is recursive!
-    pub(crate) fn max(&self) -> u64 {
+    pub(crate) fn max(&self) -> &K {
         debug_assert_branch!(self);
-        // Remember, self.slots() is + 1 offset, so this gets
+        // Remember, self.count() is + 1 offset, so this gets
         // the max node
-        unsafe { (*self.nodes[self.slots()]).max() }
+        unsafe { (*self.nodes[self.count()]).max() }
     }
 
     pub(crate) fn req_clone(&self, txid: u64) -> Option<*mut Node<K, V>> {
@@ -1018,53 +894,46 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         } else {
             // println!("Req clone branch");
             // Diff txn, must clone.
-            let new_txid = (self.meta.0 & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF);
-
-            let x: Box<CachePadded<BranchSimd<K, V>>> = Box::new(CachePadded::new(BranchSimd {
-                // This sets the default (key) slots to 1, since we take an l/r
-                ctrl: u64x8::new(
-                    new_txid,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                ),
-                #[cfg(all(test, not(miri)))]
-                poison: FLAG_POISON,
-                // Can clone the node pointers.
+            // # https://github.com/kanidm/concread/issues/55
+            // We flag the node as unable to drop it's internals.
+            let new_txid =
+                (self.meta.0 & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF) | FLAG_INVALID;
+            let mut x: Box<CachePadded<Branch<K, V>>> = Box::new(CachePadded::new(Branch {
+                // Need to preserve count.
+                meta: Meta(new_txid),
+                key: unsafe { MaybeUninit::uninit().assume_init() },
+                // We can simply clone the pointers.
                 nodes: self.nodes,
                 #[cfg(all(test, not(miri)))]
                 nid: alloc_nid(),
             }));
 
-            let x = Box::into_raw(x);
-            let xr = x as *mut Branch<K, V>;
-            // Dup the keys
-            unsafe {
-                ptr::copy_nonoverlapping(
-                    &self.key as *const u64,
-                    (*xr).key.as_mut_ptr(),
-                    H_CAPACITY,
-                )
-            }
+            debug_assert!((x.meta.0 & FLAG_INVALID) != 0);
 
-            Some(x as *mut Node<K, V>)
+            // Copy in the keys to the correct location.
+            for idx in 0..self.count() {
+                unsafe {
+                    let lkey = (*self.key[idx].as_ptr()).clone();
+                    x.key[idx].as_mut_ptr().write(lkey);
+                }
+            }
+            // Finally undo the invalid flag to allow drop to proceed.
+            x.meta.0 = x.meta.0 & !FLAG_INVALID;
+
+            debug_assert!((x.meta.0 & FLAG_INVALID) == 0);
+
+            Some(Box::into_raw(x) as *mut Node<K, V>)
         }
     }
 
     #[inline(always)]
-    pub(crate) fn locate_node(&self, h: u64) -> usize {
+    pub(crate) fn locate_node<Q: ?Sized>(&self, k: &Q) -> usize
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
         debug_assert_branch!(self);
-        // If the value is Ok(idx), then that means
-        // we were located to the right node. This is because we
-        // exactly hit and located on the key.
-        //
-        // If the value is Err(idx), then we have the exact index already.
-        // as branches is of-by-one.
-        match branch_simd_search::<K, V>(self, h) {
+        match key_search!(self, k) {
             Err(idx) => idx,
             Ok(idx) => idx + 1,
         }
@@ -1073,7 +942,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
     #[inline(always)]
     pub(crate) fn get_idx_unchecked(&self, idx: usize) -> *mut Node<K, V> {
         debug_assert_branch!(self);
-        debug_assert!(idx <= self.slots());
+        debug_assert!(idx <= self.count());
         debug_assert!(!self.nodes[idx].is_null());
         self.nodes[idx]
     }
@@ -1081,8 +950,8 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
     #[inline(always)]
     pub(crate) fn get_idx_checked(&self, idx: usize) -> Option<*mut Node<K, V>> {
         debug_assert_branch!(self);
-        // Remember, that nodes can have +1 to slots which is why <= here, not <.
-        if idx <= self.slots() {
+        // Remember, that nodes can have +1 to count which is why <= here, not <.
+        if idx <= self.count() {
             debug_assert!(!self.nodes[idx].is_null());
             Some(self.nodes[idx])
         } else {
@@ -1091,20 +960,26 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
     }
 
     #[cfg(test)]
-    pub(crate) fn get_ref<Q: ?Sized>(&self, h: u64, k: &Q) -> Option<&V>
+    pub(crate) fn get_ref<Q: ?Sized>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Eq,
+        Q: Ord,
     {
         debug_assert_branch!(self);
-        let idx = self.locate_node(h);
-        unsafe { (*self.nodes[idx]).get_ref(h, k) }
+        // If the value is Ok(idx), then that means
+        // we were located to the right node. This is because we
+        // exactly hit and located on the key.
+        //
+        // If the value is Err(idx), then we have the exact index already.
+        // as branches is of-by-one.
+        let idx = self.locate_node(k);
+        unsafe { (*self.nodes[idx]).get_ref(k) }
     }
 
     pub(crate) fn add_node(&mut self, node: *mut Node<K, V>) -> BranchInsertState<K, V> {
         debug_assert_branch!(self);
         // do we have space?
-        if self.slots() == H_CAPACITY {
+        if self.count() == L_CAPACITY {
             // if no space ->
             //    split and send two nodes back for new branch
             // There are three possible states that this causes.
@@ -1113,59 +988,62 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
             // 2 * The inserted node is between max - 1 and max, causing l(node, max) to be returned.
             // 3 * The inserted node is a low/middle value, causing max and max -1 to be returned.
             //
-            let kr: u64 = unsafe { (*node).min() };
-            let r = branch_simd_search(self, kr);
+            let kr = unsafe { (*node).min() };
+            let r = key_search!(self, kr);
             let ins_idx = r.unwrap_err();
             // Everything will pop max.
-            let max = unsafe { *(self.nodes.get_unchecked(HBV_CAPACITY - 1)) };
+            let max = unsafe { *(self.nodes.get_unchecked(BV_CAPACITY - 1)) };
             let res = match ins_idx {
                 // Case 1
-                H_CAPACITY => {
+                L_CAPACITY => {
                     // println!("case 1");
                     // Greater than all current values, so we'll just return max and node.
-                    self.key[H_CAPACITY - 1] = u64::MAX;
+                    let _kdrop =
+                        unsafe { ptr::read(self.key.get_unchecked(L_CAPACITY - 1)).assume_init() };
                     // Now setup the ret val NOTICE compared to case 2 that we swap node and max?
                     BranchInsertState::Split(max, node)
                 }
                 // Case 2
-                H_CAPACITY_N1 => {
+                L_CAPACITY_N1 => {
                     // println!("case 2");
                     // Greater than all but max, so we return max and node in the correct order.
                     // Drop the key between them.
-                    self.key[H_CAPACITY - 1] = u64::MAX;
+                    let _kdrop =
+                        unsafe { ptr::read(self.key.get_unchecked(L_CAPACITY - 1)).assume_init() };
                     // Now setup the ret val NOTICE compared to case 1 that we swap node and max?
                     BranchInsertState::Split(node, max)
                 }
                 // Case 3
                 ins_idx => {
                     // Get the max - 1 and max nodes out.
-                    let maxn1 = unsafe { *(self.nodes.get_unchecked(HBV_CAPACITY - 2)) };
+                    let maxn1 = unsafe { *(self.nodes.get_unchecked(BV_CAPACITY - 2)) };
                     // Drop the key between them.
-                    self.key[H_CAPACITY - 1] = u64::MAX;
+                    let _kdrop =
+                        unsafe { ptr::read(self.key.get_unchecked(L_CAPACITY - 1)).assume_init() };
                     // Drop the key before us that we are about to replace.
-                    self.key[H_CAPACITY - 2] = u64::MAX;
+                    let _kdrop =
+                        unsafe { ptr::read(self.key.get_unchecked(L_CAPACITY - 2)).assume_init() };
                     // Add node and it's key to the correct location.
+                    let k: K = kr.clone();
                     let leaf_ins_idx = ins_idx + 1;
                     unsafe {
-                        slice_insert(&mut self.key, kr, ins_idx);
+                        slice_insert(&mut self.key, MaybeUninit::new(k), ins_idx);
                         slice_insert(&mut self.nodes, node, leaf_ins_idx);
                     }
-                    #[cfg(all(test, not(miri)))]
-                    debug_assert!(self.poison == FLAG_POISON);
 
                     BranchInsertState::Split(maxn1, max)
                 }
             };
-            // Dec slots as we always reduce branch by one as we split return
+            // Dec count as we always reduce branch by one as we split return
             // two.
-            self.dec_slots();
+            self.dec_count();
             res
         } else {
             // if space ->
             // Get the nodes min-key - we clone it because we'll certainly be inserting it!
-            let k: u64 = unsafe { (*node).min() };
+            let k: K = unsafe { (*node).min().clone() };
             // bst and find when min-key < key[idx]
-            let r = branch_simd_search(self, k);
+            let r = key_search!(self, &k);
             // if r is ever found, I think this is a bug, because we should never be able to
             // add a node with an existing min.
             //
@@ -1235,14 +1113,11 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
             //
             // Magic!
             unsafe {
-                slice_insert(&mut self.key, k, ins_idx);
+                slice_insert(&mut self.key, MaybeUninit::new(k), ins_idx);
                 slice_insert(&mut self.nodes, node, leaf_ins_idx);
             }
-
-            #[cfg(all(test, not(miri)))]
-            debug_assert!(self.poison == FLAG_POISON);
-            // finally update the slots
-            self.inc_slots();
+            // finally update the count
+            self.inc_count();
             // Return that we are okay to go!
             BranchInsertState::Ok
         }
@@ -1254,9 +1129,9 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         sibidx: usize,
     ) -> BranchInsertState<K, V> {
         debug_assert_branch!(self);
-        if self.slots() == H_CAPACITY {
-            if sibidx == self.slots() {
-                // If sibidx == self.slots, then we must be going into max - 1.
+        if self.count() == L_CAPACITY {
+            if sibidx == self.count() {
+                // If sibidx == self.count, then we must be going into max - 1.
                 //    [   k1, k2, k3, k4, k5, k6   ]
                 //    [ v1, v2, v3, v4, v5, v6, v7 ]
                 //                            ^ ^-- sibidx
@@ -1269,12 +1144,13 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 //    [ v1, v2, v3, v4, v5, v6, xx ] -> [ ln, v7 ]
                 //
                 // So in this case we drop k6, and return a split.
-                let max = self.nodes[HBV_CAPACITY - 1];
-                self.key[H_CAPACITY - 1] = u64::MAX;
-                self.dec_slots();
+                let max = self.nodes[BV_CAPACITY - 1];
+                let _kdrop =
+                    unsafe { ptr::read(self.key.get_unchecked(L_CAPACITY - 1)).assume_init() };
+                self.dec_count();
                 BranchInsertState::Split(lnode, max)
-            } else if sibidx == (self.slots() - 1) {
-                // If sibidx == (self.slots - 1), then we must be going into max - 2
+            } else if sibidx == (self.count() - 1) {
+                // If sibidx == (self.count - 1), then we must be going into max - 2
                 //    [   k1, k2, k3, k4, k5, k6   ]
                 //    [ v1, v2, v3, v4, v5, v6, v7 ]
                 //                         ^ ^-- sibidx
@@ -1286,24 +1162,24 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 //
                 // This means that we need to return v6,v7 in a split, and
                 // just append node after v5.
-                let maxn1 = self.nodes[HBV_CAPACITY - 2];
-                let max = self.nodes[HBV_CAPACITY - 1];
-                self.key[H_CAPACITY - 1] = u64::MAX;
-                self.key[H_CAPACITY - 2] = u64::MAX;
-                self.dec_slots();
-                self.dec_slots();
+                let maxn1 = self.nodes[BV_CAPACITY - 2];
+                let max = self.nodes[BV_CAPACITY - 1];
+                let _kdrop =
+                    unsafe { ptr::read(self.key.get_unchecked(L_CAPACITY - 1)).assume_init() };
+                let _kdrop =
+                    unsafe { ptr::read(self.key.get_unchecked(L_CAPACITY - 2)).assume_init() };
+                self.dec_count();
+                self.dec_count();
                 //    [   k1, k2, k3, k4, dd, xx   ]    [   k6   ]
                 //    [ v1, v2, v3, v4, v5, xx, xx ] -> [ v6, v7 ]
-                let h: u64 = unsafe { (*lnode).min() };
+                let k: K = unsafe { (*lnode).min().clone() };
 
                 unsafe {
-                    slice_insert(&mut self.key, h, sibidx - 1);
+                    slice_insert(&mut self.key, MaybeUninit::new(k), sibidx - 1);
                     slice_insert(&mut self.nodes, lnode, sibidx);
                     // slice_insert(&mut self.node, MaybeUninit::new(node), sibidx);
                 }
-                #[cfg(all(test, not(miri)))]
-                debug_assert!(self.poison == FLAG_POISON);
-                self.inc_slots();
+                self.inc_count();
                 //
                 //    [   k1, k2, k3, k4, nk, xx   ]    [   k6   ]
                 //    [ v1, v2, v3, v4, v5, ln, xx ] -> [ v6, v7 ]
@@ -1326,26 +1202,26 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 // then insert
 
                 // Setup the nodes we intend to split away.
-                let maxn1 = self.nodes[HBV_CAPACITY - 2];
-                let max = self.nodes[HBV_CAPACITY - 1];
-                self.key[H_CAPACITY - 1] = u64::MAX;
-                self.key[H_CAPACITY - 2] = u64::MAX;
-                self.dec_slots();
-                self.dec_slots();
+                let maxn1 = self.nodes[BV_CAPACITY - 2];
+                let max = self.nodes[BV_CAPACITY - 1];
+                let _kdrop =
+                    unsafe { ptr::read(self.key.get_unchecked(L_CAPACITY - 1)).assume_init() };
+                let _kdrop =
+                    unsafe { ptr::read(self.key.get_unchecked(L_CAPACITY - 2)).assume_init() };
+                self.dec_count();
+                self.dec_count();
 
                 // println!("pre-fixup -> {:?}", self);
 
                 let sibnode = self.nodes[sibidx];
-                let nkey: u64 = unsafe { (*sibnode).min() };
+                let nkey: K = unsafe { (*sibnode).min().clone() };
 
                 unsafe {
-                    slice_insert(&mut self.key, nkey, sibidx);
+                    slice_insert(&mut self.key, MaybeUninit::new(nkey), sibidx);
                     slice_insert(&mut self.nodes, lnode, sibidx);
                 }
-                #[cfg(all(test, not(miri)))]
-                debug_assert!(self.poison == FLAG_POISON);
 
-                self.inc_slots();
+                self.inc_count();
                 // println!("post fixup -> {:?}", self);
 
                 BranchInsertState::Split(maxn1, max)
@@ -1365,16 +1241,14 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
             //
 
             let sibnode = self.nodes[sibidx];
-            let nkey: u64 = unsafe { (*sibnode).min() };
+            let nkey: K = unsafe { (*sibnode).min().clone() };
 
             unsafe {
                 slice_insert(&mut self.nodes, lnode, sibidx);
-                slice_insert(&mut self.key, nkey, sibidx);
+                slice_insert(&mut self.key, MaybeUninit::new(nkey), sibidx);
             }
-            #[cfg(all(test, not(miri)))]
-            debug_assert!(self.poison == FLAG_POISON);
 
-            self.inc_slots();
+            self.inc_count();
             // println!("post fixup -> {:?}", self);
             BranchInsertState::Ok
         }
@@ -1382,14 +1256,12 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
 
     fn remove_by_idx(&mut self, idx: usize) -> *mut Node<K, V> {
         debug_assert_branch!(self);
-        debug_assert!(idx <= self.slots());
+        debug_assert!(idx <= self.count());
         debug_assert!(idx > 0);
         // remove by idx.
-        let _pk = unsafe { slice_remove(&mut self.key, idx - 1) };
-        // AFTER the remove, set the top value to u64::MAX
-        self.key[H_CAPACITY - 1] = u64::MAX;
+        let _pk = unsafe { slice_remove(&mut self.key, idx - 1).assume_init() };
         let pn = unsafe { slice_remove(&mut self.nodes, idx) };
-        self.dec_slots();
+        self.dec_count();
         pn
     }
 
@@ -1448,23 +1320,23 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         //  * Does the opposite have capacity to remain valid?
 
         debug_assert_branch!(self);
-        debug_assert!(ridx > 0 && ridx <= self.slots());
+        debug_assert!(ridx > 0 && ridx <= self.count());
         let left = self.nodes[ridx - 1];
         let right = self.nodes[ridx];
         debug_assert!(!left.is_null());
         debug_assert!(!right.is_null());
 
         match unsafe { (*left).meta.0 & FLAG_MASK } {
-            FLAG_HASH_LEAF => {
+            FLAG_LEAF => {
                 let lmut = leaf_ref!(left, K, V);
                 let rmut = leaf_ref!(right, K, V);
 
-                if lmut.slots() + rmut.slots() <= H_CAPACITY {
+                if lmut.count() + rmut.count() <= L_CAPACITY {
                     lmut.merge(rmut);
                     // remove the right node from parent
                     let dnode = self.remove_by_idx(ridx);
                     debug_assert!(dnode == right);
-                    if self.slots() == 0 {
+                    if self.count() == 0 {
                         // We now need to be merged across as we only contain a single
                         // value now.
                         BranchShrinkState::Shrink(dnode)
@@ -1474,11 +1346,11 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                         // println!("🔥 {:?}", rmut.nid);
                         BranchShrinkState::Merge(dnode)
                     }
-                } else if rmut.slots() > (H_CAPACITY / 2) {
+                } else if rmut.count() > (L_CAPACITY / 2) {
                     lmut.take_from_r_to_l(rmut);
                     self.rekey_by_idx(ridx);
                     BranchShrinkState::Balanced
-                } else if lmut.slots() > (H_CAPACITY / 2) {
+                } else if lmut.count() > (L_CAPACITY / 2) {
                     lmut.take_from_l_to_r(rmut);
                     self.rekey_by_idx(ridx);
                     BranchShrinkState::Balanced
@@ -1487,37 +1359,34 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                     BranchShrinkState::Balanced
                 }
             }
-            FLAG_HASH_BRANCH => {
+            FLAG_BRANCH => {
                 // right or left is now in a "corrupt" state with a single value that we need to relocate
                 // to left - or we need to borrow from left and fix it!
                 let lmut = branch_ref!(left, K, V);
                 let rmut = branch_ref!(right, K, V);
 
-                debug_assert!(rmut.slots() == 0 || lmut.slots() == 0);
-                debug_assert!(rmut.slots() <= H_CAPACITY || lmut.slots() <= H_CAPACITY);
-                // println!("branch {:?} {:?}", lmut.slots(), rmut.slots());
-                if lmut.slots() == H_CAPACITY {
-                    // println!("branch take_from_l_to_r ");
+                debug_assert!(rmut.count() == 0 || lmut.count() == 0);
+                debug_assert!(rmut.count() <= L_CAPACITY || lmut.count() <= L_CAPACITY);
+                // println!("{:?} {:?}", lmut.count(), rmut.count());
+                if lmut.count() == L_CAPACITY {
                     lmut.take_from_l_to_r(rmut);
                     self.rekey_by_idx(ridx);
                     BranchShrinkState::Balanced
-                } else if rmut.slots() == H_CAPACITY {
-                    // println!("branch take_from_r_to_l ");
+                } else if rmut.count() == L_CAPACITY {
                     lmut.take_from_r_to_l(rmut);
                     self.rekey_by_idx(ridx);
                     BranchShrinkState::Balanced
                 } else {
-                    // println!("branch merge");
                     // merge the right to tail of left.
                     // println!("BL {:?}", lmut);
                     // println!("BR {:?}", rmut);
                     lmut.merge(rmut);
                     // println!("AL {:?}", lmut);
                     // println!("AR {:?}", rmut);
-                    // Reduce our slots
+                    // Reduce our count
                     let dnode = self.remove_by_idx(ridx);
                     debug_assert!(dnode == right);
-                    if self.slots() == 0 {
+                    if self.count() == 0 {
                         // We now need to be merged across as we also only contain a single
                         // value now.
                         BranchShrinkState::Shrink(dnode)
@@ -1541,32 +1410,33 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
 
     pub(crate) fn rekey_by_idx(&mut self, idx: usize) {
         debug_assert_branch!(self);
-        debug_assert!(idx <= self.slots());
+        debug_assert!(idx <= self.count());
         debug_assert!(idx > 0);
         // For the node listed, rekey it.
         let nref = self.nodes[idx];
-        self.key[idx - 1] = unsafe { (*nref).min() };
+        let nkey = unsafe { ((*nref).min()).clone() };
+        unsafe {
+            self.key[idx - 1].as_mut_ptr().write(nkey);
+        }
     }
 
     #[inline(always)]
     pub(crate) fn merge(&mut self, right: &mut Self) {
         debug_assert_branch!(self);
         debug_assert_branch!(right);
-        let sc = self.slots();
-        let rc = right.slots();
+        let sc = self.count();
+        let rc = right.count();
         if rc == 0 {
             let node = right.nodes[0];
             debug_assert!(!node.is_null());
-            let h: u64 = unsafe { (*node).min() };
-            let ins_idx = self.slots();
+            let k: K = unsafe { (*node).min().clone() };
+            let ins_idx = self.count();
             let leaf_ins_idx = ins_idx + 1;
             unsafe {
-                slice_insert(&mut self.key, h, ins_idx);
+                slice_insert(&mut self.key, MaybeUninit::new(k), ins_idx);
                 slice_insert(&mut self.nodes, node, leaf_ins_idx);
             }
-            #[cfg(all(test, not(miri)))]
-            debug_assert!(self.poison == FLAG_POISON);
-            self.inc_slots();
+            self.inc_count();
         } else {
             debug_assert!(sc == 0);
             unsafe {
@@ -1575,17 +1445,15 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 // Move the related keys.
                 slice_merge(&mut self.key, 1, &mut right.key, rc);
             }
-            #[cfg(all(test, not(miri)))]
-            debug_assert!(self.poison == FLAG_POISON);
-            // Set our slots correctly.
-            self.meta.set_slots(rc + 1);
+            // Set our count correctly.
+            self.meta.set_count(rc + 1);
             // Set right len to 0
-            right.meta.set_slots(0);
+            right.meta.set_count(0);
             // rekey the lowest pointer.
             unsafe {
                 let nptr = self.nodes[1];
-                let h: u64 = (*nptr).min();
-                self.key[0] = h;
+                let k: K = (*nptr).min().clone();
+                self.key[0].as_mut_ptr().write(k);
             }
             // done!
         }
@@ -1594,8 +1462,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
     pub(crate) fn take_from_l_to_r(&mut self, right: &mut Self) {
         debug_assert_branch!(self);
         debug_assert_branch!(right);
-
-        debug_assert!(self.slots() > right.slots());
+        debug_assert!(self.count() > right.count());
         // Starting index of where we move from. We work normally from a branch
         // with only zero (but the base) branch item, but we do the math anyway
         // to be sure incase we change later.
@@ -1606,8 +1473,8 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         //  3 = 5 - (5 + 0) / 2 (will move 3, 4)
         //  2 = 4 ....          (will move 2, 3)
         //
-        let slots = (self.slots() + right.slots()) / 2;
-        let start_idx = self.slots() - slots;
+        let count = (self.count() + right.count()) / 2;
+        let start_idx = self.count() - count;
         // Move the remaining element from r to the correct location.
         //
         //    [   k1, k2, k3, k4, k5, k6   ]
@@ -1621,7 +1488,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         unsafe {
             ptr::swap(
                 right.nodes.get_unchecked_mut(0),
-                right.nodes.get_unchecked_mut(slots),
+                right.nodes.get_unchecked_mut(count),
             )
         }
         // Move our values from the tail.
@@ -1631,7 +1498,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         //    [ v1, v2, v3, v4, --, --, -- ] -> [ v5, v6, v7, v8, --, ...
         //
         unsafe {
-            slice_move(&mut right.nodes, 0, &mut self.nodes, start_idx + 1, slots);
+            slice_move(&mut right.nodes, 0, &mut self.nodes, start_idx + 1, count);
         }
         // Remove the keys from left.
         // So we need to remove the corresponding keys. so that we get.
@@ -1640,92 +1507,78 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         //    [ v1, v2, v3, v4, --, --, -- ] -> [ v5, v6, v7, v8, --, ...
         //
         // This means it's start_idx - 1 up to BK cap
-        unsafe {
-            let tgt_ptr = self.key.as_mut_ptr().add(start_idx);
-            // https://doc.rust-lang.org/std/ptr/fn.write_bytes.html
-            // Sets count * size_of::<T>() bytes of memory starting at dst to val.
-            ptr::write_bytes::<u64>(tgt_ptr, 0xff, H_CAPACITY - start_idx);
-        }
 
-        // Adjust both slotss - we do this before rekey to ensure that the safety
+        for kidx in (start_idx - 1)..L_CAPACITY {
+            let _pk = unsafe { ptr::read(self.key.get_unchecked(kidx)).assume_init() };
+            // They are dropped now.
+        }
+        // Adjust both counts - we do this before rekey to ensure that the safety
         // checks hold in debugging.
-        right.meta.set_slots(slots);
-        self.meta.set_slots(start_idx);
+        right.meta.set_count(count);
+        self.meta.set_count(start_idx);
         // Rekey right
-        for kidx in 1..(slots + 1) {
+        for kidx in 1..(count + 1) {
             right.rekey_by_idx(kidx);
         }
-        #[cfg(all(test, not(miri)))]
-        debug_assert!(self.poison == FLAG_POISON);
-        #[cfg(all(test, not(miri)))]
-        debug_assert!(right.poison == FLAG_POISON);
         // Done!
-        debug_assert!(self.verify());
-        debug_assert!(right.verify());
     }
 
     pub(crate) fn take_from_r_to_l(&mut self, right: &mut Self) {
         debug_assert_branch!(self);
         debug_assert_branch!(right);
-        debug_assert!(right.slots() >= self.slots());
+        debug_assert!(right.count() >= self.count());
 
-        let slots = (self.slots() + right.slots()) / 2;
-        let start_idx = right.slots() - slots;
+        let count = (self.count() + right.count()) / 2;
+        let start_idx = right.count() - count;
 
-        // We move slots from right to left.
+        // We move count from right to left.
         unsafe {
-            slice_move(&mut self.nodes, 1, &mut right.nodes, 0, slots);
+            slice_move(&mut self.nodes, 1, &mut right.nodes, 0, count);
+        }
+
+        // Pop the excess keys in right
+        // So say we had 6/7 in right, and 0/1 in left.
+        //
+        // We have a start_idx of 4, and count of 3.
+        //
+        // We moved 3 values from right, leaving 4. That means we need to remove
+        // keys 0, 1, 2. The remaining keys are moved down.
+        for kidx in 0..count {
+            let _pk = unsafe { ptr::read(right.key.get_unchecked(kidx)).assume_init() };
+            // They are dropped now.
         }
 
         // move keys down in right
         unsafe {
             ptr::copy(
-                right.key.as_ptr().add(slots),
+                right.key.as_ptr().add(count),
                 right.key.as_mut_ptr(),
                 start_idx,
             );
         }
-
-        // Fix up the upper keys
-        /*
-        for idx in start_idx..H_CAPACITY {
-            right.key[idx] = u64::MAX;
-        }
-        */
-        unsafe {
-            let tgt_ptr = right.key.as_mut_ptr().add(start_idx);
-            // https://doc.rust-lang.org/std/ptr/fn.write_bytes.html
-            // Sets count * size_of::<T>() bytes of memory starting at dst to val.
-            ptr::write_bytes::<u64>(tgt_ptr, 0xff, H_CAPACITY - start_idx);
-        }
-        #[cfg(all(test, not(miri)))]
-        debug_assert!(right.poison == FLAG_POISON);
-
         // move nodes down in right
         unsafe {
             ptr::copy(
-                right.nodes.as_ptr().add(slots),
+                right.nodes.as_ptr().add(count),
                 right.nodes.as_mut_ptr(),
                 start_idx + 1,
             );
         }
 
-        // update slotss
-        right.meta.set_slots(start_idx);
-        self.meta.set_slots(slots);
+        // update counts
+        right.meta.set_count(start_idx);
+        self.meta.set_count(count);
         // Rekey left
-        for kidx in 1..(slots + 1) {
+        for kidx in 1..(count + 1) {
             self.rekey_by_idx(kidx);
         }
-        debug_assert!(self.verify());
-        debug_assert!(right.verify());
         // Done!
     }
 
     #[inline(always)]
     pub(crate) fn replace_by_idx(&mut self, idx: usize, node: *mut Node<K, V>) {
         debug_assert_branch!(self);
-        debug_assert!(idx <= self.slots());
+        debug_assert!(idx <= self.count());
         debug_assert!(!self.nodes[idx].is_null());
         self.nodes[idx] = node;
     }
@@ -1751,16 +1604,16 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
             (idx, idx - 1)
         };
         // Now clone the item at idx.
-        debug_assert!(idx <= self.slots());
+        debug_assert!(idx <= self.count());
         let sib_ptr = self.nodes[idx];
         debug_assert!(!sib_ptr.is_null());
         // Do we need to clone?
         let res = match unsafe { (*sib_ptr).meta.0 & FLAG_MASK } {
-            FLAG_HASH_LEAF => {
+            FLAG_LEAF => {
                 let lref = unsafe { &*(sib_ptr as *const _ as *const Leaf<K, V>) };
                 lref.req_clone(txid)
             }
-            FLAG_HASH_BRANCH => {
+            FLAG_BRANCH => {
                 let bref = unsafe { &*(sib_ptr as *const _ as *const Branch<K, V>) };
                 bref.req_clone(txid)
             }
@@ -1799,7 +1652,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         //
         let r = key_search!(self, k);
 
-        let sc = self.slots();
+        let sc = self.count();
 
         match r {
             Ok(idx) => {
@@ -1814,9 +1667,9 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                     slice_slide_and_drop(&mut self.key, idx, sc - (idx + 1));
                     slice_slide(&mut self.nodes.as_mut(), idx, sc - idx);
                 }
-                self.meta.set_slots(sc - (idx + 1));
+                self.meta.set_count(sc - (idx + 1));
 
-                if self.slots() == 0 {
+                if self.count() == 0 {
                     let rnode = self.extract_last_node();
                     BranchTrimState::Promote(rnode)
                 } else {
@@ -1835,25 +1688,25 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                         debug_assert!(false);
                         let _pk = unsafe { slice_remove(&mut self.key, 0).assume_init() };
                         let _pn = unsafe { slice_remove(self.nodes.as_mut(), 0) };
-                        self.dec_slots();
+                        self.dec_count();
                         BranchTrimState::Complete
                     } else {
                         BranchTrimState::Complete
                     }
-                } else if idx >= self.slots() {
+                } else if idx >= self.count() {
                     // remove everything except max.
                     unsafe {
                         // NEED MM
                         debug_assert!(false);
                         // We just drop all the keys.
-                        for kidx in 0..self.slots() {
+                        for kidx in 0..self.count() {
                             ptr::drop_in_place(self.key[kidx].as_mut_ptr());
                             // ptr::drop_in_place(self.nodes[kidx].as_mut_ptr());
                         }
                         // Move the last node to the bottom.
                         self.nodes[0] = self.nodes[sc];
                     }
-                    self.meta.set_slots(0);
+                    self.meta.set_count(0);
                     let rnode = self.extract_last_node();
                     // Something may still be valid, hand it on.
                     BranchTrimState::Promote(rnode)
@@ -1874,7 +1727,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                             slice_slide_and_drop(&mut self.key, idx, sc - (idx + 1));
                             slice_slide(self.nodes.as_mut(), idx, sc - idx);
                         }
-                        self.meta.set_slots(sc - (idx + 1));
+                        self.meta.set_count(sc - (idx + 1));
                     } else {
                         // NEED MM
                         debug_assert!(false);
@@ -1882,10 +1735,10 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                             slice_slide_and_drop(&mut self.key, idx - 1, sc - idx);
                             slice_slide(self.nodes.as_mut(), idx - 1, sc - (idx - 1));
                         }
-                        self.meta.set_slots(sc - idx);
+                        self.meta.set_count(sc - idx);
                     }
 
-                    if self.slots() == 0 {
+                    if self.count() == 0 {
                         // NEED MM
                         debug_assert!(false);
                         let rnode = self.extract_last_node();
@@ -1899,27 +1752,33 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
     }
     */
 
+    #[inline(always)]
+    pub(crate) fn make_ro(&self) {
+        debug_assert_branch!(self);
+        /*
+        let r = unsafe {
+            mprotect(
+                self as *const Branch<K, V> as *mut c_void,
+                size_of::<Branch<K, V>>(),
+                PROT_READ
+            )
+        };
+        assert!(r == 0);
+        */
+    }
+
     pub(crate) fn verify(&self) -> bool {
         debug_assert_branch!(self);
-        #[cfg(all(test, not(miri)))]
-        debug_assert!(self.poison == FLAG_POISON);
-        if self.slots() == 0 {
+        if self.count() == 0 {
             // Not possible to be valid!
             debug_assert!(false);
             return false;
         }
         // println!("verify branch -> {:?}", self);
-        // Check everything above slots is u64::max
-        for work_idx in self.meta.slots()..H_CAPACITY {
-            if self.key[work_idx] != u64::MAX {
-                eprintln!("FAILED ARRAY -> {:?}", self.key);
-                debug_assert!(false);
-            }
-        }
         // Check we are sorted.
-        let mut lk: u64 = self.key[0];
-        for work_idx in 1..self.slots() {
-            let rk: u64 = self.key[work_idx];
+        let mut lk: &K = unsafe { &*self.key[0].as_ptr() };
+        for work_idx in 1..self.count() {
+            let rk: &K = unsafe { &*self.key[work_idx].as_ptr() };
             // println!("{:?} >= {:?}", lk, rk);
             if lk >= rk {
                 debug_assert!(false);
@@ -1928,10 +1787,10 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
             lk = rk;
         }
         // Recursively call verify
-        for work_idx in 0..self.slots() {
+        for work_idx in 0..self.count() {
             let node = unsafe { &*self.nodes[work_idx] };
             if !node.verify() {
-                for work_idx in 0..(self.slots() + 1) {
+                for work_idx in 0..(self.count() + 1) {
                     let nref = unsafe { &*self.nodes[work_idx] };
                     if !nref.verify() {
                         // println!("Failed children");
@@ -1942,24 +1801,22 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
             }
         }
         // Check descendants are validly ordered.
-        //                 V-- remember, there are slots + 1 nodes.
-        for work_idx in 0..self.slots() {
+        //                 V-- remember, there are count + 1 nodes.
+        for work_idx in 0..self.count() {
             // get left max and right min
             let lnode = unsafe { &*self.nodes[work_idx] };
             let rnode = unsafe { &*self.nodes[work_idx + 1] };
 
-            let pkey = self.key[work_idx];
-            let lkey: u64 = lnode.max();
-            let rkey: u64 = rnode.min();
+            let pkey = unsafe { &*self.key[work_idx].as_ptr() };
+            let lkey = lnode.max();
+            let rkey = rnode.min();
             if lkey >= pkey || pkey > rkey {
-                /*
-                println!("++++++");
-                println!("{:?} >= {:?}, {:?} > {:?}", lkey, pkey, pkey, rkey);
-                println!("out of order key found {}", work_idx);
+                // println!("++++++");
+                // println!("{:?} >= {:?}, {:?} > {:?}", lkey, pkey, pkey, rkey);
+                // println!("out of order key found {}", work_idx);
                 // println!("left --> {:?}", lnode);
                 // println!("right -> {:?}", rnode);
-                println!("prnt  -> {:?}", self);
-                */
+                // println!("prnt  -> {:?}", self);
                 debug_assert!(false);
                 return false;
             }
@@ -1968,7 +1825,6 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         true
     }
 
-    #[allow(clippy::cast_ptr_alignment)]
     fn free(node: *mut Self) {
         unsafe {
             let mut _x: Box<CachePadded<Branch<K, V>>> =
@@ -1977,28 +1833,39 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Clone> Debug for Branch<K, V> {
+impl<K: Ord + Clone + Debug, V: Clone> Debug for Branch<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), Error> {
         debug_assert_branch!(self);
-        write!(f, "Branch -> {}", self.slots())?;
+        write!(f, "Branch -> {}", self.count())?;
         #[cfg(all(test, not(miri)))]
         write!(f, " nid: {}", self.nid)?;
         write!(f, "  \\-> [ ")?;
-        for idx in 0..self.slots() {
-            write!(f, "{:?}, ", self.key[idx])?;
+        for idx in 0..self.count() {
+            write!(f, "{:?}, ", unsafe { &*self.key[idx].as_ptr() })?;
         }
         write!(f, " ]")
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Clone> Drop for Branch<K, V> {
+impl<K: Ord + Clone + Debug, V: Clone> Drop for Branch<K, V> {
     fn drop(&mut self) {
         debug_assert_branch!(self);
         #[cfg(all(test, not(miri)))]
         release_nid(self.nid);
+        // Due to the use of maybe uninit we have to drop any contained values.
+        // https://github.com/kanidm/concread/issues/55
+        // if we are invalid, do NOT drop our internals as they MAY be inconsistent.
+        // this WILL leak memory, but it's better than crashing.
+        if self.meta.0 & FLAG_INVALID == 0 {
+            unsafe {
+                for idx in 0..self.count() {
+                    ptr::drop_in_place(self.key[idx].as_mut_ptr());
+                }
+            }
+        }
         // Done
         self.meta.0 = FLAG_DROPPED;
-        debug_assert!(self.meta.0 & FLAG_MASK != FLAG_HASH_BRANCH);
+        debug_assert!(self.meta.0 & FLAG_MASK != FLAG_BRANCH);
         // println!("set branch {:?} to {:x}", self.nid, self.meta.0);
     }
 }
@@ -2007,38 +1874,43 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Drop for Branch<K, V> {
 mod tests {
     use super::*;
 
-    /*
     #[test]
-    fn test_hashmap2_node_cache_size() {
+    fn test_bptree2_node_cache_size() {
         let ls = std::mem::size_of::<Leaf<u64, u64>>() - std::mem::size_of::<usize>();
         let bs = std::mem::size_of::<Branch<u64, u64>>() - std::mem::size_of::<usize>();
-        println!("ls {:?}, bs {:?}", ls, bs);
-        assert!(ls <= 128);
-        assert!(bs <= 128);
+        #[cfg(feature = "skinny")]
+        {
+            assert!(ls <= 64);
+            assert!(bs <= 64);
+        }
+        #[cfg(not(feature = "skinny"))]
+        {
+            assert!(ls <= 128);
+            assert!(bs <= 128);
+        }
     }
-    */
 
     #[test]
-    fn test_hashmap2_node_test_weird_basics() {
+    fn test_bptree2_node_test_weird_basics() {
         let leaf: *mut Leaf<u64, u64> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf };
 
         assert!(leaf.get_txid() == 1);
         // println!("{:?}", leaf);
 
-        leaf.set_slots(1);
-        assert!(leaf.slots() == 1);
-        leaf.set_slots(0);
-        assert!(leaf.slots() == 0);
+        leaf.set_count(1);
+        assert!(leaf.count() == 1);
+        leaf.set_count(0);
+        assert!(leaf.count() == 0);
 
-        leaf.inc_slots();
-        leaf.inc_slots();
-        leaf.inc_slots();
-        assert!(leaf.slots() == 3);
-        leaf.dec_slots();
-        leaf.dec_slots();
-        leaf.dec_slots();
-        assert!(leaf.slots() == 0);
+        leaf.inc_count();
+        leaf.inc_count();
+        leaf.inc_count();
+        assert!(leaf.count() == 3);
+        leaf.dec_count();
+        leaf.dec_count();
+        leaf.dec_count();
+        assert!(leaf.count() == 0);
 
         /*
         let branch: *mut Branch<u64, u64> = Node::new_branch(1, ptr::null_mut(), ptr::null_mut());
@@ -2046,10 +1918,10 @@ mod tests {
         assert!(branch.get_txid() == 1);
         // println!("{:?}", branch);
 
-        branch.set_slots(3);
-        assert!(branch.slots() == 3);
-        branch.set_slots(0);
-        assert!(branch.slots() == 0);
+        branch.set_count(3);
+        assert!(branch.count() == 3);
+        branch.set_count(0);
+        assert!(branch.count() == 0);
         Branch::free(branch as *mut _);
         */
 
@@ -2058,26 +1930,26 @@ mod tests {
     }
 
     #[test]
-    fn test_hashmap2_node_leaf_in_order() {
+    fn test_bptree2_node_leaf_in_order() {
         let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf };
         assert!(leaf.get_txid() == 1);
         // Check insert to capacity
-        for kv in 0..H_CAPACITY {
-            let r = leaf.insert_or_update(kv as u64, kv, kv);
+        for kv in 0..L_CAPACITY {
+            let r = leaf.insert_or_update(kv, kv);
             if let LeafInsertState::Ok(None) = r {
-                assert!(leaf.get_ref(kv as u64, &kv) == Some(&kv));
+                assert!(leaf.get_ref(&kv) == Some(&kv));
             } else {
                 assert!(false);
             }
         }
         assert!(leaf.verify());
         // Check update to capacity
-        for kv in 0..H_CAPACITY {
-            let r = leaf.insert_or_update(kv as u64, kv, kv);
+        for kv in 0..L_CAPACITY {
+            let r = leaf.insert_or_update(kv, kv);
             if let LeafInsertState::Ok(Some(pkv)) = r {
                 assert!(pkv == kv);
-                assert!(leaf.get_ref(kv as u64, &kv) == Some(&kv));
+                assert!(leaf.get_ref(&kv) == Some(&kv));
             } else {
                 assert!(false);
             }
@@ -2088,291 +1960,185 @@ mod tests {
     }
 
     #[test]
-    fn test_hashmap2_node_leaf_collision_in_order() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
-        let hash: u64 = 1;
-        assert!(leaf.get_txid() == 1);
-        // Check insert to capacity
-        for kv in 0..H_CAPACITY {
-            let r = leaf.insert_or_update(hash, kv, kv);
-            if let LeafInsertState::Ok(None) = r {
-                assert!(leaf.get_ref(hash, &kv) == Some(&kv));
-            } else {
-                assert!(false);
-            }
-        }
-        assert!(leaf.verify());
-        // Check update to capacity
-        for kv in 0..H_CAPACITY {
-            let r = leaf.insert_or_update(hash, kv, kv);
-            if let LeafInsertState::Ok(Some(pkv)) = r {
-                assert!(pkv == kv);
-                assert!(leaf.get_ref(hash, &kv) == Some(&kv));
-            } else {
-                assert!(false);
-            }
-        }
-        assert!(leaf.verify());
-        Leaf::free(leaf as *mut _);
-        assert_released();
-    }
-
-    #[test]
-    fn test_hashmap2_node_leaf_out_of_order() {
+    fn test_bptree2_node_leaf_out_of_order() {
         let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf };
 
-        assert!(H_CAPACITY <= 8);
+        assert!(L_CAPACITY <= 8);
         let kvs = [7, 5, 1, 6, 2, 3, 0, 8];
         assert!(leaf.get_txid() == 1);
         // Check insert to capacity
-        for idx in 0..H_CAPACITY {
+        for idx in 0..L_CAPACITY {
             let kv = kvs[idx];
-            let r = leaf.insert_or_update(kv as u64, kv, kv);
+            let r = leaf.insert_or_update(kv, kv);
             if let LeafInsertState::Ok(None) = r {
-                assert!(leaf.get_ref(kv as u64, &kv) == Some(&kv));
+                assert!(leaf.get_ref(&kv) == Some(&kv));
             } else {
                 assert!(false);
             }
         }
         assert!(leaf.verify());
-        assert!(leaf.slots() == H_CAPACITY);
+        assert!(leaf.count() == L_CAPACITY);
         // Check update to capacity
-        for idx in 0..H_CAPACITY {
+        for idx in 0..L_CAPACITY {
             let kv = kvs[idx];
-            let r = leaf.insert_or_update(kv as u64, kv, kv);
+            let r = leaf.insert_or_update(kv, kv);
             if let LeafInsertState::Ok(Some(pkv)) = r {
                 assert!(pkv == kv);
-                assert!(leaf.get_ref(kv as u64, &kv) == Some(&kv));
+                assert!(leaf.get_ref(&kv) == Some(&kv));
             } else {
                 assert!(false);
             }
         }
         assert!(leaf.verify());
-        assert!(leaf.slots() == H_CAPACITY);
+        assert!(leaf.count() == L_CAPACITY);
         Leaf::free(leaf as *mut _);
         assert_released();
     }
 
     #[test]
-    fn test_hashmap2_node_leaf_collision_out_of_order() {
+    fn test_bptree2_node_leaf_min() {
         let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf };
-        let hash: u64 = 1;
-
-        assert!(H_CAPACITY <= 8);
-        let kvs = [7, 5, 1, 6, 2, 3, 0, 8];
-        assert!(leaf.get_txid() == 1);
-        // Check insert to capacity
-        for idx in 0..H_CAPACITY {
-            let kv = kvs[idx];
-            let r = leaf.insert_or_update(hash, kv, kv);
-            if let LeafInsertState::Ok(None) = r {
-                assert!(leaf.get_ref(hash, &kv) == Some(&kv));
-            } else {
-                assert!(false);
-            }
-        }
-        assert!(leaf.verify());
-        assert!(leaf.count() == H_CAPACITY);
-        assert!(leaf.slots() == 1);
-        // Check update to capacity
-        for idx in 0..H_CAPACITY {
-            let kv = kvs[idx];
-            let r = leaf.insert_or_update(hash, kv, kv);
-            if let LeafInsertState::Ok(Some(pkv)) = r {
-                assert!(pkv == kv);
-                assert!(leaf.get_ref(hash, &kv) == Some(&kv));
-            } else {
-                assert!(false);
-            }
-        }
-        assert!(leaf.verify());
-        assert!(leaf.count() == H_CAPACITY);
-        assert!(leaf.slots() == 1);
-        Leaf::free(leaf as *mut _);
-        assert_released();
-    }
-
-    #[test]
-    fn test_hashmap2_node_leaf_min() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
-        assert!(H_CAPACITY <= 8);
+        assert!(L_CAPACITY <= 8);
 
         let kvs = [3, 2, 6, 4, 5, 1, 9, 0];
-        let min: [u64; 8] = [3, 2, 2, 2, 2, 1, 1, 0];
+        let min = [3, 2, 2, 2, 2, 1, 1, 0];
 
-        for idx in 0..H_CAPACITY {
+        for idx in 0..L_CAPACITY {
             let kv = kvs[idx];
-            let r = leaf.insert_or_update(kv as u64, kv, kv);
+            let r = leaf.insert_or_update(kv, kv);
             if let LeafInsertState::Ok(None) = r {
-                assert!(leaf.get_ref(kv as u64, &kv) == Some(&kv));
-                assert!(leaf.min() == min[idx]);
+                assert!(leaf.get_ref(&kv) == Some(&kv));
+                assert!(leaf.min() == &min[idx]);
             } else {
                 assert!(false);
             }
         }
         assert!(leaf.verify());
-        assert!(leaf.slots() == H_CAPACITY);
+        assert!(leaf.count() == L_CAPACITY);
         Leaf::free(leaf as *mut _);
         assert_released();
     }
 
     #[test]
-    fn test_hashmap2_node_leaf_max() {
+    fn test_bptree2_node_leaf_max() {
         let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf };
-        assert!(H_CAPACITY <= 8);
+        assert!(L_CAPACITY <= 8);
 
         let kvs = [1, 3, 2, 6, 4, 5, 9, 0];
-        let max: [u64; 8] = [1, 3, 3, 6, 6, 6, 9, 9];
+        let max: [usize; 8] = [1, 3, 3, 6, 6, 6, 9, 9];
 
-        for idx in 0..H_CAPACITY {
+        for idx in 0..L_CAPACITY {
             let kv = kvs[idx];
-            let r = leaf.insert_or_update(kv as u64, kv, kv);
+            let r = leaf.insert_or_update(kv, kv);
             if let LeafInsertState::Ok(None) = r {
-                assert!(leaf.get_ref(kv as u64, &kv) == Some(&kv));
-                assert!(leaf.max() == max[idx]);
+                assert!(leaf.get_ref(&kv) == Some(&kv));
+                assert!(leaf.max() == &max[idx]);
             } else {
                 assert!(false);
             }
         }
         assert!(leaf.verify());
-        assert!(leaf.slots() == H_CAPACITY);
+        assert!(leaf.count() == L_CAPACITY);
         Leaf::free(leaf as *mut _);
         assert_released();
     }
 
     #[test]
-    fn test_hashmap2_node_leaf_remove_order() {
+    fn test_bptree2_node_leaf_remove_order() {
         let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf };
-        for kv in 0..H_CAPACITY {
-            leaf.insert_or_update(kv as u64, kv, kv);
+        for kv in 0..L_CAPACITY {
+            leaf.insert_or_update(kv, kv);
         }
         // Remove all but one.
-        for kv in 0..(H_CAPACITY - 1) {
-            let r = leaf.remove(kv as u64, &kv);
+        for kv in 0..(L_CAPACITY - 1) {
+            let r = leaf.remove(&kv);
             if let LeafRemoveState::Ok(Some(rkv)) = r {
                 assert!(rkv == kv);
             } else {
                 assert!(false);
             }
         }
-        assert!(leaf.slots() == 1);
-        assert!(leaf.max() == (H_CAPACITY - 1) as u64);
+        assert!(leaf.count() == 1);
+        assert!(leaf.max() == &(L_CAPACITY - 1));
         // Remove a non-existant value.
-        let r = leaf.remove((H_CAPACITY + 20) as u64, &(H_CAPACITY + 20));
+        let r = leaf.remove(&(L_CAPACITY + 20));
         if let LeafRemoveState::Ok(None) = r {
             // Ok!
         } else {
             assert!(false);
         }
         // Finally clear the node, should request a shrink.
-        let kv = H_CAPACITY - 1;
-        let r = leaf.remove(kv as u64, &kv);
+        let kv = L_CAPACITY - 1;
+        let r = leaf.remove(&kv);
         if let LeafRemoveState::Shrink(Some(rkv)) = r {
             assert!(rkv == kv);
         } else {
             assert!(false);
         }
-        assert!(leaf.slots() == 0);
+        assert!(leaf.count() == 0);
         // Remove non-existant post shrink. Should never happen
         // but safety first!
-        let r = leaf.remove(0, &0);
+        let r = leaf.remove(&0);
         if let LeafRemoveState::Shrink(None) = r {
             // Ok!
         } else {
             assert!(false);
         }
 
-        assert!(leaf.slots() == 0);
+        assert!(leaf.count() == 0);
         assert!(leaf.verify());
         Leaf::free(leaf as *mut _);
         assert_released();
     }
 
     #[test]
-    fn test_hashmap2_node_leaf_remove_out_of_order() {
+    fn test_bptree2_node_leaf_remove_out_of_order() {
         let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf };
-        for kv in 0..H_CAPACITY {
-            leaf.insert_or_update(kv as u64, kv, kv);
+        for kv in 0..L_CAPACITY {
+            leaf.insert_or_update(kv, kv);
         }
-        let mid = H_CAPACITY / 2;
+        let mid = L_CAPACITY / 2;
         // This test removes all BUT one node to keep the states simple.
-        for kv in mid..(H_CAPACITY - 1) {
-            let r = leaf.remove(kv as u64, &kv);
+        for kv in mid..(L_CAPACITY - 1) {
+            let r = leaf.remove(&kv);
             match r {
                 LeafRemoveState::Ok(_) => {}
                 _ => panic!(),
             }
         }
 
-        for kv in 0..(H_CAPACITY / 2) {
-            let r = leaf.remove(kv as u64, &kv);
+        for kv in 0..(L_CAPACITY / 2) {
+            let r = leaf.remove(&kv);
             match r {
                 LeafRemoveState::Ok(_) => {}
                 _ => panic!(),
             }
         }
 
-        assert!(leaf.slots() == 1);
-        assert!(leaf.verify());
-        Leaf::free(leaf as *mut _);
-        assert_released();
-    }
-
-    #[test]
-    fn test_hashmap2_node_leaf_remove_collision_in_order() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
-        let hash: u64 = 1;
-        assert!(leaf.get_txid() == 1);
-        // Check insert to capacity
-        for kv in 0..H_CAPACITY {
-            let r = leaf.insert_or_update(hash, kv, kv);
-            if let LeafInsertState::Ok(None) = r {
-                assert!(leaf.get_ref(hash, &kv) == Some(&kv));
-            } else {
-                assert!(false);
-            }
-        }
-        assert!(leaf.verify());
-        assert!(leaf.count() == H_CAPACITY);
-        assert!(leaf.slots() == 1);
-        // Check remove to cap - 1
-        for kv in 1..H_CAPACITY {
-            let r = leaf.remove(hash, &kv);
-            match r {
-                LeafRemoveState::Ok(_) => {}
-                _ => panic!(),
-            }
-        }
         assert!(leaf.count() == 1);
-        assert!(leaf.slots() == 1);
         assert!(leaf.verify());
         Leaf::free(leaf as *mut _);
         assert_released();
     }
 
     #[test]
-    fn test_hashmap2_node_leaf_insert_split() {
+    fn test_bptree2_node_leaf_insert_split() {
         let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf };
-        for kv in 0..H_CAPACITY {
-            let x = kv + 10;
-            leaf.insert_or_update(x as u64, x, x);
+        for kv in 0..L_CAPACITY {
+            leaf.insert_or_update(kv + 10, kv + 10);
         }
 
         // Split right
-        let y = H_CAPACITY + 10;
-        let r = leaf.insert_or_update(y as u64, y, y);
+        let r = leaf.insert_or_update(L_CAPACITY + 10, L_CAPACITY + 10);
         if let LeafInsertState::Split(rleaf) = r {
             unsafe {
-                assert!((&*rleaf).slots() == 1);
+                assert!((&*rleaf).count() == 1);
             }
             Leaf::free(rleaf);
         } else {
@@ -2380,17 +2146,17 @@ mod tests {
         }
 
         // Split left
-        let r = leaf.insert_or_update(0, 0, 0);
+        let r = leaf.insert_or_update(0, 0);
         if let LeafInsertState::RevSplit(lleaf) = r {
             unsafe {
-                assert!((&*lleaf).slots() == 1);
+                assert!((&*lleaf).count() == 1);
             }
             Leaf::free(lleaf);
         } else {
             panic!();
         }
 
-        assert!(leaf.slots() == H_CAPACITY);
+        assert!(leaf.count() == L_CAPACITY);
         assert!(leaf.verify());
         Leaf::free(leaf as *mut _);
         assert_released();
@@ -2403,31 +2169,31 @@ mod tests {
         // Remove none
         let leaf1: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf1 = unsafe { &mut *leaf };
-        for kv in 0..H_CAPACITY {
+        for kv in 0..L_CAPACITY {
             let _ = leaf1.insert_or_update(kv + 10, kv);
         }
         leaf1.remove_lt(&5);
-        assert!(leaf1.slots() == H_CAPACITY);
+        assert!(leaf1.count() == L_CAPACITY);
         Leaf::free(leaf1 as *mut _);
 
         // Remove all
         let leaf2: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf2 = unsafe { &mut *leaf };
-        for kv in 0..H_CAPACITY {
+        for kv in 0..L_CAPACITY {
             let _ = leaf2.insert_or_update(kv + 10, kv);
         }
-        leaf2.remove_lt(&(H_CAPACITY + 10));
-        assert!(leaf2.slots() == 0);
+        leaf2.remove_lt(&(L_CAPACITY + 10));
+        assert!(leaf2.count() == 0);
         Leaf::free(leaf2 as *mut _);
 
         // Remove from middle
         let leaf3: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf3 = unsafe { &mut *leaf };
-        for kv in 0..H_CAPACITY {
+        for kv in 0..L_CAPACITY {
             let _ = leaf3.insert_or_update(kv + 10, kv);
         }
-        leaf3.remove_lt(&((H_CAPACITY / 2) + 10));
-        assert!(leaf3.slots() == (H_CAPACITY / 2));
+        leaf3.remove_lt(&((L_CAPACITY / 2) + 10));
+        assert!(leaf3.count() == (L_CAPACITY / 2));
         Leaf::free(leaf3 as *mut _);
 
         // Remove less than not in leaf.
@@ -2436,12 +2202,12 @@ mod tests {
         let _ = leaf4.insert_or_update(5, 5);
         let _ = leaf4.insert_or_update(15, 15);
         leaf4.remove_lt(&10);
-        assert!(leaf4.slots() == 1);
+        assert!(leaf4.count() == 1);
 
         //  Add another and remove all.
         let _ = leaf4.insert_or_update(20, 20);
         leaf4.remove_lt(&25);
-        assert!(leaf4.slots() == 0);
+        assert!(leaf4.count() == 0);
         Leaf::free(leaf4 as *mut _);
         // Done!
         assert_released();
@@ -2452,7 +2218,7 @@ mod tests {
     // Branch tests here!
 
     #[test]
-    fn test_hashmap2_node_branch_new() {
+    fn test_bptree2_node_branch_new() {
         // Create a new branch, and test it.
         let left: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let left_ref = unsafe { &mut *left };
@@ -2460,11 +2226,9 @@ mod tests {
         let right_ref = unsafe { &mut *right };
 
         // add kvs to l and r
-        for kv in 0..H_CAPACITY {
-            let lkv = kv + 10;
-            let rkv = kv + 20;
-            left_ref.insert_or_update(lkv as u64, lkv, lkv);
-            right_ref.insert_or_update(rkv as u64, rkv, rkv);
+        for kv in 0..L_CAPACITY {
+            left_ref.insert_or_update(kv + 10, kv + 10);
+            right_ref.insert_or_update(kv + 20, kv + 20);
         }
         // create branch
         let branch: *mut Branch<usize, usize> = Node::new_branch(
@@ -2476,15 +2240,15 @@ mod tests {
         // verify
         assert!(branch_ref.verify());
         // Test .min works on our descendants
-        assert!(branch_ref.min() == 10);
+        assert!(branch_ref.min() == &10);
         // Test .max works on our descendats.
-        assert!(branch_ref.max() == (20 + H_CAPACITY - 1) as u64);
+        assert!(branch_ref.max() == &(20 + L_CAPACITY - 1));
         // Get some k within the leaves.
-        assert!(branch_ref.get_ref(11, &11) == Some(&11));
-        assert!(branch_ref.get_ref(21, &21) == Some(&21));
+        assert!(branch_ref.get_ref(&11) == Some(&11));
+        assert!(branch_ref.get_ref(&21) == Some(&21));
         // get some k that is out of bounds.
-        assert!(branch_ref.get_ref(1, &1) == None);
-        assert!(branch_ref.get_ref(100, &100) == None);
+        assert!(branch_ref.get_ref(&1) == None);
+        assert!(branch_ref.get_ref(&100) == None);
 
         Leaf::free(left as *mut _);
         Leaf::free(right as *mut _);
@@ -2500,9 +2264,9 @@ mod tests {
             let c: *mut Leaf<usize, usize> = Node::new_leaf(1);
 
             unsafe {
-                (*a).insert_or_update(10, 10, 10);
-                (*b).insert_or_update(20, 20, 20);
-                (*c).insert_or_update(30, 30, 30);
+                (*a).insert_or_update(10, 10);
+                (*b).insert_or_update(20, 20);
+                (*c).insert_or_update(30, 30);
             }
 
             $fun(a, b, c);
@@ -2515,7 +2279,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hashmap2_node_branch_add_min() {
+    fn test_bptree2_node_branch_add_min() {
         // This pattern occurs with "revsplit" to help with reverse
         // ordered inserts.
         test_3_leaf!(|a, b, c| {
@@ -2541,7 +2305,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hashmap2_node_branch_add_mid() {
+    fn test_bptree2_node_branch_add_mid() {
         test_3_leaf!(|a, b, c| {
             // Add the outer two to the branch
             let branch: *mut Branch<usize, usize> = Node::new_branch(
@@ -2564,7 +2328,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hashmap2_node_branch_add_max() {
+    fn test_bptree2_node_branch_add_max() {
         test_3_leaf!(|a, b, c| {
             // add the bottom two
             let branch: *mut Branch<usize, usize> = Node::new_branch(
@@ -2593,20 +2357,28 @@ mod tests {
             let b: *mut Leaf<usize, usize> = Node::new_leaf(1);
             let c: *mut Leaf<usize, usize> = Node::new_leaf(1);
             let d: *mut Leaf<usize, usize> = Node::new_leaf(1);
+
+            #[cfg(not(feature = "skinny"))]
             let e: *mut Leaf<usize, usize> = Node::new_leaf(1);
+            #[cfg(not(feature = "skinny"))]
             let f: *mut Leaf<usize, usize> = Node::new_leaf(1);
+            #[cfg(not(feature = "skinny"))]
             let g: *mut Leaf<usize, usize> = Node::new_leaf(1);
+            #[cfg(not(feature = "skinny"))]
             let h: *mut Leaf<usize, usize> = Node::new_leaf(1);
 
             unsafe {
-                (*a).insert_or_update(10, 10, 10);
-                (*b).insert_or_update(20, 20, 20);
-                (*c).insert_or_update(30, 30, 30);
-                (*d).insert_or_update(40, 40, 40);
-                (*e).insert_or_update(50, 50, 50);
-                (*f).insert_or_update(60, 60, 60);
-                (*g).insert_or_update(70, 70, 70);
-                (*h).insert_or_update(80, 80, 80);
+                (*a).insert_or_update(10, 10);
+                (*b).insert_or_update(20, 20);
+                (*c).insert_or_update(30, 30);
+                (*d).insert_or_update(40, 40);
+                #[cfg(not(feature = "skinny"))]
+                {
+                    (*e).insert_or_update(50, 50);
+                    (*f).insert_or_update(60, 60);
+                    (*g).insert_or_update(70, 70);
+                    (*h).insert_or_update(80, 80);
+                }
             }
 
             let branch: *mut Branch<usize, usize> = Node::new_branch(
@@ -2617,13 +2389,20 @@ mod tests {
             let branch_ref = unsafe { &mut *branch };
             branch_ref.add_node(c as *mut Node<usize, usize>);
             branch_ref.add_node(d as *mut Node<usize, usize>);
-            branch_ref.add_node(e as *mut Node<usize, usize>);
-            branch_ref.add_node(f as *mut Node<usize, usize>);
-            branch_ref.add_node(g as *mut Node<usize, usize>);
-            branch_ref.add_node(h as *mut Node<usize, usize>);
 
-            assert!(branch_ref.slots() == H_CAPACITY);
+            #[cfg(not(feature = "skinny"))]
+            {
+                branch_ref.add_node(e as *mut Node<usize, usize>);
+                branch_ref.add_node(f as *mut Node<usize, usize>);
+                branch_ref.add_node(g as *mut Node<usize, usize>);
+                branch_ref.add_node(h as *mut Node<usize, usize>);
+            }
 
+            assert!(branch_ref.count() == L_CAPACITY);
+
+            #[cfg(feature = "skinny")]
+            $fun(branch_ref, 40);
+            #[cfg(not(feature = "skinny"))]
             $fun(branch_ref, 80);
 
             // MUST NOT verify here, as it's a use after free of the tests inserted node!
@@ -2632,26 +2411,29 @@ mod tests {
             Leaf::free(b as *mut _);
             Leaf::free(c as *mut _);
             Leaf::free(d as *mut _);
-            Leaf::free(e as *mut _);
-            Leaf::free(f as *mut _);
-            Leaf::free(g as *mut _);
-            Leaf::free(h as *mut _);
+            #[cfg(not(feature = "skinny"))]
+            {
+                Leaf::free(e as *mut _);
+                Leaf::free(f as *mut _);
+                Leaf::free(g as *mut _);
+                Leaf::free(h as *mut _);
+            }
             assert_released();
         }};
     }
 
     #[test]
-    fn test_hashmap2_node_branch_add_split_min() {
+    fn test_bptree2_node_branch_add_split_min() {
         // Used in rev split
     }
 
     #[test]
-    fn test_hashmap2_node_branch_add_split_mid() {
-        test_max_leaf!(|branch_ref: &mut Branch<usize, usize>, max: u64| {
+    fn test_bptree2_node_branch_add_split_mid() {
+        test_max_leaf!(|branch_ref: &mut Branch<usize, usize>, max: usize| {
             let node: *mut Leaf<usize, usize> = Node::new_leaf(1);
-            // Branch already has up to H_CAPACITY, incs of 10
+            // Branch already has up to L_CAPACITY, incs of 10
             unsafe {
-                (*node).insert_or_update(15, 15, 15);
+                (*node).insert_or_update(15, 15);
             };
 
             // Add in the middle
@@ -2659,8 +2441,8 @@ mod tests {
             match r {
                 BranchInsertState::Split(x, y) => {
                     unsafe {
-                        assert!((*x).min() == max - 10);
-                        assert!((*y).min() == max);
+                        assert!((*x).min() == &(max - 10));
+                        assert!((*y).min() == &max);
                     }
                     // X, Y will be freed by the macro caller.
                 }
@@ -2673,12 +2455,12 @@ mod tests {
     }
 
     #[test]
-    fn test_hashmap2_node_branch_add_split_max() {
-        test_max_leaf!(|branch_ref: &mut Branch<usize, usize>, max: u64| {
+    fn test_bptree2_node_branch_add_split_max() {
+        test_max_leaf!(|branch_ref: &mut Branch<usize, usize>, max: usize| {
             let node: *mut Leaf<usize, usize> = Node::new_leaf(1);
-            // Branch already has up to H_CAPACITY, incs of 10
+            // Branch already has up to L_CAPACITY, incs of 10
             unsafe {
-                (*node).insert_or_update(200, 200, 200);
+                (*node).insert_or_update(200, 200);
             };
 
             // Add in at the end.
@@ -2688,8 +2470,8 @@ mod tests {
                     unsafe {
                         // println!("{:?}", (*y).min());
                         // println!("{:?}", (*mynode).min());
-                        assert!((*y).min() == max);
-                        assert!((*mynode).min() == 200);
+                        assert!((*y).min() == &max);
+                        assert!((*mynode).min() == &200);
                     }
                     // Y will be freed by the macro caller.
                 }
@@ -2702,14 +2484,13 @@ mod tests {
     }
 
     #[test]
-    fn test_hashmap2_node_branch_add_split_n1max() {
+    fn test_bptree2_node_branch_add_split_n1max() {
         // Add one before the end!
-        test_max_leaf!(|branch_ref: &mut Branch<usize, usize>, max: u64| {
+        test_max_leaf!(|branch_ref: &mut Branch<usize, usize>, max: usize| {
             let node: *mut Leaf<usize, usize> = Node::new_leaf(1);
-            // Branch already has up to H_CAPACITY, incs of 10
-            let x = (max - 5) as usize;
+            // Branch already has up to L_CAPACITY, incs of 10
             unsafe {
-                (*node).insert_or_update(max - 5, x, x);
+                (*node).insert_or_update(max - 5, max - 5);
             };
 
             // Add in one before the end.
@@ -2717,8 +2498,8 @@ mod tests {
             match r {
                 BranchInsertState::Split(mynode, y) => {
                     unsafe {
-                        assert!((*mynode).min() == max - 5);
-                        assert!((*y).min() == max);
+                        assert!((*mynode).min() == &(max - 5));
+                        assert!((*y).min() == &max);
                     }
                     // Y will be freed by the macro caller.
                 }

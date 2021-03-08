@@ -1,21 +1,13 @@
 //! See the documentation for `BptreeMap`
-#[macro_use]
-mod macros;
-mod cursor;
-pub mod iter;
-mod node;
-mod states;
 
-use self::cursor::CursorReadOps;
-use self::cursor::{CursorRead, CursorWrite, SuperBlock};
-use self::iter::{Iter, KeyIter, ValueIter};
-// use self::node::{Leaf, Node};
-use parking_lot::{Mutex, MutexGuard};
+use crate::internals::bptree::cursor::CursorReadOps;
+use crate::internals::bptree::cursor::{CursorRead, CursorWrite, SuperBlock};
+use crate::internals::bptree::iter::{Iter, KeyIter, ValueIter};
+use crate::internals::lincowcell::LinCowCellCapable;
+use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::iter::FromIterator;
-// use std::marker::PhantomData;
-use std::sync::Arc;
 
 /// A concurrently readable map based on a modified B+Tree structure.
 ///
@@ -42,8 +34,7 @@ where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
 {
-    write: Mutex<()>,
-    active: Mutex<Arc<SuperBlock<K, V>>>,
+    inner: LinCowCell<SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
 }
 
 unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Send
@@ -63,9 +54,7 @@ where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
 {
-    _caller: &'a BptreeMap<K, V>,
-    _pin: Arc<SuperBlock<K, V>>,
-    work: CursorRead<K, V>,
+    inner: LinCowCellReadTxn<'a, SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
 }
 
 /// An active write transaction for a `BptreeMap`. The data in this tree
@@ -78,9 +67,7 @@ where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
 {
-    work: CursorWrite<K, V>,
-    caller: &'a BptreeMap<K, V>,
-    _guard: MutexGuard<'a, ()>,
+    inner: LinCowCellWriteTxn<'a, SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
 }
 
 enum SnapshotType<'a, K, V>
@@ -105,7 +92,7 @@ where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
 {
-    work: SnapshotType<'a, K, V>,
+    inner: SnapshotType<'a, K, V>,
 }
 
 impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Default
@@ -121,83 +108,32 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 {
     /// Construct a new concurrent tree
     pub fn new() -> Self {
+        // I acknowledge I understand what is required to make this safe.
         BptreeMap {
-            write: Mutex::new(()),
-            active: Mutex::new(Arc::new(SuperBlock::default())),
+            inner: LinCowCell::new(unsafe { SuperBlock::new() }),
         }
     }
 
     /// Initiate a read transaction for the tree, concurrent to any
     /// other readers or writers.
     pub fn read(&self) -> BptreeMapReadTxn<K, V> {
-        let rguard = self.active.lock();
-        let pin = rguard.clone();
-        let work = CursorRead::new(pin.as_ref());
-        BptreeMapReadTxn {
-            _caller: self,
-            _pin: pin,
-            work,
-        }
+        let inner = self.inner.read();
+        BptreeMapReadTxn { inner }
     }
 
     /// Initiate a write transaction for the tree, exclusive to this
     /// writer, and concurrently to all existing reads.
     pub fn write(&self) -> BptreeMapWriteTxn<K, V> {
-        /* Take the exclusive write lock first */
-        let mguard = self.write.lock();
-        /* Now take a ro-txn to get the data copied */
-        let rguard = self.active.lock();
-        /*
-         * Take a ref to the root, we want to minimise our time in the.
-         * active lock. We could do a full clone here but that would trigger
-         * node-width worth of atomics, and if the write is dropped without
-         * action we've save a lot of cycles.
-         */
-        let sblock: &SuperBlock<K, V> = rguard.as_ref();
-        /* Setup the cursor that will work on the tree */
-        let cursor = CursorWrite::new(sblock);
-
-        /* Now build the write struct */
-        BptreeMapWriteTxn {
-            work: cursor,
-            caller: self,
-            _guard: mguard,
-        }
-        /* rguard dropped here */
+        let inner = self.inner.write();
+        BptreeMapWriteTxn { inner }
     }
 
     /// Attempt to create a new write, returns None if another writer
     /// already exists.
     pub fn try_write(&self) -> Option<BptreeMapWriteTxn<K, V>> {
-        self.write.try_lock().map(|mguard| {
-            let rguard = self.active.lock();
-            let sblock: &SuperBlock<K, V> = rguard.as_ref();
-            let cursor = CursorWrite::new(sblock);
-            BptreeMapWriteTxn {
-                work: cursor,
-                caller: self,
-                _guard: mguard,
-            }
-        })
-    }
-
-    fn commit(&self, newdata: SuperBlock<K, V>) {
-        // println!("commit wr");
-        let mut rwguard = self.active.lock();
-        // Now we need to setup the sb pointers properly.
-        // The current active SHOULD have a NONE last seen as it's the current
-        // tree holder.
-        newdata.commit_prep(rwguard.as_ref());
-
-        let arc_newdata = Arc::new(newdata);
-        // Now pin the older to this new txn.
-        {
-            let mut pin_guard = rwguard.as_ref().pin_next.lock();
-            *pin_guard = Some(arc_newdata.clone());
-        }
-
-        // Now push the new SB.
-        *rwguard = arc_newdata;
+        self.inner
+            .try_write()
+            .map(|inner| BptreeMapWriteTxn { inner })
     }
 }
 
@@ -205,16 +141,16 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     FromIterator<(K, V)> for BptreeMap<K, V>
 {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
-        let temp_sb = SuperBlock::default();
-        let mut cursor = CursorWrite::new(&temp_sb);
+        let mut new_sblock = unsafe { SuperBlock::new() };
+        let prev = new_sblock.create_reader();
+        let mut cursor = new_sblock.create_writer();
+
         cursor.extend(iter);
 
-        let new_sblock = cursor.finalise();
-        new_sblock.commit_prep(&temp_sb);
+        let _ = new_sblock.pre_commit(cursor, &prev);
 
         BptreeMap {
-            write: Mutex::new(()),
-            active: Mutex::new(Arc::new(new_sblock)),
+            inner: LinCowCell::new(new_sblock),
         }
     }
 }
@@ -223,7 +159,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     Extend<(K, V)> for BptreeMapWriteTxn<'a, K, V>
 {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
-        self.work.extend(iter);
+        self.inner.as_mut().extend(iter);
     }
 }
 
@@ -239,7 +175,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
         K: Borrow<Q>,
         Q: Ord,
     {
-        self.work.search(k)
+        self.inner.as_ref().search(k)
     }
 
     /// Assert if a key exists in the tree.
@@ -248,34 +184,34 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
         K: Borrow<Q>,
         Q: Ord,
     {
-        self.work.contains_key(k)
+        self.inner.as_ref().contains_key(k)
     }
 
     /// returns the current number of k:v pairs in the tree
     pub fn len(&self) -> usize {
-        self.work.len()
+        self.inner.as_ref().len()
     }
 
     /// Determine if the set is currently empty
     pub fn is_empty(&self) -> bool {
-        self.work.len() == 0
+        self.inner.as_ref().len() == 0
     }
 
     // (adv) range
 
     /// Iterator over `(&K, &V)` of the set
     pub fn iter(&self) -> Iter<K, V> {
-        self.work.kv_iter()
+        self.inner.as_ref().kv_iter()
     }
 
     /// Iterator over &K
     pub fn values(&self) -> ValueIter<K, V> {
-        self.work.v_iter()
+        self.inner.as_ref().v_iter()
     }
 
     /// Iterator over &V
     pub fn keys(&self) -> KeyIter<K, V> {
-        self.work.k_iter()
+        self.inner.as_ref().k_iter()
     }
 
     // (adv) keys
@@ -284,7 +220,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
 
     #[allow(unused)]
     pub(crate) fn get_txid(&self) -> u64 {
-        self.work.get_txid()
+        self.inner.as_ref().get_txid()
     }
 
     // == RW methods
@@ -292,19 +228,19 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     /// Reset this tree to an empty state. As this is within the transaction this
     /// change only takes effect once commited.
     pub fn clear(&mut self) {
-        self.work.clear()
+        self.inner.as_mut().clear()
     }
 
     /// Insert or update a value by key. If the value previously existed it is returned
     /// as `Some(V)`. If the value did not previously exist this returns `None`.
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
-        self.work.insert(k, v)
+        self.inner.as_mut().insert(k, v)
     }
 
     /// Remove a key if it exists in the tree. If the value exists, we return it as `Some(V)`,
     /// and if it did not exist, we return `None`
     pub fn remove(&mut self, k: &K) -> Option<V> {
-        self.work.remove(k)
+        self.inner.as_mut().remove(k)
     }
 
     // split_off
@@ -316,7 +252,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
 
     /// Remove all values less than (but not including) key from the map.
     pub fn split_off_lt(&mut self, key: &K) {
-        self.work.split_off_lt(key)
+        self.inner.as_mut().split_off_lt(key)
     }
 
     // ADVANCED
@@ -326,7 +262,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     /// safely cloned before you attempt to mutate the value, isolating it from
     /// other transactions.
     pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
-        self.work.get_mut_ref(key)
+        self.inner.as_mut().get_mut_ref(key)
     }
 
     // range_mut
@@ -335,70 +271,14 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
 
     // iter_mut
 
-    /*
-    /// Compact the tree structure if the density is below threshold, yielding improved search
-    /// performance and lowering memory footprint.
-    ///
-    /// Many tree structures attempt to remain "balanced" consuming excess memory to allow
-    /// amortizing cost and distributing values over the structure. Generally this means that
-    /// a classic B+Tree has only ~55% to ~66% occupation of it's leaves (varying based on their
-    /// width). The branches have a similar layout.
-    ///
-    /// Given linear (ordered) inserts this structure will have 100% utilisation at the leaves
-    /// and between ~66% to ~75% occupation through out the branches. If you built this from a
-    /// iterator, this is probably the case you have here!
-    ///
-    /// However under random insert loads we tend toward ~60% utilisation similar to the classic
-    /// B+tree.
-    ///
-    /// Instead of paying a cost in time and memory on every insert to achieve the "constant" %60
-    /// loading, we prefer to minimise the work in the tree in favour of compacting the structure
-    /// when required. This is especially visible given that most workloads are linear or random
-    /// and we save time on these workloads by not continually rebalancing.
-    ///
-    /// If you call this function, and the current occupation is less than 50% the tree will be
-    /// rebalanced. This may briefly consume more ram, but will achieve a near ~100% occupation
-    /// of k:v in the tree, with a reduction in leaves and branches.
-    ///
-    /// The net result is a short term stall, for long term lower memory usage and faster
-    /// search response times.
-    ///
-    /// You should consider using this "randomly" IE 1 in X commits, so that you are not
-    /// walking the tree continually, after a large randomise insert, or when memory
-    /// pressure is high.
-    pub fn compact(&mut self) -> bool {
-        let (l, m) = self.work.tree_density();
-        if l > 0 && (m / l) > 1 {
-            self.compact_force();
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Initiate a compaction of the tree regardless of it's density or loading factors.
-    ///
-    /// You probably should use `compact()` instead.
-    ///
-    /// See `compact()` for the logic of why this exists.
-    pub fn compact_force(&mut self) {
-        let mut par_cursor = CursorWrite::new(SuperBlock::default());
-        par_cursor.extend(self.iter().map(|(kr, vr)| (kr.clone(), vr.clone())));
-
-        // Now swap them over.
-        // std::mem::swap(&mut self.work, &mut par_cursor);
-        unimplemented!();
-    }
-    */
-
     #[cfg(test)]
     pub(crate) fn tree_density(&self) -> (usize, usize) {
-        self.work.tree_density()
+        self.inner.as_ref().tree_density()
     }
 
     #[cfg(test)]
     pub(crate) fn verify(&self) -> bool {
-        self.work.verify()
+        self.inner.as_ref().verify()
     }
 
     /// Create a read-snapshot of the current tree. This does NOT guarantee the tree may
@@ -406,7 +286,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     /// write txn are called while this snapshot is active.
     pub fn to_snapshot(&'a self) -> BptreeMapReadSnapshot<K, V> {
         BptreeMapReadSnapshot {
-            work: SnapshotType::W(&self.work),
+            inner: SnapshotType::W(&self.inner.as_ref()),
         }
     }
 
@@ -415,7 +295,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     ///
     /// To abort (unstage changes), just do not call this function.
     pub fn commit(self) {
-        self.caller.commit(self.work.finalise())
+        self.inner.commit();
     }
 }
 
@@ -429,7 +309,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
         K: Borrow<Q>,
         Q: Ord,
     {
-        self.work.search(k)
+        self.inner.as_ref().search(k)
     }
 
     /// Assert if a key exists in the tree.
@@ -438,52 +318,52 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
         K: Borrow<Q>,
         Q: Ord,
     {
-        self.work.contains_key(k)
+        self.inner.as_ref().contains_key(k)
     }
 
     /// Returns the current number of k:v pairs in the tree
     pub fn len(&self) -> usize {
-        self.work.len()
+        self.inner.as_ref().len()
     }
 
     /// Determine if the set is currently empty
     pub fn is_empty(&self) -> bool {
-        self.work.len() == 0
+        self.inner.as_ref().len() == 0
     }
 
     // (adv) range
     #[allow(unused)]
     pub(crate) fn get_txid(&self) -> u64 {
-        self.work.get_txid()
+        self.inner.as_ref().get_txid()
     }
 
     /// Iterator over `(&K, &V)` of the set
     pub fn iter(&self) -> Iter<K, V> {
-        self.work.kv_iter()
+        self.inner.as_ref().kv_iter()
     }
 
     /// Iterator over &K
     pub fn values(&self) -> ValueIter<K, V> {
-        self.work.v_iter()
+        self.inner.as_ref().v_iter()
     }
 
     /// Iterator over &V
     pub fn keys(&self) -> KeyIter<K, V> {
-        self.work.k_iter()
+        self.inner.as_ref().k_iter()
     }
 
     /// Create a read-snapshot of the current tree.
     /// As this is the read variant, it IS safe, and guaranteed the tree will not change.
     pub fn to_snapshot(&'a self) -> BptreeMapReadSnapshot<K, V> {
         BptreeMapReadSnapshot {
-            work: SnapshotType::R(&self.work), // pin: PhantomData,
+            inner: SnapshotType::R(&self.inner.as_ref()),
         }
     }
 
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn verify(&self) -> bool {
-        self.work.verify()
+        self.inner.as_ref().verify()
     }
 }
 
@@ -497,9 +377,9 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
         K: Borrow<Q>,
         Q: Ord,
     {
-        match self.work {
-            SnapshotType::R(work) => work.search(k),
-            SnapshotType::W(work) => work.search(k),
+        match self.inner {
+            SnapshotType::R(inner) => inner.search(k),
+            SnapshotType::W(inner) => inner.search(k),
         }
     }
 
@@ -509,17 +389,17 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
         K: Borrow<Q>,
         Q: Ord,
     {
-        match self.work {
-            SnapshotType::R(work) => work.contains_key(k),
-            SnapshotType::W(work) => work.contains_key(k),
+        match self.inner {
+            SnapshotType::R(inner) => inner.contains_key(k),
+            SnapshotType::W(inner) => inner.contains_key(k),
         }
     }
 
     /// Returns the current number of k:v pairs in the tree
     pub fn len(&self) -> usize {
-        match self.work {
-            SnapshotType::R(work) => work.len(),
-            SnapshotType::W(work) => work.len(),
+        match self.inner {
+            SnapshotType::R(inner) => inner.len(),
+            SnapshotType::W(inner) => inner.len(),
         }
     }
 
@@ -532,33 +412,33 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
 
     /// Iterator over `(&K, &V)` of the set
     pub fn iter(&self) -> Iter<K, V> {
-        match self.work {
-            SnapshotType::R(work) => work.kv_iter(),
-            SnapshotType::W(work) => work.kv_iter(),
+        match self.inner {
+            SnapshotType::R(inner) => inner.kv_iter(),
+            SnapshotType::W(inner) => inner.kv_iter(),
         }
     }
 
     /// Iterator over &K
     pub fn values(&self) -> ValueIter<K, V> {
-        match self.work {
-            SnapshotType::R(work) => work.v_iter(),
-            SnapshotType::W(work) => work.v_iter(),
+        match self.inner {
+            SnapshotType::R(inner) => inner.v_iter(),
+            SnapshotType::W(inner) => inner.v_iter(),
         }
     }
 
     /// Iterator over &V
     pub fn keys(&self) -> KeyIter<K, V> {
-        match self.work {
-            SnapshotType::R(work) => work.k_iter(),
-            SnapshotType::W(work) => work.k_iter(),
+        match self.inner {
+            SnapshotType::R(inner) => inner.k_iter(),
+            SnapshotType::W(inner) => inner.k_iter(),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::node::{assert_released, L_CAPACITY};
     use super::BptreeMap;
+    use crate::internals::bptree::node::{assert_released, L_CAPACITY};
     // use rand::prelude::*;
     use rand::seq::SliceRandom;
     use std::iter::FromIterator;

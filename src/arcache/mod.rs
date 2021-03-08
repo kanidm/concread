@@ -218,7 +218,6 @@ where
     tlocal: Option<ReadCache<K, V>>,
     // tx channel to send forward events.
     tx: Sender<CacheEvent<K, V>>,
-    ts: Instant,
 }
 
 unsafe impl<
@@ -519,7 +518,6 @@ impl<
             cache: self.cache.read(),
             tlocal,
             tx: rshared.tx.clone(),
-            ts: Instant::now(),
         }
     }
 
@@ -1447,7 +1445,7 @@ impl<
                 cache.set.get(k).map(|v| unsafe {
                     // Indicate a hit on the tlocal cache.
                     self.tx
-                        .send(CacheEvent::Hit(self.ts, k_hash, true))
+                        .send(CacheEvent::Hit(Instant::now(), k_hash, true))
                         .expect("Invalid tx state");
                     let v = &(**v).as_ref().1 as *const _;
                     // This discards the lifetime and repins it to &'b.
@@ -1459,7 +1457,7 @@ impl<
                     (*v).to_vref().map(|vin| unsafe {
                         // Indicate a hit on the main cache.
                         self.tx
-                            .send(CacheEvent::Hit(self.ts, k_hash, false))
+                            .send(CacheEvent::Hit(Instant::now(), k_hash, false))
                             .expect("Invalid tx state");
 
                         let vin = vin as *const _;
@@ -1495,7 +1493,7 @@ impl<
         // Send a copy forward through time and space.
         self.tx
             .send(CacheEvent::Include(
-                self.ts,
+                Instant::now(),
                 k.clone(),
                 v.clone(),
                 self.cache.get_txid(),
