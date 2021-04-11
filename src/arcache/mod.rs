@@ -1319,6 +1319,26 @@ impl<
     }
 
     /// Yields an iterator over all values that are currently dirty. As the iterator
+    /// progresses, items will NOT be marked clean. This allows you to modify and
+    /// change any currently dirty items as required.
+    pub fn iter_mut_dirty(&mut self) -> impl Iterator<Item = (&K, Option<&mut V>)> {
+        self.tlocal
+            .iter_mut()
+            .filter(|(_k, v)| match v {
+                ThreadCacheItem::Present(_v, c) => !c,
+                ThreadCacheItem::Removed(c) => !c,
+            })
+            .map(|(k, v)| {
+                // Get the data.
+                let data = match v {
+                    ThreadCacheItem::Present(v, _c) => Some(v),
+                    ThreadCacheItem::Removed(_c) => None,
+                };
+                (k, data)
+            })
+    }
+
+    /// Yields an iterator over all values that are currently dirty. As the iterator
     /// progresses, items will be marked clean. This is where you should sync dirty
     /// cache content to your associated store. The iterator is K, Option<V>, where
     /// the Option<V> indicates if the item has been remove (None) or is updated (Some).
