@@ -2,7 +2,7 @@
 name = "concread"
 version = "0.2.9"
 authors = ["William Brown <william@blackhats.net.au>"]
-
+edition = "2018"
 description = "Concurrently Readable Data-Structures for Rust"
 documentation = "https://docs.rs/concread/latest/concread/"
 homepage = "https://github.com/kanidm/concread/"
@@ -16,6 +16,8 @@ license = "MPL-2.0"
 simd_support = ["packed_simd"]
 skinny = []
 unsoundness = []
+asynch = ["tokio"]
+default = ["asynch"]
 
 [dependencies]
 crossbeam-epoch = "0.9"
@@ -26,6 +28,8 @@ smallvec = "1.4"
 ahash = "0.7"
 rand = "0.8"
 packed_simd = { version = "0.3", optional = true, package = "packed_simd_2" }
+
+tokio = { version = "1", features = ["sync", "rt", "macros"], optional = true }
 
 [dev-dependencies]
 time = "0.2"
