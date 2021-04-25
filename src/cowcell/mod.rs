@@ -9,6 +9,9 @@
 //! but has better behaviour with very long running read operations, and more
 //! accurate memory reclaim behaviour.
 
+#[cfg(feature = "asynch")]
+pub mod asynch;
+
 use parking_lot::{Mutex, MutexGuard};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;

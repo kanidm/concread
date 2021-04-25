@@ -55,6 +55,7 @@
  *
  */
 
+use parking_lot::Mutex as SyncMutex;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::ops::DerefMut;
@@ -83,7 +84,7 @@ pub struct LinCowCellWriteTxn<'a, T: 'a, R, U> {
 #[derive(Debug)]
 struct LinCowCellInner<R> {
     // This gives the chain effect.
-    pin: Mutex<Option<Arc<LinCowCellInner<R>>>>,
+    pin: SyncMutex<Option<Arc<LinCowCellInner<R>>>>,
     data: R,
 }
 
@@ -99,7 +100,7 @@ pub struct LinCowCellReadTxn<'a, T: 'a, R, U> {
 impl<R> LinCowCellInner<R> {
     pub fn new(data: R) -> Self {
         LinCowCellInner {
-            pin: Mutex::new(None),
+            pin: SyncMutex::new(None),
             data,
         }
     }
@@ -179,7 +180,7 @@ where
         let new_inner = Arc::new(LinCowCellInner::new(newdata));
         {
             // This modifies the next pointer of the existing read txns
-            let mut rwguard_inner = rwguard.pin.lock().await;
+            let mut rwguard_inner = rwguard.pin.lock();
             // Create the arc pointer to our new data
             // add it to the last value
             *rwguard_inner = Some(new_inner.clone());
