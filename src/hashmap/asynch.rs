@@ -1,29 +1,10 @@
-//! HashMap - A concurrently readable HashMap
+//! HashMap - A async locked concurrently readable HashMap
 //!
-//! This is a specialisation of the `BptreeMap`, allowing a concurrently readable
-//! HashMap. Unlike a traditional hashmap it does *not* have `O(1)` lookup, as it
-//! internally uses a tree-like structure to store a series of buckets. However
-//! if you do not need key-ordering, due to the storage of the hashes as `u64`
-//! the operations in the tree to seek the bucket is much faster than the use of
-//! the same key in the `BptreeMap`.
-//!
-//! For more details. see the `BptreeMap`
-//!
-//! This structure is very different to the `im` crate. The `im` crate is
-//! sync + send over individual operations. This means that multiple writes can
-//! be interleaved atomicly and safely, and the readers always see the latest
-//! data. While this is potentially useful to a set of problems, transactional
-//! structures are suited to problems where readers have to maintain consistent
-//! data views for a duration of time, cpu cache friendly behaviours and
-//! database like transaction properties (ACID).
+//! For more, see [`HashMap`]
 
 #![allow(clippy::implicit_hasher)]
 
-#[cfg(feature = "asynch")]
-pub mod asynch;
-
-use crate::internals::hashmap::cursor::Datum;
-use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
+use crate::internals::lincowcell_async::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
 
 include!("impl.rs");
 
@@ -40,15 +21,15 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 
     /// Initiate a read transaction for the Hashmap, concurrent to any
     /// other readers or writers.
-    pub fn read(&self) -> HashMapReadTxn<K, V> {
-        let inner = self.inner.read();
+    pub async fn read<'x>(&'x self) -> HashMapReadTxn<'x, K, V> {
+        let inner = self.inner.read().await;
         HashMapReadTxn { inner }
     }
 
     /// Initiate a write transaction for the map, exclusive to this
     /// writer, and concurrently to all existing reads.
-    pub fn write(&self) -> HashMapWriteTxn<K, V> {
-        let inner = self.inner.write();
+    pub async fn write<'x>(&'x self) -> HashMapWriteTxn<'x, K, V> {
+        let inner = self.inner.write().await;
         HashMapWriteTxn { inner }
     }
 
@@ -67,51 +48,12 @@ impl<
         V: Clone + Sync + Send + 'static,
     > HashMapWriteTxn<'a, K, V>
 {
-    pub(crate) fn get_txid(&self) -> u64 {
-        self.inner.as_ref().get_txid()
-    }
-
-    pub(crate) fn prehash<'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
-    where
-        K: Borrow<Q>,
-        Q: Hash + Eq,
-    {
-        self.inner.as_ref().hash_key(k)
-    }
-
-    /// This is *unsafe* because changing the key CAN and WILL break hashing, which can
-    /// have serious consequences. This API only exists to allow arcache to access the inner
-    /// content of the slot to simplify it's API. You should basically never touch this
-    /// function as it's the HashMap equivalent of a the demon sphere.
-    pub(crate) unsafe fn get_slot_mut(&mut self, k_hash: u64) -> Option<&mut [Datum<K, V>]> {
-        self.inner.as_mut().get_slot_mut_ref(k_hash)
-    }
-
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to percieve these changes.
     ///
     /// To abort (unstage changes), just do not call this function.
-    pub fn commit(self) {
-        self.inner.commit();
-    }
-}
-
-impl<
-        'a,
-        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
-        V: Clone + Sync + Send + 'static,
-    > HashMapReadTxn<'a, K, V>
-{
-    pub(crate) fn get_txid(&self) -> u64 {
-        self.inner.as_ref().get_txid()
-    }
-
-    pub(crate) fn prehash<'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
-    where
-        K: Borrow<Q>,
-        Q: Hash + Eq,
-    {
-        self.inner.as_ref().hash_key(k)
+    pub async fn commit(self) {
+        self.inner.commit().await;
     }
 }
 
@@ -119,10 +61,10 @@ impl<
 mod tests {
     use super::HashMap;
 
-    #[test]
-    fn test_hashmap_basic_write() {
+    #[tokio::test]
+    async fn test_hashmap_basic_write() {
         let hmap: HashMap<usize, usize> = HashMap::new();
-        let mut hmap_write = hmap.write();
+        let mut hmap_write = hmap.write().await;
 
         hmap_write.insert(10, 10);
         hmap_write.insert(15, 15);
@@ -147,40 +89,40 @@ mod tests {
         hmap_write.clear();
         assert!(!hmap_write.contains_key(&10));
         assert!(!hmap_write.contains_key(&15));
-        hmap_write.commit();
+        hmap_write.commit().await;
     }
 
-    #[test]
-    fn test_hashmap_basic_read_write() {
+    #[tokio::test]
+    async fn test_hashmap_basic_read_write() {
         let hmap: HashMap<usize, usize> = HashMap::new();
-        let mut hmap_w1 = hmap.write();
+        let mut hmap_w1 = hmap.write().await;
         hmap_w1.insert(10, 10);
         hmap_w1.insert(15, 15);
-        hmap_w1.commit();
+        hmap_w1.commit().await;
 
-        let hmap_r1 = hmap.read();
+        let hmap_r1 = hmap.read().await;
         assert!(hmap_r1.contains_key(&10));
         assert!(hmap_r1.contains_key(&15));
         assert!(!hmap_r1.contains_key(&20));
 
-        let mut hmap_w2 = hmap.write();
+        let mut hmap_w2 = hmap.write().await;
         hmap_w2.insert(20, 20);
-        hmap_w2.commit();
+        hmap_w2.commit().await;
 
         assert!(hmap_r1.contains_key(&10));
         assert!(hmap_r1.contains_key(&15));
         assert!(!hmap_r1.contains_key(&20));
 
-        let hmap_r2 = hmap.read();
+        let hmap_r2 = hmap.read().await;
         assert!(hmap_r2.contains_key(&10));
         assert!(hmap_r2.contains_key(&15));
         assert!(hmap_r2.contains_key(&20));
     }
 
-    #[test]
-    fn test_hashmap_basic_read_snapshot() {
+    #[tokio::test]
+    async fn test_hashmap_basic_read_snapshot() {
         let hmap: HashMap<usize, usize> = HashMap::new();
-        let mut hmap_w1 = hmap.write();
+        let mut hmap_w1 = hmap.write().await;
         hmap_w1.insert(10, 10);
         hmap_w1.insert(15, 15);
 
@@ -190,10 +132,10 @@ mod tests {
         assert!(!snap.contains_key(&20));
     }
 
-    #[test]
-    fn test_hashmap_basic_iter() {
+    #[tokio::test]
+    async fn test_hashmap_basic_iter() {
         let hmap: HashMap<usize, usize> = HashMap::new();
-        let mut hmap_w1 = hmap.write();
+        let mut hmap_w1 = hmap.write().await;
         assert!(hmap_w1.iter().count() == 0);
 
         hmap_w1.insert(10, 10);
@@ -202,10 +144,10 @@ mod tests {
         assert!(hmap_w1.iter().count() == 2);
     }
 
-    #[test]
-    fn test_hashmap_from_iter() {
+    #[tokio::test]
+    async fn test_hashmap_from_iter() {
         let hmap: HashMap<usize, usize> = vec![(10, 10), (15, 15), (20, 20)].into_iter().collect();
-        let hmap_r2 = hmap.read();
+        let hmap_r2 = hmap.read().await;
         assert!(hmap_r2.contains_key(&10));
         assert!(hmap_r2.contains_key(&15));
         assert!(hmap_r2.contains_key(&20));

@@ -26,18 +26,10 @@
 #![deny(warnings)]
 #![warn(unused_extern_crates)]
 #![warn(missing_docs)]
+#![allow(clippy::needless_lifetimes)]
 
-extern crate ahash;
-extern crate crossbeam;
-extern crate crossbeam_epoch;
-// extern crate libc;
-extern crate parking_lot;
-extern crate rand;
 #[macro_use]
 extern crate smallvec;
-
-#[cfg(feature = "simd_support")]
-extern crate packed_simd;
 
 // This is where the gud rust lives.
 mod utils;
@@ -52,9 +44,6 @@ pub mod ebrcell;
 pub mod arcache;
 pub mod bptree;
 pub mod hashmap;
-
-#[cfg(test)]
-extern crate crossbeam_utils;
 
 pub use cowcell::CowCell;
 pub use ebrcell::EbrCell;

@@ -12,3 +12,6 @@
 pub mod bptree;
 pub mod hashmap;
 pub mod lincowcell;
+
+#[cfg(feature = "asynch")]
+pub mod lincowcell_async;

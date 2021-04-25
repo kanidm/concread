@@ -1,22 +1,12 @@
-//! CowCell - A concurrently readable cell with Arc
+//! Async CowCell - A concurrently readable cell with Arc
 //!
-//! A CowCell can be used in place of a `RwLock`. Readers are guaranteed that
-//! the data will not change during the lifetime of the read. Readers do
-//! not block writers, and writers do not block readers. Writers are serialised
-//! same as the write in a RwLock.
-//!
-//! This is the `Arc` collected implementation. `Arc` is slightly slower than `EbrCell`
-//! but has better behaviour with very long running read operations, and more
-//! accurate memory reclaim behaviour.
+//! See `CowCell` for more details.
 
-#[cfg(feature = "asynch")]
-pub mod asynch;
-
-use parking_lot::{Mutex, MutexGuard};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use tokio::sync::{Mutex, MutexGuard};
 
-/// A conncurrently readable cell.
+/// A conncurrently readable async cell.
 ///
 /// This structure behaves in a similar manner to a `RwLock<T>`. However unlike
 /// a `RwLock`, writes and parallel reads can be performed at the same time. This
@@ -33,30 +23,6 @@ use std::sync::Arc;
 ///
 /// Writers are serialised and are guaranteed they have exclusive write access
 /// to the structure.
-///
-/// # Examples
-/// ```
-/// use concread::cowcell::CowCell;
-///
-/// let data: i64 = 0;
-/// let cowcell = CowCell::new(data);
-///
-/// // Begin a read transaction
-/// let read_txn = cowcell.read();
-/// assert_eq!(*read_txn, 0);
-/// {
-///     // Now create a write, and commit it.
-///     let mut write_txn = cowcell.write();
-///     *write_txn = 1;
-///     // Commit the change
-///     write_txn.commit();
-/// }
-/// // Show the previous generation still reads '0'
-/// assert_eq!(*read_txn, 0);
-/// let new_read_txn = cowcell.read();
-/// // And a new read transaction has '1'
-/// assert_eq!(*new_read_txn, 1);
-/// ```
 #[derive(Debug)]
 pub struct CowCell<T> {
     write: Mutex<()>,
@@ -110,8 +76,8 @@ where
     /// Begin a read transaction, returning a read guard. The content of
     /// the read guard is guaranteed to be consistent for the life time of the
     /// read - even if writers commit during.
-    pub fn read(&self) -> CowCellReadTxn<T> {
-        let rwguard = self.active.lock();
+    pub async fn read<'x>(&'x self) -> CowCellReadTxn<T> {
+        let rwguard = self.active.lock().await;
         CowCellReadTxn(rwguard.clone())
         // rwguard ends here
     }
@@ -119,12 +85,12 @@ where
     /// Begin a write transaction, returning a write guard. The content of the
     /// write is only visible to this thread, and is not visible to any reader
     /// until `commit()` is called.
-    pub fn write(&self) -> CowCellWriteTxn<T> {
+    pub async fn write<'x>(&'x self) -> CowCellWriteTxn<'x, T> {
         /* Take the exclusive write lock first */
-        let mguard = self.write.lock();
+        let mguard = self.write.lock().await;
         // We delay copying until the first get_mut.
         let read = {
-            let rwguard = self.active.lock();
+            let rwguard = self.active.lock().await;
             rwguard.clone()
         };
         /* Now build the write struct */
@@ -139,27 +105,29 @@ where
     /// Attempt to create a write transaction. If it fails, and err
     /// is returned. On success the `Ok(guard)` is returned. See also
     /// `write(&self)`
-    pub fn try_write(&self) -> Option<CowCellWriteTxn<T>> {
+    pub async fn try_write<'x>(&'x self) -> Option<CowCellWriteTxn<'x, T>> {
         /* Take the exclusive write lock first */
-        self.write.try_lock().map(|mguard| {
+        if let Ok(mguard) = self.write.try_lock() {
             // We delay copying until the first get_mut.
-            let read = {
-                let rwguard = self.active.lock();
+            let read: Arc<_> = {
+                let rwguard = self.active.lock().await;
                 rwguard.clone()
             };
             /* Now build the write struct */
-            CowCellWriteTxn {
+            Some(CowCellWriteTxn {
                 work: None,
                 read,
                 caller: self,
                 _guard: mguard,
-            }
-        })
+            })
+        } else {
+            None
+        }
     }
 
-    fn commit(&self, newdata: Option<T>) {
+    async fn commit(&self, newdata: Option<T>) {
         if let Some(nd) = newdata {
-            let mut rwguard = self.active.lock();
+            let mut rwguard = self.active.lock().await;
             let new_inner = Arc::new(nd);
             // now over-write the last value in the mutex.
             *rwguard = new_inner;
@@ -200,9 +168,9 @@ where
     /// This will consume the transaction so no further changes can be made
     /// after this is called. Not calling this in a block, is equivalent to
     /// an abort/rollback of the transaction.
-    pub fn commit(self) {
+    pub async fn commit(self) {
         /* Write our data back to the CowCell */
-        self.caller.commit(self.work);
+        self.caller.commit(self.work).await;
     }
 }
 
@@ -235,46 +203,45 @@ where
 mod tests {
     use super::CowCell;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
-    use crossbeam_utils::thread::scope;
-
-    #[test]
-    fn test_deref_mut() {
+    #[tokio::test]
+    async fn test_deref_mut() {
         let data: i64 = 0;
         let cc = CowCell::new(data);
         {
             /* Take a write txn */
-            let mut cc_wrtxn = cc.write();
+            let mut cc_wrtxn = cc.write().await;
             *cc_wrtxn = 1;
-            cc_wrtxn.commit();
+            cc_wrtxn.commit().await;
         }
-        let cc_rotxn = cc.read();
+        let cc_rotxn = cc.read().await;
         assert_eq!(*cc_rotxn, 1);
     }
 
-    #[test]
-    fn test_try_write() {
+    #[tokio::test]
+    async fn test_try_write() {
         let data: i64 = 0;
         let cc = CowCell::new(data);
         /* Take a write txn */
-        let cc_wrtxn_a = cc.try_write();
+        let cc_wrtxn_a = cc.try_write().await;
         assert!(cc_wrtxn_a.is_some());
         /* Because we already hold the writ, the second is guaranteed to fail */
-        let cc_wrtxn_a = cc.try_write();
+        let cc_wrtxn_a = cc.try_write().await;
         assert!(cc_wrtxn_a.is_none());
     }
 
-    #[test]
-    fn test_simple_create() {
+    #[tokio::test]
+    async fn test_simple_create() {
         let data: i64 = 0;
         let cc = CowCell::new(data);
 
-        let cc_rotxn_a = cc.read();
+        let cc_rotxn_a = cc.read().await;
         assert_eq!(*cc_rotxn_a, 0);
 
         {
             /* Take a write txn */
-            let mut cc_wrtxn = cc.write();
+            let mut cc_wrtxn = cc.write().await;
             /* Get the data ... */
             {
                 let mut_ptr = cc_wrtxn.get_mut();
@@ -285,68 +252,16 @@ mod tests {
             }
             assert_eq!(*cc_rotxn_a, 0);
 
-            let cc_rotxn_b = cc.read();
+            let cc_rotxn_b = cc.read().await;
             assert_eq!(*cc_rotxn_b, 0);
             /* The write txn and it's lock is dropped here */
-            cc_wrtxn.commit();
+            cc_wrtxn.commit().await;
         }
 
         /* Start a new txn and see it's still good */
-        let cc_rotxn_c = cc.read();
+        let cc_rotxn_c = cc.read().await;
         assert_eq!(*cc_rotxn_c, 1);
         assert_eq!(*cc_rotxn_a, 0);
-    }
-
-    const MAX_TARGET: i64 = 2000;
-
-    #[test]
-    #[cfg_attr(miri, ignore)]
-    fn test_multithread_create() {
-        let start = time::Instant::now();
-        // Create the new cowcell.
-        let data: i64 = 0;
-        let cc = CowCell::new(data);
-
-        assert!(scope(|scope| {
-            let cc_ref = &cc;
-
-            let _readers: Vec<_> = (0..7)
-                .map(|_| {
-                    scope.spawn(move |_| {
-                        let mut last_value: i64 = 0;
-                        while last_value < MAX_TARGET {
-                            let cc_rotxn = cc_ref.read();
-                            {
-                                assert!(*cc_rotxn >= last_value);
-                                last_value = *cc_rotxn;
-                            }
-                        }
-                    })
-                })
-                .collect();
-
-            let _writers: Vec<_> = (0..3)
-                .map(|_| {
-                    scope.spawn(move |_| {
-                        let mut last_value: i64 = 0;
-                        while last_value < MAX_TARGET {
-                            let mut cc_wrtxn = cc_ref.write();
-                            {
-                                let mut_ptr = cc_wrtxn.get_mut();
-                                assert!(*mut_ptr >= last_value);
-                                last_value = *mut_ptr;
-                                *mut_ptr = *mut_ptr + 1;
-                            }
-                            cc_wrtxn.commit();
-                        }
-                    })
-                })
-                .collect();
-        })
-        .is_ok());
-
-        let end = time::Instant::now();
-        print!("Arc MT create :{:?} ", end - start);
     }
 
     static GC_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -363,38 +278,33 @@ mod tests {
         }
     }
 
-    fn test_gc_operation_thread(cc: &CowCell<TestGcWrapper<i64>>) {
+    async fn test_gc_operation_thread(cc: Arc<CowCell<TestGcWrapper<i64>>>) {
         while GC_COUNT.load(Ordering::Acquire) < 50 {
             // thread::sleep(std::time::Duration::from_millis(200));
             {
-                let mut cc_wrtxn = cc.write();
+                let mut cc_wrtxn = cc.write().await;
                 {
                     let mut_ptr = cc_wrtxn.get_mut();
                     mut_ptr.data = mut_ptr.data + 1;
                 }
-                cc_wrtxn.commit();
+                cc_wrtxn.commit().await;
             }
         }
     }
 
-    #[test]
+    #[tokio::test]
     #[cfg_attr(miri, ignore)]
-    fn test_gc_operation() {
+    async fn test_gc_operation() {
         GC_COUNT.store(0, Ordering::Release);
         let data = TestGcWrapper { data: 0 };
-        let cc = CowCell::new(data);
+        let cc = Arc::new(CowCell::new(data));
 
-        assert!(scope(|scope| {
-            let cc_ref = &cc;
-            let _writers: Vec<_> = (0..3)
-                .map(|_| {
-                    scope.spawn(move |_| {
-                        test_gc_operation_thread(cc_ref);
-                    })
-                })
-                .collect();
-        })
-        .is_ok());
+        let _ = tokio::join!(
+            tokio::task::spawn(test_gc_operation_thread(cc.clone())),
+            tokio::task::spawn(test_gc_operation_thread(cc.clone())),
+            tokio::task::spawn(test_gc_operation_thread(cc.clone())),
+            tokio::task::spawn(test_gc_operation_thread(cc.clone())),
+        );
 
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
     }
