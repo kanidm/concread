@@ -1318,7 +1318,32 @@ impl<
         self.tlocal.insert(k, ThreadCacheItem::Removed(false));
     }
 
+    /// Determines if dirty elements exist in this cache or not.
+    pub fn is_dirty(&self) -> bool {
+        self.iter_dirty().take(1).next().is_some()
+    }
+
     /// Yields an iterator over all values that are currently dirty. As the iterator
+    /// progresses, items will NOT be marked clean. This allows you to examine
+    /// any currently dirty items in the cache.
+    pub fn iter_dirty(&self) -> impl Iterator<Item = (&K, Option<&V>)> {
+        self.tlocal
+            .iter()
+            .filter(|(_k, v)| match v {
+                ThreadCacheItem::Present(_v, c) => !c,
+                ThreadCacheItem::Removed(c) => !c,
+            })
+            .map(|(k, v)| {
+                // Get the data.
+                let data = match v {
+                    ThreadCacheItem::Present(v, _c) => Some(v),
+                    ThreadCacheItem::Removed(_c) => None,
+                };
+                (k, data)
+            })
+    }
+
+    /// Yields a mutable iterator over all values that are currently dirty. As the iterator
     /// progresses, items will NOT be marked clean. This allows you to modify and
     /// change any currently dirty items as required.
     pub fn iter_mut_dirty(&mut self) -> impl Iterator<Item = (&K, Option<&mut V>)> {
