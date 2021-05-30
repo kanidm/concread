@@ -474,7 +474,7 @@ impl<
         assert!(max > 0);
 
         // Based on max, what should our watermark be?
-        let watermark = if max < 128 { 0 } else { (max / 4) * 3 };
+        let watermark = if max < 128 { 0 } else { (max / 20) * 17 };
 
         let (tx, rx) = unbounded();
         let shared = RwLock::new(ArcShared {
