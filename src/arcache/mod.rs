@@ -19,6 +19,7 @@ use crate::hashmap::*;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap as Map;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -136,7 +137,7 @@ where
     K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Debug + Sync + Send + 'static,
 {
-    // Weight of items between the two caches.
+    /// Weight of items between the two caches.
     p: usize,
     freq: LL<CacheItemInner<K>>,
     rec: LL<CacheItemInner<K>>,
@@ -159,6 +160,9 @@ where
     // channels for readers.
     // tx (cloneable)
     tx: Sender<CacheEvent<K, V>>,
+    /// The number of items that are present in the cache before we start to process
+    /// the arc sets/lists.
+    watermark: usize,
 }
 
 /// A concurrently readable adaptive replacement cache. Operations are performed on the
@@ -177,6 +181,7 @@ where
     // These are only taken during a quiesce
     inner: Mutex<ArcInner<K, V>>,
     stats: CowCell<CacheStats>,
+    above_watermark: AtomicBool,
 }
 
 unsafe impl<
@@ -218,6 +223,7 @@ where
     tlocal: Option<ReadCache<K, V>>,
     // tx channel to send forward events.
     tx: Sender<CacheEvent<K, V>>,
+    above_watermark: bool,
 }
 
 unsafe impl<
@@ -250,6 +256,7 @@ where
     tlocal: Map<K, ThreadCacheItem<V>>,
     hit: UnsafeCell<Vec<u64>>,
     clear: UnsafeCell<bool>,
+    above_watermark: bool,
 }
 
 /*
@@ -465,8 +472,17 @@ impl<
     /// cache size.
     pub fn new_size(max: usize, read_max: usize) -> Self {
         assert!(max > 0);
+
+        // Based on max, what should our watermark be?
+        let watermark = if max < 128 { 0 } else { (max / 20) * 17 };
+
         let (tx, rx) = unbounded();
-        let shared = RwLock::new(ArcShared { max, read_max, tx });
+        let shared = RwLock::new(ArcShared {
+            max,
+            read_max,
+            tx,
+            watermark,
+        });
         let inner = Mutex::new(ArcInner {
             p: 0,
             freq: LL::new(),
@@ -496,6 +512,7 @@ impl<
             shared,
             inner,
             stats,
+            above_watermark: AtomicBool::new(true),
         }
     }
 
@@ -513,11 +530,13 @@ impl<
         } else {
             None
         };
+        let above_watermark = self.above_watermark.load(Ordering::Relaxed);
         ARCacheReadTxn {
             caller: &self,
             cache: self.cache.read(),
             tlocal,
             tx: rshared.tx.clone(),
+            above_watermark,
         }
     }
 
@@ -525,12 +544,14 @@ impl<
     /// for all items that have been included or dirtied in the transactions, items
     /// may be removed from this cache (ie deleted, invalidated).
     pub fn write(&self) -> ARCacheWriteTxn<K, V> {
+        let above_watermark = self.above_watermark.load(Ordering::Relaxed);
         ARCacheWriteTxn {
             caller: &self,
             cache: self.cache.write(),
             tlocal: Map::new(),
             hit: UnsafeCell::new(Vec::new()),
             clear: UnsafeCell::new(false),
+            above_watermark,
         }
     }
 
@@ -541,12 +562,16 @@ impl<
     }
 
     fn try_write(&self) -> Option<ARCacheWriteTxn<K, V>> {
-        self.cache.try_write().map(|cache| ARCacheWriteTxn {
-            caller: &self,
-            cache,
-            tlocal: Map::new(),
-            hit: UnsafeCell::new(Vec::new()),
-            clear: UnsafeCell::new(false),
+        self.cache.try_write().map(|cache| {
+            let above_watermark = self.above_watermark.load(Ordering::Relaxed);
+            ARCacheWriteTxn {
+                caller: &self,
+                cache,
+                tlocal: Map::new(),
+                hit: UnsafeCell::new(Vec::new()),
+                clear: UnsafeCell::new(false),
+                above_watermark,
+            }
         })
     }
 
@@ -1177,6 +1202,16 @@ impl<
         stats.recent = inner.rec.len();
         stats.all_seen_keys = cache.len();
 
+        // Indicate if we are at/above watermark, so that read/writers begin to indicate their
+        // hit events so we can start to setup/order our arc sets correctly.
+        //
+        // If we drop below this again, they'll go back to just insert/remove content only mode.
+        if (inner.freq.len() + inner.rec.len()) >= shared.watermark {
+            self.above_watermark.store(true, Ordering::Relaxed);
+        } else {
+            self.above_watermark.store(false, Ordering::Relaxed);
+        }
+
         // Commit the stats
         stat_guard.commit();
         // commit on the wr txn.
@@ -1268,7 +1303,7 @@ impl<
         // Remember, we don't track misses - they are *implied* by the fact they'll trigger
         // an inclusion from the external system. Subsequent, any further re-hit on an
         // included value WILL be tracked, allowing arc to adjust appropriately.
-        if r.is_some() {
+        if self.above_watermark && r.is_some() {
             unsafe {
                 let hit_ptr = self.hit.get();
                 (*hit_ptr).push(k_hash);
@@ -1489,9 +1524,11 @@ impl<
             .and_then(|cache| {
                 cache.set.get(k).map(|v| unsafe {
                     // Indicate a hit on the tlocal cache.
-                    self.tx
-                        .send(CacheEvent::Hit(Instant::now(), k_hash, true))
-                        .expect("Invalid tx state");
+                    if self.above_watermark {
+                        self.tx
+                            .send(CacheEvent::Hit(Instant::now(), k_hash, true))
+                            .expect("Invalid tx state");
+                    }
                     let v = &(**v).as_ref().1 as *const _;
                     // This discards the lifetime and repins it to &'b.
                     &(*v)
@@ -1501,9 +1538,11 @@ impl<
                 self.cache.get_prehashed(k, k_hash).and_then(|v| {
                     (*v).to_vref().map(|vin| unsafe {
                         // Indicate a hit on the main cache.
-                        self.tx
-                            .send(CacheEvent::Hit(Instant::now(), k_hash, false))
-                            .expect("Invalid tx state");
+                        if self.above_watermark {
+                            self.tx
+                                .send(CacheEvent::Hit(Instant::now(), k_hash, false))
+                                .expect("Invalid tx state");
+                        }
 
                         let vin = vin as *const _;
                         &(*vin)
