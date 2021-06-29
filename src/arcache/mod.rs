@@ -1355,7 +1355,7 @@ impl<
 
     /// Determines if dirty elements exist in this cache or not.
     pub fn is_dirty(&self) -> bool {
-        self.iter_dirty().take(1).next().is_some()
+        unsafe { *self.clear.get() || self.iter_dirty().take(1).next().is_some() }
     }
 
     /// Yields an iterator over all values that are currently dirty. As the iterator
@@ -2307,5 +2307,13 @@ mod tests {
         assert!(wr_txn.peek_cache(&2) == CacheState::Rec);
         assert!(wr_txn.peek_cache(&3) == CacheState::Rec);
         assert!(wr_txn.peek_cache(&4) == CacheState::Rec);
+    }
+
+    #[test]
+    fn test_cache_dirty_clear() {
+        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
+        let mut wr_txn = arc.write();
+        wr_txn.clear();
+        assert!(wr_txn.is_dirty());
     }
 }
