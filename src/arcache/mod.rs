@@ -11,8 +11,10 @@
 //! compliant Cache.
 
 mod ll;
+pub mod traits;
 
-use self::ll::{LLNode, LL};
+use self::ll::{LLNode, LLWeight, LL};
+use self::traits::ArcWeight;
 // use crate::collections::bptree::*;
 use crate::cowcell::{CowCell, CowCellReadTxn};
 use crate::hashmap::*;
@@ -80,6 +82,17 @@ where
 {
     k: K,
     txid: u64,
+    size: usize,
+}
+
+impl<K> LLWeight for CacheItemInner<K>
+where
+    K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+{
+    #[inline]
+    fn ll_weight(&self) -> usize {
+        self.size
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -170,7 +183,7 @@ where
 pub struct ARCache<K, V>
 where
     K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Debug + Sync + Send + 'static,
+    V: ArcWeight + Clone + Debug + Sync + Send + 'static,
 {
     // Use a unified tree, allows simpler movement of items between the
     // cache types.
@@ -186,7 +199,7 @@ where
 
 unsafe impl<
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
-        V: Clone + Debug + Sync + Send + 'static,
+        V: ArcWeight + Clone + Debug + Sync + Send + 'static,
     > Send for ARCache<K, V>
 {
 }
@@ -215,7 +228,7 @@ where
 pub struct ARCacheReadTxn<'a, K, V>
 where
     K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Debug + Sync + Send + 'static,
+    V: ArcWeight + Clone + Debug + Sync + Send + 'static,
 {
     caller: &'a ARCache<K, V>,
     // ro_txn to cache
@@ -246,7 +259,7 @@ unsafe impl<
 pub struct ARCacheWriteTxn<'a, K, V>
 where
     K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Debug + Sync + Send + 'static,
+    V: ArcWeight + Clone + Debug + Sync + Send + 'static,
 {
     caller: &'a ARCache<K, V>,
     // wr_txn to cache
@@ -422,7 +435,7 @@ macro_rules! evict_to_haunted_len {
 
 impl<
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
-        V: Clone + Debug + Sync + Send + 'static,
+        V: ArcWeight + Clone + Debug + Sync + Send + 'static,
     > ARCache<K, V>
 {
     /// Create a new ARCache, that derives it's size based on your expected workload.
@@ -625,6 +638,7 @@ impl<
                     let llp = inner.rec.append_k(CacheItemInner {
                         k: k.clone(),
                         txid: commit_txid,
+                        size: tci.arc_weight(),
                     });
                     cache.insert(k, CacheItem::Rec(llp, tci));
                 }
@@ -634,6 +648,7 @@ impl<
                     let llp = inner.haunted.append_k(CacheItemInner {
                         k: k.clone(),
                         txid: commit_txid,
+                        size: 1,
                     });
                     cache.insert(k, CacheItem::Haunted(llp));
                 }
@@ -643,30 +658,30 @@ impl<
                     let mut next_state = match ci {
                         CacheItem::Freq(llp, _v) => {
                             // println!("tlocal {:?} Freq -> Freq", k);
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.freq.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.haunted.append_n(*llp);
                             CacheItem::Haunted(*llp)
                         }
                         CacheItem::Rec(llp, _v) => {
                             // println!("tlocal {:?} Rec -> Freq", k);
                             // Remove the node and put it into freq.
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.rec.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.haunted.append_n(*llp);
                             CacheItem::Haunted(*llp)
                         }
                         CacheItem::GhostFreq(llp) => {
                             // println!("tlocal {:?} GhostFreq -> Freq", k);
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.ghost_freq.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.haunted.append_n(*llp);
                             CacheItem::Haunted(*llp)
                         }
                         CacheItem::GhostRec(llp) => {
                             // println!("tlocal {:?} GhostRec -> Rec", k);
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.ghost_rec.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.haunted.append_n(*llp);
                             CacheItem::Haunted(*llp)
                         }
@@ -687,18 +702,21 @@ impl<
                     // It's in the cache - what action must we take?
                     let mut next_state = match ci {
                         CacheItem::Freq(llp, _v) => {
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             // println!("tlocal {:?} Freq -> Freq", k);
+                            inner.freq.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
+                            unsafe { (**llp).as_mut().size = tci.arc_weight() };
                             // Move the list item to it's head.
-                            inner.freq.touch(*llp);
+                            inner.freq.append_n(*llp);
                             // Update v.
                             CacheItem::Freq(*llp, (*tci).clone())
                         }
                         CacheItem::Rec(llp, _v) => {
                             // println!("tlocal {:?} Rec -> Freq", k);
                             // Remove the node and put it into freq.
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.rec.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
+                            unsafe { (**llp).as_mut().size = tci.arc_weight() };
                             inner.freq.append_n(*llp);
                             CacheItem::Freq(*llp, (*tci).clone())
                         }
@@ -710,8 +728,9 @@ impl<
                                 inner.ghost_freq.len(),
                                 &mut inner.p,
                             );
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.ghost_freq.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
+                            unsafe { (**llp).as_mut().size = tci.arc_weight() };
                             inner.freq.append_n(*llp);
                             CacheItem::Freq(*llp, (*tci).clone())
                         }
@@ -724,15 +743,17 @@ impl<
                                 inner.ghost_freq.len(),
                                 &mut inner.p,
                             );
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.ghost_rec.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
+                            unsafe { (**llp).as_mut().size = tci.arc_weight() };
                             inner.rec.append_n(*llp);
                             CacheItem::Rec(*llp, (*tci).clone())
                         }
                         CacheItem::Haunted(llp) => {
                             // println!("tlocal {:?} Haunted -> Rec", k);
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.haunted.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
+                            unsafe { (**llp).as_mut().size = tci.arc_weight() };
                             inner.rec.append_n(*llp);
                             CacheItem::Rec(*llp, (*tci).clone())
                         }
@@ -808,31 +829,36 @@ impl<
                         Some(ref mut ci) => {
                             let mut next_state = match &ci {
                                 CacheItem::Freq(llp, _v) => {
-                                    inner.freq.touch(*llp);
                                     if unsafe { (**llp).as_ref().txid >= txid }
                                         || inner.min_txid > txid
                                     {
                                         // println!("rxinc {:?} Freq -> Freq (touch only)", k);
                                         // Our cache already has a newer value, keep it.
+                                        inner.freq.touch(*llp);
                                         None
                                     } else {
                                         // println!("rxinc {:?} Freq -> Freq (update)", k);
                                         // The value is newer, update.
+                                        inner.freq.extract(*llp);
                                         unsafe { (**llp).as_mut().txid = txid };
+                                        unsafe { (**llp).as_mut().size = iv.arc_weight() };
+                                        inner.freq.append_n(*llp);
                                         Some(CacheItem::Freq(*llp, iv))
                                     }
                                 }
                                 CacheItem::Rec(llp, v) => {
                                     inner.rec.extract(*llp);
-                                    inner.freq.append_n(*llp);
                                     if unsafe { (**llp).as_ref().txid >= txid }
                                         || inner.min_txid > txid
                                     {
                                         // println!("rxinc {:?} Rec -> Freq (touch only)", k);
+                                        inner.freq.append_n(*llp);
                                         Some(CacheItem::Freq(*llp, v.clone()))
                                     } else {
                                         // println!("rxinc {:?} Rec -> Freq (update)", k);
                                         unsafe { (**llp).as_mut().txid = txid };
+                                        unsafe { (**llp).as_mut().size = iv.arc_weight() };
+                                        inner.freq.append_n(*llp);
                                         Some(CacheItem::Freq(*llp, iv))
                                     }
                                 }
@@ -843,19 +869,20 @@ impl<
                                         inner.ghost_freq.len(),
                                         &mut inner.p,
                                     );
-                                    inner.ghost_freq.extract(*llp);
                                     if unsafe { (**llp).as_ref().txid > txid }
                                         || inner.min_txid > txid
                                     {
                                         // println!("rxinc {:?} GhostFreq -> GhostFreq", k);
                                         // The cache version is newer, this is just a hit.
-                                        inner.ghost_freq.append_n(*llp);
+                                        inner.ghost_freq.touch(*llp);
                                         None
                                     } else {
                                         // This item is newer, so we can include it.
                                         // println!("rxinc {:?} GhostFreq -> Rec", k);
-                                        inner.freq.append_n(*llp);
+                                        inner.ghost_freq.extract(*llp);
                                         unsafe { (**llp).as_mut().txid = txid };
+                                        unsafe { (**llp).as_mut().size = iv.arc_weight() };
+                                        inner.freq.append_n(*llp);
                                         Some(CacheItem::Freq(*llp, iv))
                                     }
                                 }
@@ -876,8 +903,9 @@ impl<
                                     } else {
                                         // println!("rxinc {:?} GhostRec -> Rec", k);
                                         inner.ghost_rec.extract(*llp);
-                                        inner.rec.append_n(*llp);
                                         unsafe { (**llp).as_mut().txid = txid };
+                                        unsafe { (**llp).as_mut().size = iv.arc_weight() };
+                                        inner.rec.append_n(*llp);
                                         Some(CacheItem::Rec(*llp, iv))
                                     }
                                 }
@@ -890,8 +918,9 @@ impl<
                                     } else {
                                         // println!("rxinc {:?} Haunted -> Rec", k);
                                         inner.haunted.extract(*llp);
-                                        inner.rec.append_n(*llp);
                                         unsafe { (**llp).as_mut().txid = txid };
+                                        unsafe { (**llp).as_mut().size = iv.arc_weight() };
+                                        inner.rec.append_n(*llp);
                                         Some(CacheItem::Rec(*llp, iv))
                                     }
                                 }
@@ -904,7 +933,11 @@ impl<
                             // It's not present - include it!
                             // println!("rxinc {:?} None -> Rec", k);
                             if txid >= inner.min_txid {
-                                let llp = inner.rec.append_k(CacheItemInner { k: k.clone(), txid });
+                                let llp = inner.rec.append_k(CacheItemInner {
+                                    k: k.clone(),
+                                    txid,
+                                    size: iv.arc_weight(),
+                                });
                                 cache.insert(k, CacheItem::Rec(llp, iv));
                             }
                         }
@@ -1223,7 +1256,7 @@ impl<
 impl<
         'a,
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
-        V: Clone + Debug + Sync + Send + 'static,
+        V: ArcWeight + Clone + Debug + Sync + Send + 'static,
     > ARCacheWriteTxn<'a, K, V>
 {
     /// Commit the changes of this writer, making them globally visible. This causes
@@ -1504,7 +1537,7 @@ impl<
 impl<
         'a,
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
-        V: Clone + Debug + Sync + Send + 'static,
+        V: ArcWeight + Clone + Debug + Sync + Send + 'static,
     > ARCacheReadTxn<'a, K, V>
 {
     /// Attempt to retieve a k-v pair from the cache. If it is present in the main cache OR
@@ -1621,6 +1654,7 @@ impl<
 
 #[cfg(test)]
 mod tests {
+    use crate::arcache::traits::ArcWeight;
     use crate::arcache::ARCache as Arc;
     use crate::arcache::CStat;
     use crate::arcache::CacheState;
@@ -2307,5 +2341,118 @@ mod tests {
         assert!(wr_txn.peek_cache(&2) == CacheState::Rec);
         assert!(wr_txn.peek_cache(&3) == CacheState::Rec);
         assert!(wr_txn.peek_cache(&4) == CacheState::Rec);
+    }
+
+    #[derive(Clone, Debug)]
+    struct Weighted {
+        i: u64,
+    }
+
+    impl ArcWeight for Weighted {
+        fn arc_weight(&self) -> usize {
+            2
+        }
+    }
+
+    #[test]
+    fn test_cache_weighted() {
+        let arc: Arc<usize, Weighted> = Arc::new_size(4, 0);
+        let mut wr_txn = arc.write();
+
+        assert!(
+            CStat {
+                max: 4,
+                cache: 0,
+                tlocal: 0,
+                freq: 0,
+                rec: 0,
+                ghost_freq: 0,
+                ghost_rec: 0,
+                haunted: 0,
+                p: 0
+            } == wr_txn.peek_stat()
+        );
+
+        // In the first txn we insert 2 weight 2 items.
+        wr_txn.insert(1, Weighted { i: 1 });
+        wr_txn.insert(2, Weighted { i: 2 });
+
+        assert!(
+            CStat {
+                max: 4,
+                cache: 0,
+                tlocal: 2,
+                freq: 0,
+                rec: 0,
+                ghost_freq: 0,
+                ghost_rec: 0,
+                haunted: 0,
+                p: 0
+            } == wr_txn.peek_stat()
+        );
+        wr_txn.commit();
+
+        // Now once commited, the proper sizes kick in.
+
+        let wr_txn = arc.write();
+        // eprintln!("{:?}", wr_txn.peek_stat());
+        assert!(
+            CStat {
+                max: 4,
+                cache: 2,
+                tlocal: 0,
+                freq: 0,
+                rec: 4,
+                ghost_freq: 0,
+                ghost_rec: 0,
+                haunted: 0,
+                p: 0
+            } == wr_txn.peek_stat()
+        );
+        wr_txn.commit();
+
+        // Check the numbers move properly.
+        let wr_txn = arc.write();
+        wr_txn.get(&1);
+        wr_txn.commit();
+
+        let mut wr_txn = arc.write();
+        assert!(
+            CStat {
+                max: 4,
+                cache: 2,
+                tlocal: 0,
+                freq: 2,
+                rec: 2,
+                ghost_freq: 0,
+                ghost_rec: 0,
+                haunted: 0,
+                p: 0
+            } == wr_txn.peek_stat()
+        );
+
+        wr_txn.insert(3, Weighted { i: 3 });
+        wr_txn.insert(4, Weighted { i: 4 });
+        wr_txn.commit();
+
+        // Check the evicts
+        let wr_txn = arc.write();
+        assert!(
+            CStat {
+                max: 4,
+                cache: 4,
+                tlocal: 0,
+                freq: 2,
+                rec: 2,
+                ghost_freq: 0,
+                ghost_rec: 4,
+                haunted: 0,
+                p: 0
+            } == wr_txn.peek_stat()
+        );
+        wr_txn.commit();
+
+        let stats = arc.view_stats();
+        println!("{:?}", *stats);
     }
 }

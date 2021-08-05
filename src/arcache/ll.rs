@@ -3,10 +3,21 @@ use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ptr;
 
+pub trait LLWeight {
+    fn ll_weight(&self) -> usize;
+}
+
+impl<T> LLWeight for T {
+    #[inline]
+    default fn ll_weight(&self) -> usize {
+        1
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct LL<K>
 where
-    K: Clone + Debug,
+    K: LLWeight + Clone + Debug,
 {
     head: *mut LLNode<K>,
     tail: *mut LLNode<K>,
@@ -17,7 +28,7 @@ where
 #[derive(Debug)]
 pub(crate) struct LLNode<K>
 where
-    K: Clone + Debug,
+    K: LLWeight + Clone + Debug,
 {
     pub(crate) k: MaybeUninit<K>,
     next: *mut LLNode<K>,
@@ -28,7 +39,7 @@ where
 #[derive(Clone, Debug)]
 pub(crate) struct LLIterMut<'a, K>
 where
-    K: Clone + Debug,
+    K: LLWeight + Clone + Debug,
 {
     next: *mut LLNode<K>,
     end: *mut LLNode<K>,
@@ -37,7 +48,7 @@ where
 
 impl<K> LL<K>
 where
-    K: Clone + Debug,
+    K: LLWeight + Clone + Debug,
 {
     pub(crate) fn new(// tag: usize
     ) -> Self {
@@ -70,8 +81,8 @@ where
     // Append an arbitrary node into this set.
     pub(crate) fn append_n(&mut self, n: *mut LLNode<K>) {
         // Who is to the left of tail?
-        self.size += 1;
         unsafe {
+            self.size += (*(*n).k.as_ptr()).ll_weight();
             // must be untagged
             // assert!((*n).tag == 0);
             debug_assert!((*self.tail).next.is_null());
@@ -131,9 +142,9 @@ where
             debug_assert!((*(*n).next).prev == n);
             // And we belong to this set
             // assert!((*n).tag == self.tag);
+            self.size -= (*(*n).k.as_ptr()).ll_weight();
         }
 
-        self.size -= 1;
         unsafe {
             let prev = (*n).prev;
             let next = (*n).next;
@@ -186,7 +197,7 @@ where
 
 impl<K> Drop for LL<K>
 where
-    K: Clone + Debug,
+    K: LLWeight + Clone + Debug,
 {
     fn drop(&mut self) {
         let head = self.head;
@@ -205,7 +216,7 @@ where
 
 impl<K> LLNode<K>
 where
-    K: Clone + Debug,
+    K: LLWeight + Clone + Debug,
 {
     #[inline]
     pub(crate) fn create_markers() -> (*mut Self, *mut Self) {
@@ -250,7 +261,7 @@ where
 
 impl<K> AsRef<K> for LLNode<K>
 where
-    K: Clone + Debug,
+    K: LLWeight + Clone + Debug,
 {
     fn as_ref(&self) -> &K {
         unsafe {
@@ -262,7 +273,7 @@ where
 
 impl<K> AsMut<K> for LLNode<K>
 where
-    K: Clone + Debug,
+    K: LLWeight + Clone + Debug,
 {
     fn as_mut(&mut self) -> &mut K {
         unsafe {
@@ -274,7 +285,7 @@ where
 
 impl<'a, K> Iterator for LLIterMut<'a, K>
 where
-    K: Clone + Debug,
+    K: LLWeight + Clone + Debug,
 {
     type Item = &'a mut K;
 
@@ -292,7 +303,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::arcache::ll::LL;
+    use crate::arcache::ll::{LLWeight, LL};
 
     #[test]
     fn test_cache_arc_ll_basic() {
@@ -360,5 +371,34 @@ mod tests {
         ll.append_n(n2);
         ll.append_n(n3);
         ll.append_n(n4);
+    }
+
+    #[derive(Clone, Debug)]
+    struct Weighted {
+        i: u64,
+    }
+
+    impl LLWeight for Weighted {
+        fn ll_weight(&self) -> usize {
+            8
+        }
+    }
+
+    #[test]
+    fn test_cache_arc_ll_weighted() {
+        // We test with box so that we leak on error
+        let mut ll: LL<Weighted> = LL::new();
+        assert!(ll.len() == 0);
+        let _n1 = ll.append_k(Weighted { i: 1 });
+        assert!(ll.len() == 8);
+        let _n2 = ll.append_k(Weighted { i: 2 });
+        assert!(ll.len() == 16);
+        let n1 = ll.pop();
+        assert!(ll.len() == 8);
+        let n2 = ll.pop();
+        assert!(ll.len() == 0);
+        // Add back so they drop
+        ll.append_n(n1);
+        ll.append_n(n2);
     }
 }
