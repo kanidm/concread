@@ -7,12 +7,14 @@ pub trait LLWeight {
     fn ll_weight(&self) -> usize;
 }
 
+/*
 impl<T> LLWeight for T {
     #[inline]
     default fn ll_weight(&self) -> usize {
         1
     }
 }
+*/
 
 #[derive(Clone, Debug)]
 pub(crate) struct LL<K>
@@ -304,6 +306,13 @@ where
 #[cfg(test)]
 mod tests {
     use crate::arcache::ll::{LLWeight, LL};
+
+    impl LLWeight for Box<usize> {
+        #[inline]
+        fn ll_weight(&self) -> usize {
+            1
+        }
+    }
 
     #[test]
     fn test_cache_arc_ll_basic() {

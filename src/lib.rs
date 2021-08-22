@@ -27,7 +27,6 @@
 #![warn(unused_extern_crates)]
 #![warn(missing_docs)]
 #![allow(clippy::needless_lifetimes)]
-#![feature(min_specialization)]
 
 #[macro_use]
 extern crate smallvec;
