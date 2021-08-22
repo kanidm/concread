@@ -12,8 +12,8 @@
 
 mod ll;
 
-use self::ll::{LLNode, LL};
-// use crate::collections::bptree::*;
+use self::ll::{LLNode, LLWeight, LL};
+// use self::traits::ArcWeight;
 use crate::cowcell::{CowCell, CowCellReadTxn};
 use crate::hashmap::*;
 use crossbeam::channel::{unbounded, Receiver, Sender};
@@ -64,13 +64,23 @@ pub struct CacheStats {
 }
 
 enum ThreadCacheItem<V> {
-    Present(V, bool),
+    Present(V, bool, usize),
     Removed(bool),
 }
 
 enum CacheEvent<K, V> {
-    Hit(Instant, u64, bool),
-    Include(Instant, K, V, u64),
+    Hit {
+        t: Instant,
+        k_hash: u64,
+        is_tlocal: bool,
+    },
+    Include {
+        t: Instant,
+        k: K,
+        v: V,
+        txid: u64,
+        size: usize,
+    },
 }
 
 #[derive(Hash, Ord, PartialOrd, Eq, PartialEq, Clone, Debug)]
@@ -80,6 +90,17 @@ where
 {
     k: K,
     txid: u64,
+    size: usize,
+}
+
+impl<K> LLWeight for CacheItemInner<K>
+where
+    K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+{
+    #[inline]
+    fn ll_weight(&self) -> usize {
+        self.size
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -197,6 +218,28 @@ unsafe impl<
 {
 }
 
+#[derive(Debug, Clone)]
+struct ReadCacheItem<K, V>
+where
+    K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Debug + Sync + Send + 'static,
+{
+    k: K,
+    v: V,
+    size: usize,
+}
+
+impl<K, V> LLWeight for ReadCacheItem<K, V>
+where
+    K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+    V: Clone + Debug + Sync + Send + 'static,
+{
+    #[inline]
+    fn ll_weight(&self) -> usize {
+        self.size
+    }
+}
+
 struct ReadCache<K, V>
 where
     K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
@@ -204,9 +247,9 @@ where
 {
     // cache of our missed items to send forward.
     // On drop we drain this to the channel
-    set: Map<K, *mut LLNode<(K, V)>>,
+    set: Map<K, *mut LLNode<ReadCacheItem<K, V>>>,
     read_size: usize,
-    tlru: LL<(K, V)>,
+    tlru: LL<ReadCacheItem<K, V>>,
 }
 
 /// An active read transaction over the cache. The data is this cache is guaranteed to be
@@ -474,7 +517,7 @@ impl<
         assert!(max > 0);
 
         // Based on max, what should our watermark be?
-        let watermark = if max < 128 { 0 } else { (max / 20) * 17 };
+        let watermark = if max < 128 { 0 } else { (max / 20) * 16 };
 
         let (tx, rx) = unbounded();
         let shared = RwLock::new(ArcShared {
@@ -620,11 +663,12 @@ impl<
         tlocal.into_iter().for_each(|(k, tcio)| {
             let r = cache.get_mut(&k);
             match (r, tcio) {
-                (None, ThreadCacheItem::Present(tci, clean)) => {
+                (None, ThreadCacheItem::Present(tci, clean, size)) => {
                     assert!(clean);
                     let llp = inner.rec.append_k(CacheItemInner {
                         k: k.clone(),
                         txid: commit_txid,
+                        size,
                     });
                     cache.insert(k, CacheItem::Rec(llp, tci));
                 }
@@ -634,6 +678,7 @@ impl<
                     let llp = inner.haunted.append_k(CacheItemInner {
                         k: k.clone(),
                         txid: commit_txid,
+                        size: 1,
                     });
                     cache.insert(k, CacheItem::Haunted(llp));
                 }
@@ -643,30 +688,30 @@ impl<
                     let mut next_state = match ci {
                         CacheItem::Freq(llp, _v) => {
                             // println!("tlocal {:?} Freq -> Freq", k);
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.freq.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.haunted.append_n(*llp);
                             CacheItem::Haunted(*llp)
                         }
                         CacheItem::Rec(llp, _v) => {
                             // println!("tlocal {:?} Rec -> Freq", k);
                             // Remove the node and put it into freq.
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.rec.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.haunted.append_n(*llp);
                             CacheItem::Haunted(*llp)
                         }
                         CacheItem::GhostFreq(llp) => {
                             // println!("tlocal {:?} GhostFreq -> Freq", k);
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.ghost_freq.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.haunted.append_n(*llp);
                             CacheItem::Haunted(*llp)
                         }
                         CacheItem::GhostRec(llp) => {
                             // println!("tlocal {:?} GhostRec -> Rec", k);
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.ghost_rec.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.haunted.append_n(*llp);
                             CacheItem::Haunted(*llp)
                         }
@@ -681,24 +726,27 @@ impl<
                 }
                 // TODO: https://github.com/rust-lang/rust/issues/68354 will stabilise
                 // in 1.44 so we can prevent a need for a clone.
-                (Some(ref mut ci), ThreadCacheItem::Present(ref tci, clean)) => {
+                (Some(ref mut ci), ThreadCacheItem::Present(ref tci, clean, size)) => {
                     assert!(clean);
                     //   * as we include each item, what state was it in before?
                     // It's in the cache - what action must we take?
                     let mut next_state = match ci {
                         CacheItem::Freq(llp, _v) => {
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             // println!("tlocal {:?} Freq -> Freq", k);
+                            inner.freq.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
+                            unsafe { (**llp).as_mut().size = size };
                             // Move the list item to it's head.
-                            inner.freq.touch(*llp);
+                            inner.freq.append_n(*llp);
                             // Update v.
                             CacheItem::Freq(*llp, (*tci).clone())
                         }
                         CacheItem::Rec(llp, _v) => {
                             // println!("tlocal {:?} Rec -> Freq", k);
                             // Remove the node and put it into freq.
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.rec.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
+                            unsafe { (**llp).as_mut().size = size };
                             inner.freq.append_n(*llp);
                             CacheItem::Freq(*llp, (*tci).clone())
                         }
@@ -710,8 +758,9 @@ impl<
                                 inner.ghost_freq.len(),
                                 &mut inner.p,
                             );
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.ghost_freq.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
+                            unsafe { (**llp).as_mut().size = size };
                             inner.freq.append_n(*llp);
                             CacheItem::Freq(*llp, (*tci).clone())
                         }
@@ -724,15 +773,17 @@ impl<
                                 inner.ghost_freq.len(),
                                 &mut inner.p,
                             );
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.ghost_rec.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
+                            unsafe { (**llp).as_mut().size = size };
                             inner.rec.append_n(*llp);
                             CacheItem::Rec(*llp, (*tci).clone())
                         }
                         CacheItem::Haunted(llp) => {
                             // println!("tlocal {:?} Haunted -> Rec", k);
-                            unsafe { (**llp).as_mut().txid = commit_txid };
                             inner.haunted.extract(*llp);
+                            unsafe { (**llp).as_mut().txid = commit_txid };
+                            unsafe { (**llp).as_mut().size = size };
                             inner.rec.append_n(*llp);
                             CacheItem::Rec(*llp, (*tci).clone())
                         }
@@ -756,7 +807,11 @@ impl<
         while let Ok(ce) = inner.rx.try_recv() {
             let t = match ce {
                 // Update if it was hit.
-                CacheEvent::Hit(t, k_hash, is_tlocal) => {
+                CacheEvent::Hit {
+                    t,
+                    k_hash,
+                    is_tlocal,
+                } => {
                     if is_tlocal {
                         stats.reader_tlocal_hits += 1;
                     } else {
@@ -801,38 +856,49 @@ impl<
                     t
                 }
                 // Update if it was inc
-                CacheEvent::Include(t, k, iv, txid) => {
+                CacheEvent::Include {
+                    t,
+                    k,
+                    v: iv,
+                    txid,
+                    size,
+                } => {
                     stats.reader_includes += 1;
                     let mut r = cache.get_mut(&k);
                     match r {
                         Some(ref mut ci) => {
                             let mut next_state = match &ci {
                                 CacheItem::Freq(llp, _v) => {
-                                    inner.freq.touch(*llp);
                                     if unsafe { (**llp).as_ref().txid >= txid }
                                         || inner.min_txid > txid
                                     {
                                         // println!("rxinc {:?} Freq -> Freq (touch only)", k);
                                         // Our cache already has a newer value, keep it.
+                                        inner.freq.touch(*llp);
                                         None
                                     } else {
                                         // println!("rxinc {:?} Freq -> Freq (update)", k);
                                         // The value is newer, update.
+                                        inner.freq.extract(*llp);
                                         unsafe { (**llp).as_mut().txid = txid };
+                                        unsafe { (**llp).as_mut().size = size };
+                                        inner.freq.append_n(*llp);
                                         Some(CacheItem::Freq(*llp, iv))
                                     }
                                 }
                                 CacheItem::Rec(llp, v) => {
                                     inner.rec.extract(*llp);
-                                    inner.freq.append_n(*llp);
                                     if unsafe { (**llp).as_ref().txid >= txid }
                                         || inner.min_txid > txid
                                     {
                                         // println!("rxinc {:?} Rec -> Freq (touch only)", k);
+                                        inner.freq.append_n(*llp);
                                         Some(CacheItem::Freq(*llp, v.clone()))
                                     } else {
                                         // println!("rxinc {:?} Rec -> Freq (update)", k);
                                         unsafe { (**llp).as_mut().txid = txid };
+                                        unsafe { (**llp).as_mut().size = size };
+                                        inner.freq.append_n(*llp);
                                         Some(CacheItem::Freq(*llp, iv))
                                     }
                                 }
@@ -843,19 +909,20 @@ impl<
                                         inner.ghost_freq.len(),
                                         &mut inner.p,
                                     );
-                                    inner.ghost_freq.extract(*llp);
                                     if unsafe { (**llp).as_ref().txid > txid }
                                         || inner.min_txid > txid
                                     {
                                         // println!("rxinc {:?} GhostFreq -> GhostFreq", k);
                                         // The cache version is newer, this is just a hit.
-                                        inner.ghost_freq.append_n(*llp);
+                                        inner.ghost_freq.touch(*llp);
                                         None
                                     } else {
                                         // This item is newer, so we can include it.
                                         // println!("rxinc {:?} GhostFreq -> Rec", k);
-                                        inner.freq.append_n(*llp);
+                                        inner.ghost_freq.extract(*llp);
                                         unsafe { (**llp).as_mut().txid = txid };
+                                        unsafe { (**llp).as_mut().size = size };
+                                        inner.freq.append_n(*llp);
                                         Some(CacheItem::Freq(*llp, iv))
                                     }
                                 }
@@ -876,8 +943,9 @@ impl<
                                     } else {
                                         // println!("rxinc {:?} GhostRec -> Rec", k);
                                         inner.ghost_rec.extract(*llp);
-                                        inner.rec.append_n(*llp);
                                         unsafe { (**llp).as_mut().txid = txid };
+                                        unsafe { (**llp).as_mut().size = size };
+                                        inner.rec.append_n(*llp);
                                         Some(CacheItem::Rec(*llp, iv))
                                     }
                                 }
@@ -890,8 +958,9 @@ impl<
                                     } else {
                                         // println!("rxinc {:?} Haunted -> Rec", k);
                                         inner.haunted.extract(*llp);
-                                        inner.rec.append_n(*llp);
                                         unsafe { (**llp).as_mut().txid = txid };
+                                        unsafe { (**llp).as_mut().size = size };
+                                        inner.rec.append_n(*llp);
                                         Some(CacheItem::Rec(*llp, iv))
                                     }
                                 }
@@ -904,7 +973,11 @@ impl<
                             // It's not present - include it!
                             // println!("rxinc {:?} None -> Rec", k);
                             if txid >= inner.min_txid {
-                                let llp = inner.rec.append_k(CacheItemInner { k: k.clone(), txid });
+                                let llp = inner.rec.append_k(CacheItemInner {
+                                    k: k.clone(),
+                                    txid,
+                                    size,
+                                });
                                 cache.insert(k, CacheItem::Rec(llp, iv));
                             }
                         }
@@ -1274,7 +1347,7 @@ impl<
 
         let r: Option<&V> = if let Some(tci) = self.tlocal.get(k) {
             match tci {
-                ThreadCacheItem::Present(v, _clean) => {
+                ThreadCacheItem::Present(v, _clean, _size) => {
                     let v = v as *const _;
                     unsafe { Some(&(*v)) }
                 }
@@ -1326,7 +1399,13 @@ impl<
     /// a new value and want it to be submitted for caching. This item is marked as
     /// clean, IE you have synced it to whatever associated store exists.
     pub fn insert(&mut self, k: K, v: V) {
-        self.tlocal.insert(k, ThreadCacheItem::Present(v, true));
+        self.tlocal.insert(k, ThreadCacheItem::Present(v, true, 1));
+    }
+
+    /// Insert an item to the cache, with an associated weight/size factor. See also [insert]
+    pub fn insert_sized(&mut self, k: K, v: V, size: usize) {
+        self.tlocal
+            .insert(k, ThreadCacheItem::Present(v, true, size));
     }
 
     /// Remove this value from the thread local cache IE mask from from being
@@ -1342,7 +1421,13 @@ impl<
     /// dirty, because you have *not* synced it. You MUST call iter_mut_mark_clean before calling
     /// `commit` on this transaction, or a panic will occur.
     pub fn insert_dirty(&mut self, k: K, v: V) {
-        self.tlocal.insert(k, ThreadCacheItem::Present(v, false));
+        self.tlocal.insert(k, ThreadCacheItem::Present(v, false, 1));
+    }
+
+    /// Insert a dirty item to the cache, with an associated weight/size factor. See also [insert_dirty]
+    pub fn insert_dirty_sized(&mut self, k: K, v: V, size: usize) {
+        self.tlocal
+            .insert(k, ThreadCacheItem::Present(v, false, size));
     }
 
     /// Remove this value from the thread local cache IE mask from from being
@@ -1365,13 +1450,13 @@ impl<
         self.tlocal
             .iter()
             .filter(|(_k, v)| match v {
-                ThreadCacheItem::Present(_v, c) => !c,
+                ThreadCacheItem::Present(_v, c, _size) => !c,
                 ThreadCacheItem::Removed(c) => !c,
             })
             .map(|(k, v)| {
                 // Get the data.
                 let data = match v {
-                    ThreadCacheItem::Present(v, _c) => Some(v),
+                    ThreadCacheItem::Present(v, _c, _size) => Some(v),
                     ThreadCacheItem::Removed(_c) => None,
                 };
                 (k, data)
@@ -1385,13 +1470,13 @@ impl<
         self.tlocal
             .iter_mut()
             .filter(|(_k, v)| match v {
-                ThreadCacheItem::Present(_v, c) => !c,
+                ThreadCacheItem::Present(_v, c, _size) => !c,
                 ThreadCacheItem::Removed(c) => !c,
             })
             .map(|(k, v)| {
                 // Get the data.
                 let data = match v {
-                    ThreadCacheItem::Present(v, _c) => Some(v),
+                    ThreadCacheItem::Present(v, _c, _size) => Some(v),
                     ThreadCacheItem::Removed(_c) => None,
                 };
                 (k, data)
@@ -1406,18 +1491,18 @@ impl<
         self.tlocal
             .iter_mut()
             .filter(|(_k, v)| match v {
-                ThreadCacheItem::Present(_v, c) => !c,
+                ThreadCacheItem::Present(_v, c, _size) => !c,
                 ThreadCacheItem::Removed(c) => !c,
             })
             .map(|(k, v)| {
                 // Mark it clean.
                 match v {
-                    ThreadCacheItem::Present(_v, c) => *c = true,
+                    ThreadCacheItem::Present(_v, c, _size) => *c = true,
                     ThreadCacheItem::Removed(c) => *c = true,
                 }
                 // Get the data.
                 let data = match v {
-                    ThreadCacheItem::Present(v, _c) => Some(v),
+                    ThreadCacheItem::Present(v, _c, _size) => Some(v),
                     ThreadCacheItem::Removed(_c) => None,
                 };
                 (k, data)
@@ -1526,10 +1611,14 @@ impl<
                     // Indicate a hit on the tlocal cache.
                     if self.above_watermark {
                         self.tx
-                            .send(CacheEvent::Hit(Instant::now(), k_hash, true))
+                            .send(CacheEvent::Hit {
+                                t: Instant::now(),
+                                k_hash,
+                                is_tlocal: true,
+                            })
                             .expect("Invalid tx state");
                     }
-                    let v = &(**v).as_ref().1 as *const _;
+                    let v = &(**v).as_ref().v as *const _;
                     // This discards the lifetime and repins it to &'b.
                     &(*v)
                 })
@@ -1540,7 +1629,11 @@ impl<
                         // Indicate a hit on the main cache.
                         if self.above_watermark {
                             self.tx
-                                .send(CacheEvent::Hit(Instant::now(), k_hash, false))
+                                .send(CacheEvent::Hit {
+                                    t: Instant::now(),
+                                    k_hash,
+                                    is_tlocal: false,
+                                })
                                 .expect("Invalid tx state");
                         }
 
@@ -1562,6 +1655,47 @@ impl<
         self.get(k).is_some()
     }
 
+    /// Insert an item to the cache, with an associated weight/size factor. See also [insert]
+    pub fn insert_sized(&mut self, k: K, v: V, size: usize) {
+        let mut v = v;
+        // Send a copy forward through time and space.
+        self.tx
+            .send(CacheEvent::Include {
+                t: Instant::now(),
+                k: k.clone(),
+                v: v.clone(),
+                txid: self.cache.get_txid(),
+                size,
+            })
+            .expect("Invalid tx state!");
+
+        // We have a cache, so lets update it.
+        if let Some(ref mut cache) = self.tlocal {
+            let n = if cache.tlru.len() >= cache.read_size {
+                let n = cache.tlru.pop();
+                // swap the old_key/old_val out
+                let mut k_clone = k.clone();
+                unsafe {
+                    mem::swap(&mut k_clone, &mut (*n).as_mut().k);
+                    mem::swap(&mut v, &mut (*n).as_mut().v);
+                }
+                // remove old K from the tree:
+                cache.set.remove(&k_clone);
+                n
+            } else {
+                // Just add it!
+                cache.tlru.append_k(ReadCacheItem {
+                    k: k.clone(),
+                    v,
+                    size,
+                })
+            };
+            let r = cache.set.insert(k, n);
+            // There should never be a previous value.
+            assert!(r.is_none());
+        }
+    }
+
     /// Add a value to the cache. This may be because you have had a cache miss and
     /// now wish to include in the thread local storage.
     ///
@@ -1573,38 +1707,7 @@ impl<
     /// heed this warning, you may alter the fabric of time and space and have some interesting
     /// distortions in your data over time.
     pub fn insert(&mut self, k: K, v: V) {
-        let mut v = v;
-        // Send a copy forward through time and space.
-        self.tx
-            .send(CacheEvent::Include(
-                Instant::now(),
-                k.clone(),
-                v.clone(),
-                self.cache.get_txid(),
-            ))
-            .expect("Invalid tx state!");
-
-        // We have a cache, so lets update it.
-        if let Some(ref mut cache) = self.tlocal {
-            let n = if cache.tlru.len() >= cache.read_size {
-                let n = cache.tlru.pop();
-                // swap the old_key/old_val out
-                let mut k_clone = k.clone();
-                unsafe {
-                    mem::swap(&mut k_clone, &mut (*n).as_mut().0);
-                    mem::swap(&mut v, &mut (*n).as_mut().1);
-                }
-                // remove old K from the tree:
-                cache.set.remove(&k_clone);
-                n
-            } else {
-                // Just add it!
-                cache.tlru.append_k((k.clone(), v))
-            };
-            let r = cache.set.insert(k, n);
-            // There should never be a previous value.
-            assert!(r.is_none());
-        }
+        self.insert_sized(k, v, 1)
     }
 }
 
@@ -2307,5 +2410,112 @@ mod tests {
         assert!(wr_txn.peek_cache(&2) == CacheState::Rec);
         assert!(wr_txn.peek_cache(&3) == CacheState::Rec);
         assert!(wr_txn.peek_cache(&4) == CacheState::Rec);
+    }
+
+    #[derive(Clone, Debug)]
+    struct Weighted {
+        i: u64,
+    }
+
+    #[test]
+    fn test_cache_weighted() {
+        let arc: Arc<usize, Weighted> = Arc::new_size(4, 0);
+        let mut wr_txn = arc.write();
+
+        assert!(
+            CStat {
+                max: 4,
+                cache: 0,
+                tlocal: 0,
+                freq: 0,
+                rec: 0,
+                ghost_freq: 0,
+                ghost_rec: 0,
+                haunted: 0,
+                p: 0
+            } == wr_txn.peek_stat()
+        );
+
+        // In the first txn we insert 2 weight 2 items.
+        wr_txn.insert_sized(1, Weighted { i: 1 }, 2);
+        wr_txn.insert_sized(2, Weighted { i: 2 }, 2);
+
+        assert!(
+            CStat {
+                max: 4,
+                cache: 0,
+                tlocal: 2,
+                freq: 0,
+                rec: 0,
+                ghost_freq: 0,
+                ghost_rec: 0,
+                haunted: 0,
+                p: 0
+            } == wr_txn.peek_stat()
+        );
+        wr_txn.commit();
+
+        // Now once commited, the proper sizes kick in.
+
+        let wr_txn = arc.write();
+        // eprintln!("{:?}", wr_txn.peek_stat());
+        assert!(
+            CStat {
+                max: 4,
+                cache: 2,
+                tlocal: 0,
+                freq: 0,
+                rec: 4,
+                ghost_freq: 0,
+                ghost_rec: 0,
+                haunted: 0,
+                p: 0
+            } == wr_txn.peek_stat()
+        );
+        wr_txn.commit();
+
+        // Check the numbers move properly.
+        let wr_txn = arc.write();
+        wr_txn.get(&1);
+        wr_txn.commit();
+
+        let mut wr_txn = arc.write();
+        assert!(
+            CStat {
+                max: 4,
+                cache: 2,
+                tlocal: 0,
+                freq: 2,
+                rec: 2,
+                ghost_freq: 0,
+                ghost_rec: 0,
+                haunted: 0,
+                p: 0
+            } == wr_txn.peek_stat()
+        );
+
+        wr_txn.insert_sized(3, Weighted { i: 3 }, 2);
+        wr_txn.insert_sized(4, Weighted { i: 4 }, 2);
+        wr_txn.commit();
+
+        // Check the evicts
+        let wr_txn = arc.write();
+        assert!(
+            CStat {
+                max: 4,
+                cache: 4,
+                tlocal: 0,
+                freq: 2,
+                rec: 2,
+                ghost_freq: 0,
+                ghost_rec: 4,
+                haunted: 0,
+                p: 0
+            } == wr_txn.peek_stat()
+        );
+        wr_txn.commit();
+
+        let stats = arc.view_stats();
+        println!("{:?}", *stats);
     }
 }
