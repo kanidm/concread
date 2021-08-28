@@ -514,10 +514,16 @@ impl<
     /// and specifying your expected workload parameters to have a better derived
     /// cache size.
     pub fn new_size(max: usize, read_max: usize) -> Self {
-        assert!(max > 0);
-
         // Based on max, what should our watermark be?
         let watermark = if max < 128 { 0 } else { (max / 20) * 16 };
+        Self::new_size_watermark(max, read_max, watermark)
+    }
+
+    /// See [new_size] for more information. This allows manual configuration of the data
+    /// tracking watermark. To disable this, set to 0. Watermark must be less than max.
+    pub fn new_size_watermark(max: usize, read_max: usize, watermark: usize) -> Self {
+        assert!(max > 0);
+        assert!(watermark < max);
 
         let (tx, rx) = unbounded();
         let shared = RwLock::new(ArcShared {
