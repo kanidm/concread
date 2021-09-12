@@ -33,7 +33,7 @@ tokio = { version = "1", features = ["sync", "rt", "macros"], optional = true }
 
 [dev-dependencies]
 time = "0.2"
-criterion = "0.3"
+criterion = { version = "0.3", features = ["html_reports"] }
 
 [[bin]]
 name = "unsound"
@@ -50,3 +50,8 @@ path = "src/unsound3.rs"
 [[bench]]
 name = "hashmap_benchmark"
 harness = false
+
+[[bench]]
+name = "arccache"
+harness = false
+
