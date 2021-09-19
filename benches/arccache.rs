@@ -6,10 +6,15 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::thread;
+use std::sync::atomic::{AtomicBool, Ordering};
 // use uuid::Uuid;
 
 use concread::arcache::ARCache;
 use criterion::measurement::{Measurement, ValueFormatter};
+
+pub static RUNNING: AtomicBool = AtomicBool::new(false);
 
 /*
  * A fixed dataset size, with various % of cache pressure (5, 10, 20, 40, 60, 80, 110)
@@ -31,6 +36,7 @@ struct DataPoint {
     hit_pct: f64,
 }
 
+#[derive(Clone)]
 enum AccessPattern<T>
 where
     T: SampleUniform + PartialOrd + Clone,
@@ -65,7 +71,7 @@ impl ValueFormatter for HitPercentageFormatter {
         format!("{}%", value)
     }
 
-    fn scale_values(&self, typical_value: f64, values: &mut [f64]) -> &'static str {
+    fn scale_values(&self, _typical_value: f64, _values: &mut [f64]) -> &'static str {
         // eprintln!("⚠️  scale_values -> typ {:?} : {:?}", typical_value, values);
         // panic!();
         "%"
@@ -75,13 +81,13 @@ impl ValueFormatter for HitPercentageFormatter {
         &self,
         _typical_value: f64,
         _throughput: &Throughput,
-        values: &mut [f64],
+        _values: &mut [f64],
     ) -> &'static str {
         // eprintln!("⚠️  scale_throughputs -> {:?}", values);
         "%"
     }
 
-    fn scale_for_machines(&self, values: &mut [f64]) -> &'static str {
+    fn scale_for_machines(&self, _values: &mut [f64]) -> &'static str {
         // eprintln!("⚠️  scale_machines -> {:?}", values);
         "%"
     }
@@ -123,6 +129,127 @@ impl Measurement for HitPercentage {
     }
 }
 
+
+fn multi_thread_worker<K,V>(
+    arc: Arc<ARCache<K, V>>,
+    backing_set: Arc<HashMap<K, V>>,
+    backing_set_delay: Option<Duration>,
+    access_pattern: AccessPattern<K>,
+)
+where
+    K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static + SampleUniform + PartialOrd,
+    V: Clone + Debug + Sync + Send + 'static,
+
+{
+    while RUNNING.load(Ordering::Relaxed) {
+        let k = access_pattern.next();
+        let v = backing_set.get(&k).cloned().unwrap();
+
+        let mut rd_txn = arc.read();
+        // hit/miss process.
+        if !rd_txn.contains_key(&k) {
+            if let Some(delay) = backing_set_delay {
+                thread::sleep(delay);
+            }
+            rd_txn.insert(k, v);
+        }
+    }
+}
+
+
+fn run_multi_thread_test<K, V>(
+    // Number of iterations
+    iters: u64,
+    // Number of iters to warm the cache.
+    warm_iters: u64,
+    // pct of backing set size to configure into the cache.
+    cache_size_pct: u64,
+    // backing set.
+    backing_set: HashMap<K, V>,
+    // backing set access delay on miss
+    backing_set_delay: Option<Duration>,
+    // How to lookup keys during each iter.
+    access_pattern: AccessPattern<K>,
+    // How many threads?
+    thread_count: usize,
+) -> DataPoint
+where
+    K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static + SampleUniform + PartialOrd,
+    V: Clone + Debug + Sync + Send + 'static,
+{
+    assert!(thread_count > 1);
+
+    let mut csize = (backing_set.len() / 100) * (cache_size_pct as usize);
+    if csize == 0 {
+        csize = 1;
+    }
+
+    let arc: Arc<ARCache<K, V>> = Arc::new(ARCache::new_size_watermark(csize, 0, 0));
+
+    let backing_set = Arc::new(backing_set);
+
+    // Setup our sync
+    RUNNING.store(true, Ordering::Relaxed);
+
+    // Warm up
+
+    // Start some bg threads.
+    let handles: Vec<_> = (0..(thread_count-1)).into_iter()
+        .map(|_| {
+            // Build the threads.
+            let cache = arc.clone();
+            let back_set = backing_set.clone();
+            let back_set_delay = backing_set_delay.clone();
+            let pat = access_pattern.clone();
+            thread::spawn(move || {
+                multi_thread_worker(cache, back_set, back_set_delay, pat)
+            })
+        })
+        .collect();
+
+    // We do our measurement in this thread.
+    let mut elapsed = Duration::from_secs(0);
+    let mut hit_count = 0;
+    let mut attempt = 0;
+
+    for _i in 0..iters {
+        attempt += 1;
+        let k = access_pattern.next();
+        let v = backing_set.get(&k).cloned().unwrap();
+
+        let start = Instant::now();
+        let mut wr_txn = arc.write();
+        // hit/miss process.
+        if wr_txn.contains_key(&k) {
+            hit_count += 1;
+        } else {
+            if let Some(delay) = backing_set_delay {
+                thread::sleep(delay);
+            }
+            wr_txn.insert(k, v);
+        }
+        wr_txn.commit();
+        elapsed = elapsed.checked_add(start.elapsed()).unwrap();
+    }
+
+    // Stop our bg threads (how to signal?)
+    RUNNING.store(false, Ordering::Relaxed);
+
+    // Join them.
+    handles.into_iter().for_each(|th| th.join().expect("Can't join thread"));
+
+    // Return our data.
+    let hit_pct = (f64::from(hit_count as u32) / f64::from(iters as u32)) * 100.0;
+    DataPoint {
+        elapsed,
+        csize,
+        hit_count,
+        attempt,
+        hit_pct,
+    }
+
+}
+
 fn run_single_thread_test<K, V>(
     // Number of iterations
     iters: u64,
@@ -141,13 +268,6 @@ where
     K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static + SampleUniform + PartialOrd,
     V: Clone + Debug + Sync + Send + 'static,
 {
-    println!(
-        "iters, size, pct -> {:?}, {:?}, {}",
-        iters,
-        backing_set.len(),
-        cache_size_pct
-    );
-
     let mut csize = (backing_set.len() / 100) * (cache_size_pct as usize);
     if csize == 0 {
         csize = 1;
@@ -183,7 +303,7 @@ where
             hit_count += 1;
         } else {
             if let Some(delay) = backing_set_delay {
-                std::thread::sleep(delay);
+                thread::sleep(delay);
             }
             wr_txn.insert(k, v);
         }
@@ -201,9 +321,40 @@ where
     }
 }
 
+macro_rules! basic_multi_thread_x_small_latency {
+    ($c:expr, $max:expr, $measure:expr) => {
+        let mut group = $c.benchmark_group(function_name!());
+        group.warm_up_time(Duration::from_secs(10));
+        group.measurement_time(Duration::from_secs(30));
+        for pct in &[10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110] {
+            group.bench_with_input(BenchmarkId::from_parameter(pct), &$max, |b, &max| {
+                b.iter_custom(|iters| {
+                    let mut backing_set: HashMap<usize, usize> = HashMap::with_capacity(max);
+                    (0..$max).for_each(|i| {
+                        backing_set.insert(i, i);
+                    });
+                    let data = run_multi_thread_test(
+                        iters,
+                        iters / 10,
+                        *pct,
+                        backing_set,
+                        Some(Duration::from_nanos(5)),
+                        AccessPattern::Random(0, max),
+                        4
+                    );
+                    println!("{:?}", data);
+                    data.elapsed
+                })
+            });
+        }
+        group.finish();
+    };
+}
+
 macro_rules! basic_single_thread_x_small_latency {
     ($c:expr, $max:expr, $measure:expr) => {
         let mut group = $c.benchmark_group(function_name!());
+        group.warm_up_time(Duration::from_secs(10));
         for pct in &[10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110] {
             group.bench_with_input(BenchmarkId::from_parameter(pct), &$max, |b, &max| {
                 b.iter_custom(|iters| {
@@ -231,6 +382,7 @@ macro_rules! basic_single_thread_x_small_latency {
 macro_rules! basic_single_thread_x_small_pct {
     ($c:expr, $max:expr, $measure:expr) => {
         let mut group = $c.benchmark_group(function_name!());
+        group.warm_up_time(Duration::from_secs(10));
         for pct in &[10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110] {
             group.bench_with_input(BenchmarkId::from_parameter(pct), &$max, |b, &max| {
                 b.iter_custom(|iters| {
@@ -256,6 +408,11 @@ macro_rules! basic_single_thread_x_small_pct {
 }
 
 #[named]
+pub fn basic_multi_thread_2048_small_latency(c: &mut Criterion) {
+    basic_multi_thread_x_small_latency!(c, 2048, MeasureType::Latency);
+}
+
+#[named]
 pub fn basic_single_thread_2048_small_latency(c: &mut Criterion) {
     basic_single_thread_x_small_latency!(c, 2048, MeasureType::Latency);
 }
@@ -270,7 +427,7 @@ criterion_group!(
     config = Criterion::default()
         // .measurement_time(Duration::from_secs(15))
         .with_plots();
-    targets = basic_single_thread_2048_small_latency
+    targets = basic_single_thread_2048_small_latency, basic_multi_thread_2048_small_latency
 );
 
 criterion_group!(
