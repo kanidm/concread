@@ -354,6 +354,7 @@ where
 
         let start = Instant::now();
         let mut wr_txn = arc.write();
+        // eprintln!("lock took - {:?}", start.elapsed());
         // hit/miss process.
         if wr_txn.contains_key(&k) {
             hit_count += 1;
