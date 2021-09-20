@@ -1,4 +1,3 @@
-
 // Thread local cache.
 
 // Writer locks on an array of sender queues for invalidations.
@@ -8,17 +7,19 @@
 
 // Each thread has own ARC.
 
-use std::sync::mpsc::{channel, Sender, Receiver};
-use std::sync::Arc;
 use parking_lot::{Mutex, MutexGuard};
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
 
-use std::hash::Hash;
-use std::fmt::Debug;
 use std::borrow::Borrow;
+use std::fmt::Debug;
+use std::hash::Hash;
 
-struct ThreadLocal<K, V>
+use lru::LruCache;
+
+pub struct ThreadLocal<K, V>
 where
     K: Hash + Eq + Debug + Clone,
 {
@@ -27,7 +28,7 @@ where
     wrlock: Arc<Mutex<Writer<K>>>,
     inv_up_to_txid: Arc<AtomicU64>,
     last_inv: Option<Invalidate<K>>,
-    cache: HashMap<K, V>,
+    cache: LruCache<K, V>,
 }
 
 struct Writer<K>
@@ -37,7 +38,7 @@ where
     txs: Vec<Sender<Invalidate<K>>>,
 }
 
-struct ThreadLocalWriteTxn<'a, K, V>
+pub struct ThreadLocalWriteTxn<'a, K, V>
 where
     K: Hash + Eq + Debug + Clone,
 {
@@ -47,7 +48,7 @@ where
     rollback: HashSet<K>,
 }
 
-struct ThreadLocalReadTxn<'a, K, V>
+pub struct ThreadLocalReadTxn<'a, K, V>
 where
     K: Hash + Eq + Debug + Clone,
 {
@@ -68,44 +69,29 @@ impl<K, V> ThreadLocal<K, V>
 where
     K: Hash + Eq + Debug + Clone,
 {
-    pub fn new(
-        threads: usize,
-        capacity: usize,
-    ) -> Vec<Self> {
+    pub fn new(threads: usize, capacity: usize) -> Vec<Self> {
         assert!(threads > 0);
-        let (txs, rxs):
-            (Vec<_>, Vec<_>)
-            = (0..threads)
+        let (txs, rxs): (Vec<_>, Vec<_>) = (0..threads)
             .into_iter()
-            .map(|_| {
-                channel::<Invalidate<K>>()
-            })
+            .map(|_| channel::<Invalidate<K>>())
             .unzip();
 
         // Create an Arc<Mutex<txs>> for the writer.
         let inv_up_to_txid = Arc::new(AtomicU64::new(0));
-        let wrlock = Arc::new(Mutex::new(
-            Writer {
-                txs,
-                txid: 0,
-            }
-        ));
+        let wrlock = Arc::new(Mutex::new(Writer { txs }));
 
         // Then for each thread, take one rx and a clone of the broadcast tbl.
         // Allocate a threadid (tid).
 
-        rxs
-            .into_iter()
+        rxs.into_iter()
             .enumerate()
-            .map(|(tid, rx)| {
-                ThreadLocal {
-                    tid,
-                    rx,
-                    wrlock: wrlock.clone(),
-                    inv_up_to_txid: inv_up_to_txid.clone(),
-                    last_inv: None,
-                    cache: HashMap::with_capacity(capacity),
-                }
+            .map(|(tid, rx)| ThreadLocal {
+                tid,
+                rx,
+                wrlock: wrlock.clone(),
+                inv_up_to_txid: inv_up_to_txid.clone(),
+                last_inv: None,
+                cache: LruCache::new(capacity),
             })
             .collect()
     }
@@ -113,10 +99,7 @@ where
     pub fn read<'a>(&'a mut self) -> ThreadLocalReadTxn<'a, K, V> {
         let txid = self.inv_up_to_txid.load(Ordering::Acquire);
         self.invalidate(txid);
-        ThreadLocalReadTxn {
-            txid,
-            parent: self,
-        }
+        ThreadLocalReadTxn { txid, parent: self }
     }
 
     pub fn write<'a>(&'a mut self) -> ThreadLocalWriteTxn<'a, K, V> {
@@ -133,7 +116,7 @@ where
             txid,
             parent,
             guard,
-            rollback: (),
+            rollback: HashSet::new(),
         }
     }
 
@@ -146,7 +129,7 @@ where
             if inv.txid > up_to {
                 return;
             } else {
-                self.cache.remove(&inv.k);
+                self.cache.pop(&inv.k);
             }
         }
 
@@ -159,7 +142,7 @@ where
                 self.last_inv = Some(inv);
                 return;
             } else {
-                self.cache.remove(&inv.k);
+                self.cache.pop(&inv.k);
             }
         }
     }
@@ -169,19 +152,11 @@ impl<'a, K, V> ThreadLocalWriteTxn<'a, K, V>
 where
     K: Hash + Eq + Debug + Clone,
 {
-    pub fn get<Q>(&mut self, k: &Q) -> Option<&V>
-    where
-        K: Borrow<Q>,
-        Q: Hash + Eq,
-    {
+    pub fn get(&mut self, k: &K) -> Option<&V> {
         self.parent.cache.get(k)
     }
 
-    pub fn contains_key<Q>(&mut self, k: &Q) -> bool
-    where
-        K: Borrow<Q>,
-        Q: Hash + Eq,
-    {
+    pub fn contains_key(&mut self, k: &K) -> bool {
         self.parent.cache.get(k).is_some()
     }
 
@@ -189,62 +164,68 @@ where
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         // Store the k in our rollback set.
         self.rollback.insert(k.clone());
-        self.parent.cache.insert(k, v)
+        self.parent.cache.put(k, v)
     }
 
     pub fn remove(&mut self, k: &K) -> Option<V> {
         self.rollback.insert(k.clone());
-        self.parent.cache.remove(k, v)
+        self.parent.cache.pop(k)
     }
 
     // commit
-    pub fn commit(self) {
+    pub fn commit(mut self) {
         // We are commiting, so lets get ready.
         // First, anything that we touched in the rollback set will need
         // to be invalidated from other caches. It doesn't matter if we
         // removed or inserted, it has the same effect on them.
-        self.guard.txs.iter()
-            .enumerate()
-            .for_each(|(i, tx)| {
-                if i != self.parent.tid {
-
-                self.rollback.iter()
-                    .for_each(|k| {
-                        tx.send(
-                        Invalidate {
-                            k.clone(),
-                            txid: self.txid
-                        }
-                        );
+        self.guard.txs.iter().enumerate().for_each(|(i, tx)| {
+            if i != self.parent.tid {
+                self.rollback.iter().for_each(|k| {
+                    tx.send(Invalidate {
+                        k: k.clone(),
+                        txid: self.txid,
                     });
+                });
             }
         });
         // Now we have issued our invalidations, we can tell people to invalidate up to this txid
-        parent.inv_up_to_txid.store(Ordering::Release, self.txid);
+        self.parent
+            .inv_up_to_txid
+            .store(self.txid, Ordering::Release);
         // Ensure our rollback set is empty now to avoid the drop handler.
         self.rollback.clear();
         // We're done!
     }
 }
 
-impl<'a, K, V> Drop for ThreadLocalWriteTxn<'a, K, V> {
+impl<'a, K, V> Drop for ThreadLocalWriteTxn<'a, K, V>
+where
+    K: Hash + Eq + Debug + Clone,
+{
     fn drop(&mut self) {
         // Clear anything that's in the rollback.
-        self.rollback.iter().for_each(|k| {
-            self.parent.cache.remove(k);
-        })
+        for k in self.rollback.iter() {
+            self.parent.cache.pop(k);
+        }
     }
 }
-
 
 impl<'a, K, V> ThreadLocalReadTxn<'a, K, V>
 where
     K: Hash + Eq + Debug + Clone,
 {
-    // get
-    // contains key
-}
+    pub fn get(&mut self, k: &K) -> Option<&V> {
+        self.parent.cache.get(k)
+    }
 
+    pub fn contains_key(&mut self, k: &K) -> bool {
+        self.parent.cache.get(k).is_some()
+    }
+
+    pub fn insert(&mut self, k: K, v: V) -> Option<V> {
+        self.parent.cache.put(k, v)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -256,11 +237,11 @@ mod tests {
         let mut cache_a = cache.pop().unwrap();
         let mut cache_b = cache.pop().unwrap();
 
-        let wr_txn = cache_a.write();
-        let rd_txn = cache_b.read();
+        let mut wr_txn = cache_a.write();
+        let mut rd_txn = cache_b.read();
 
-        wr_txn.insert(1,1);
-        wr_txn.insert(2,2);
+        wr_txn.insert(1, 1);
+        wr_txn.insert(2, 2);
         assert!(wr_txn.contains_key(&1));
         assert!(wr_txn.contains_key(&2));
 
@@ -268,20 +249,46 @@ mod tests {
         assert!(!rd_txn.contains_key(&2));
         wr_txn.commit();
 
-        let wr_txn = cache_a.write();
+        drop(rd_txn);
+
+        let mut rd_txn = cache_b.read();
+        // Even in a new txn, we don't have this in our cache.
+        assert!(!rd_txn.contains_key(&1));
+        assert!(!rd_txn.contains_key(&2));
+        // But we can insert it to match
+        rd_txn.insert(1, 1);
+        rd_txn.insert(2, 2);
+        drop(rd_txn);
+
+        // Repeat use of rd should still show it.
+        let mut rd_txn = cache_b.read();
+        assert!(rd_txn.contains_key(&1));
+        assert!(rd_txn.contains_key(&2));
+        drop(rd_txn);
+
+        // Add new items.
+        let mut wr_txn = cache_a.write();
         assert!(wr_txn.contains_key(&1));
         assert!(wr_txn.contains_key(&2));
-        wr_txn.insert(3,3);
+        wr_txn.insert(3, 3);
         assert!(wr_txn.contains_key(&3));
         drop(wr_txn);
 
-        let wr_txn = cache_a.write();
+        let mut wr_txn = cache_a.write();
         assert!(wr_txn.contains_key(&1));
         assert!(wr_txn.contains_key(&2));
         // Should have been rolled back.
         assert!(!wr_txn.contains_key(&3));
+
+        // Now invalidate 1/2
+        wr_txn.remove(&1);
+        wr_txn.remove(&2);
         wr_txn.commit();
 
+        // This sends invalidation reqs, so we should now have removed this in the other cache.
+        let mut rd_txn = cache_b.read();
+        // Even in a new txn, we don't have this in our cache.
+        assert!(!rd_txn.contains_key(&1));
+        assert!(!rd_txn.contains_key(&2));
     }
 }
-
