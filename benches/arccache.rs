@@ -192,6 +192,17 @@ where
     RUNNING.store(true, Ordering::Relaxed);
 
     // Warm up
+    let mut wr_txn = arc.write();
+    for _i in 0..warm_iters {
+        let k = access_pattern.next();
+        let v = backing_set.get(&k).cloned().unwrap();
+
+        // hit/miss process.
+        if !wr_txn.contains_key(&k) {
+            wr_txn.insert(k, v);
+        }
+    }
+    wr_txn.commit();
 
     // Start some bg threads.
     let handles: Vec<_> = (0..(thread_count-1)).into_iter()
@@ -279,17 +290,17 @@ where
     let mut hit_count = 0;
     let mut attempt = 0;
 
+    let mut wr_txn = arc.write();
     for _i in 0..warm_iters {
         let k = access_pattern.next();
         let v = backing_set.get(&k).cloned().unwrap();
 
-        let mut wr_txn = arc.write();
         // hit/miss process.
         if !wr_txn.contains_key(&k) {
             wr_txn.insert(k, v);
         }
-        wr_txn.commit();
     }
+    wr_txn.commit();
 
     for _i in 0..iters {
         attempt += 1;
@@ -335,7 +346,7 @@ macro_rules! basic_multi_thread_x_small_latency {
                     });
                     let data = run_multi_thread_test(
                         iters,
-                        iters / 10,
+                        iters / 5,
                         *pct,
                         backing_set,
                         Some(Duration::from_nanos(5)),
@@ -364,7 +375,7 @@ macro_rules! basic_single_thread_x_small_latency {
                     });
                     let data = run_single_thread_test(
                         iters,
-                        iters / 10,
+                        iters / 5,
                         *pct,
                         backing_set,
                         Some(Duration::from_nanos(5)),
