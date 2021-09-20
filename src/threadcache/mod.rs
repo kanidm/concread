@@ -35,7 +35,6 @@ where
     K: Hash + Eq + Debug + Clone,
 {
     txs: Vec<Sender<Invalidate<K>>>,
-    txid: usize,
 }
 
 struct ThreadLocalWriteTxn<'a, K, V>
@@ -45,7 +44,7 @@ where
     txid: u64,
     parent: &'a mut ThreadLocal<K, V>,
     guard: MutexGuard<'a, Writer<K>>,
-    rollback: (),
+    rollback: HashSet<K>,
 }
 
 struct ThreadLocalReadTxn<'a, K, V>
@@ -56,6 +55,7 @@ where
     parent: &'a mut ThreadLocal<K, V>,
 }
 
+#[derive(Clone)]
 struct Invalidate<K>
 where
     K: Hash + Eq + Debug + Clone,
@@ -127,6 +127,7 @@ where
         // We are the only writer!
         let guard = self.wrlock.lock();
         let txid = parent.inv_up_to_txid.load(Ordering::Acquire);
+        let txid = txid + 1;
         parent.invalidate(txid);
         ThreadLocalWriteTxn {
             txid,
@@ -142,7 +143,7 @@ where
 
     fn invalidate(&mut self, up_to: u64) {
         if let Some(inv) = self.last_inv.as_ref() {
-            if inv.txid >= up_to {
+            if inv.txid > up_to {
                 return;
             } else {
                 self.cache.remove(&inv.k);
@@ -153,7 +154,7 @@ where
         self.last_inv = None;
 
         while let Ok(inv) = self.rx.try_recv() {
-            if inv.txid >= up_to {
+            if inv.txid > up_to {
                 // Stash this for next loop.
                 self.last_inv = Some(inv);
                 return;
@@ -186,19 +187,54 @@ where
 
     // insert
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
-        unimplemented!();
+        // Store the k in our rollback set.
+        self.rollback.insert(k.clone());
+        self.parent.cache.insert(k, v)
     }
 
-    pub fn invalidate(&mut self, k: &K) {
+    pub fn remove(&mut self, k: &K) -> Option<V> {
+        self.rollback.insert(k.clone());
+        self.parent.cache.remove(k, v)
     }
 
     // commit
     pub fn commit(self) {
-        
+        // We are commiting, so lets get ready.
+        // First, anything that we touched in the rollback set will need
+        // to be invalidated from other caches. It doesn't matter if we
+        // removed or inserted, it has the same effect on them.
+        self.guard.txs.iter()
+            .enumerate()
+            .for_each(|(i, tx)| {
+                if i != self.parent.tid {
+
+                self.rollback.iter()
+                    .for_each(|k| {
+                        tx.send(
+                        Invalidate {
+                            k.clone(),
+                            txid: self.txid
+                        }
+                        );
+                    });
+            }
+        });
+        // Now we have issued our invalidations, we can tell people to invalidate up to this txid
+        parent.inv_up_to_txid.store(Ordering::Release, self.txid);
+        // Ensure our rollback set is empty now to avoid the drop handler.
+        self.rollback.clear();
+        // We're done!
     }
 }
 
-// impl Drop (for rollback)
+impl<'a, K, V> Drop for ThreadLocalWriteTxn<'a, K, V> {
+    fn drop(&mut self) {
+        // Clear anything that's in the rollback.
+        self.rollback.iter().for_each(|k| {
+            self.parent.cache.remove(k);
+        })
+    }
+}
 
 
 impl<'a, K, V> ThreadLocalReadTxn<'a, K, V>
@@ -222,6 +258,30 @@ mod tests {
 
         let wr_txn = cache_a.write();
         let rd_txn = cache_b.read();
+
+        wr_txn.insert(1,1);
+        wr_txn.insert(2,2);
+        assert!(wr_txn.contains_key(&1));
+        assert!(wr_txn.contains_key(&2));
+
+        assert!(!rd_txn.contains_key(&1));
+        assert!(!rd_txn.contains_key(&2));
+        wr_txn.commit();
+
+        let wr_txn = cache_a.write();
+        assert!(wr_txn.contains_key(&1));
+        assert!(wr_txn.contains_key(&2));
+        wr_txn.insert(3,3);
+        assert!(wr_txn.contains_key(&3));
+        drop(wr_txn);
+
+        let wr_txn = cache_a.write();
+        assert!(wr_txn.contains_key(&1));
+        assert!(wr_txn.contains_key(&2));
+        // Should have been rolled back.
+        assert!(!wr_txn.contains_key(&3));
+        wr_txn.commit();
+
     }
 }
 
