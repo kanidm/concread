@@ -16,10 +16,12 @@ use self::ll::{LLNode, LLWeight, LL};
 // use self::traits::ArcWeight;
 use crate::cowcell::{CowCell, CowCellReadTxn};
 use crate::hashmap::*;
-use crossbeam::channel::{bounded, Receiver, Sender};
+// use crossbeam::channel::{bounded, Receiver, Sender};
+use crossbeam::queue::ArrayQueue;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap as Map;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -165,7 +167,8 @@ where
     ghost_freq: LL<CacheItemInner<K>>,
     ghost_rec: LL<CacheItemInner<K>>,
     haunted: LL<CacheItemInner<K>>,
-    rx: Receiver<CacheEvent<K, V>>,
+    // rx: Receiver<CacheEvent<K, V>>,
+    queue: Arc<ArrayQueue<CacheEvent<K, V>>>,
     min_txid: u64,
 }
 
@@ -179,8 +182,8 @@ where
     // Max number of elements for a reader per thread.
     read_max: usize,
     // channels for readers.
-    // tx (cloneable)
-    tx: Sender<CacheEvent<K, V>>,
+    // tx: Sender<CacheEvent<K, V>>,
+    queue: Arc<ArrayQueue<CacheEvent<K, V>>>,
     /// The number of items that are present in the cache before we start to process
     /// the arc sets/lists.
     watermark: usize,
@@ -265,7 +268,9 @@ where
     cache: HashMapReadTxn<'a, K, CacheItem<K, V>>,
     tlocal: Option<ReadCache<K, V>>,
     // tx channel to send forward events.
-    tx: Sender<CacheEvent<K, V>>,
+    // tx: Sender<CacheEvent<K, V>>,
+    queue: Arc<ArrayQueue<CacheEvent<K, V>>>,
+
     above_watermark: bool,
 }
 
@@ -529,11 +534,13 @@ impl<
         let chan_size = max / 10;
         let chan_size = if chan_size < 16 { 16 } else { chan_size };
 
-        let (tx, rx) = bounded(chan_size);
+        // let (tx, rx) = bounded(chan_size);
+        let queue = Arc::new(ArrayQueue::new(chan_size));
         let shared = RwLock::new(ArcShared {
             max,
             read_max,
-            tx,
+            // tx,
+            queue: queue.clone(),
             watermark,
         });
         let inner = Mutex::new(ArcInner {
@@ -543,7 +550,8 @@ impl<
             ghost_freq: LL::new(),
             ghost_rec: LL::new(),
             haunted: LL::new(),
-            rx,
+            // rx,
+            queue,
             min_txid: 0,
         });
         let stats = CowCell::new(CacheStats {
@@ -588,7 +596,8 @@ impl<
             caller: &self,
             cache: self.cache.read(),
             tlocal,
-            tx: rshared.tx.clone(),
+            // tx: rshared.tx.clone(),
+            queue: rshared.queue.clone(),
             above_watermark,
         }
     }
@@ -814,7 +823,8 @@ impl<
         commit_ts: Instant,
     ) {
         // * for each item
-        while let Ok(ce) = inner.rx.try_recv() {
+        // while let Ok(ce) = inner.rx.try_recv() {
+        while let Some(ce) = inner.queue.pop() {
             let t = match ce {
                 // Update if it was hit.
                 CacheEvent::Hit {
@@ -1627,7 +1637,8 @@ impl<
                 cache.set.get(k).map(|v| unsafe {
                     // Indicate a hit on the tlocal cache.
                     if self.above_watermark {
-                        let _ = self.tx.try_send(CacheEvent::Hit {
+                        // let _ = self.tx.try_send(
+                        let _ = self.queue.push(CacheEvent::Hit {
                             t: Instant::now(),
                             k_hash,
                             is_tlocal: true,
@@ -1643,7 +1654,8 @@ impl<
                     (*v).to_vref().map(|vin| unsafe {
                         // Indicate a hit on the main cache.
                         if self.above_watermark {
-                            let _ = self.tx.try_send(CacheEvent::Hit {
+                            // let _ = self.tx.try_send(
+                            let _ = self.queue.push(CacheEvent::Hit {
                                 t: Instant::now(),
                                 k_hash,
                                 is_tlocal: false,
@@ -1672,7 +1684,8 @@ impl<
     pub fn insert_sized(&mut self, k: K, v: V, size: usize) {
         let mut v = v;
         // Send a copy forward through time and space.
-        let _ = self.tx.try_send(CacheEvent::Include {
+        // let _ = self.tx.try_send(
+        let _ = self.queue.push(CacheEvent::Include {
             t: Instant::now(),
             k: k.clone(),
             v: v.clone(),
