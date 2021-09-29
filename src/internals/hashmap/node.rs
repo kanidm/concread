@@ -100,7 +100,7 @@ pub(crate) fn assert_released() {
 #[repr(C)]
 pub(crate) struct Meta(u64);
 
-#[repr(C)]
+#[repr(C, align(64))]
 pub(crate) struct BranchSimd<K, V>
 where
     K: Hash + Eq + Clone + Debug,
@@ -114,7 +114,7 @@ where
     pub(crate) nid: usize,
 }
 
-#[repr(C)]
+#[repr(C, align(64))]
 pub(crate) struct Branch<K, V>
 where
     K: Hash + Eq + Clone + Debug,
@@ -131,7 +131,7 @@ where
 
 type Bucket<K, V> = SmallVec<[Datum<K, V>; DEFAULT_BUCKET_ALLOC]>;
 
-#[repr(C)]
+#[repr(C, align(64))]
 pub(crate) struct LeafSimd<K, V>
 where
     K: Hash + Eq + Clone + Debug,
@@ -145,7 +145,7 @@ where
     pub nid: usize,
 }
 
-#[repr(C)]
+#[repr(C, align(64))]
 pub(crate) struct Leaf<K, V>
 where
     K: Hash + Eq + Clone + Debug,
@@ -160,7 +160,7 @@ where
     pub nid: usize,
 }
 
-#[repr(C)]
+#[repr(C, align(64))]
 pub(crate) struct Node<K, V>
 where
     K: Hash + Eq + Clone + Debug,

@@ -31,9 +31,13 @@ packed_simd = { version = "0.3", optional = true, package = "packed_simd_2" }
 
 tokio = { version = "1", features = ["sync", "rt", "macros"], optional = true }
 
+lru = "0.6"
+
 [dev-dependencies]
 time = "0.2"
-criterion = "0.3"
+criterion = { version = "0.3", features = ["html_reports"] }
+function_name = "0.2"
+uuid = "0.8"
 
 [[bin]]
 name = "unsound"
@@ -50,3 +54,9 @@ path = "src/unsound3.rs"
 [[bench]]
 name = "hashmap_benchmark"
 harness = false
+
+[[bench]]
+name = "arccache"
+harness = false
+
+

@@ -16,10 +16,12 @@ use self::ll::{LLNode, LLWeight, LL};
 // use self::traits::ArcWeight;
 use crate::cowcell::{CowCell, CowCellReadTxn};
 use crate::hashmap::*;
-use crossbeam::channel::{unbounded, Receiver, Sender};
+// use crossbeam::channel::{bounded, Receiver, Sender};
+use crossbeam::queue::ArrayQueue;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap as Map;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -165,7 +167,8 @@ where
     ghost_freq: LL<CacheItemInner<K>>,
     ghost_rec: LL<CacheItemInner<K>>,
     haunted: LL<CacheItemInner<K>>,
-    rx: Receiver<CacheEvent<K, V>>,
+    // rx: Receiver<CacheEvent<K, V>>,
+    queue: Arc<ArrayQueue<CacheEvent<K, V>>>,
     min_txid: u64,
 }
 
@@ -179,8 +182,8 @@ where
     // Max number of elements for a reader per thread.
     read_max: usize,
     // channels for readers.
-    // tx (cloneable)
-    tx: Sender<CacheEvent<K, V>>,
+    // tx: Sender<CacheEvent<K, V>>,
+    queue: Arc<ArrayQueue<CacheEvent<K, V>>>,
     /// The number of items that are present in the cache before we start to process
     /// the arc sets/lists.
     watermark: usize,
@@ -265,7 +268,9 @@ where
     cache: HashMapReadTxn<'a, K, CacheItem<K, V>>,
     tlocal: Option<ReadCache<K, V>>,
     // tx channel to send forward events.
-    tx: Sender<CacheEvent<K, V>>,
+    // tx: Sender<CacheEvent<K, V>>,
+    queue: Arc<ArrayQueue<CacheEvent<K, V>>>,
+
     above_watermark: bool,
 }
 
@@ -523,13 +528,19 @@ impl<
     /// tracking watermark. To disable this, set to 0. Watermark must be less than max.
     pub fn new_size_watermark(max: usize, read_max: usize, watermark: usize) -> Self {
         assert!(max > 0);
-        assert!(watermark < max);
+        assert!(watermark <= max);
 
-        let (tx, rx) = unbounded();
+        // for now we set the back pressure to 10% of max.
+        let chan_size = max / 10;
+        let chan_size = if chan_size < 16 { 16 } else { chan_size };
+
+        // let (tx, rx) = bounded(chan_size);
+        let queue = Arc::new(ArrayQueue::new(chan_size));
         let shared = RwLock::new(ArcShared {
             max,
             read_max,
-            tx,
+            // tx,
+            queue: queue.clone(),
             watermark,
         });
         let inner = Mutex::new(ArcInner {
@@ -539,7 +550,8 @@ impl<
             ghost_freq: LL::new(),
             ghost_rec: LL::new(),
             haunted: LL::new(),
-            rx,
+            // rx,
+            queue,
             min_txid: 0,
         });
         let stats = CowCell::new(CacheStats {
@@ -584,7 +596,8 @@ impl<
             caller: &self,
             cache: self.cache.read(),
             tlocal,
-            tx: rshared.tx.clone(),
+            // tx: rshared.tx.clone(),
+            queue: rshared.queue.clone(),
             above_watermark,
         }
     }
@@ -810,7 +823,8 @@ impl<
         commit_ts: Instant,
     ) {
         // * for each item
-        while let Ok(ce) = inner.rx.try_recv() {
+        // while let Ok(ce) = inner.rx.try_recv() {
+        while let Some(ce) = inner.queue.pop() {
             let t = match ce {
                 // Update if it was hit.
                 CacheEvent::Hit {
@@ -1189,6 +1203,7 @@ impl<
         tlocal: Map<K, ThreadCacheItem<V>>,
         hit: Vec<u64>,
         clear: bool,
+        init_above_watermark: bool,
     ) {
         // What is the time?
         let commit_ts = Instant::now();
@@ -1285,10 +1300,14 @@ impl<
         // hit events so we can start to setup/order our arc sets correctly.
         //
         // If we drop below this again, they'll go back to just insert/remove content only mode.
-        if (inner.freq.len() + inner.rec.len()) >= shared.watermark {
-            self.above_watermark.store(true, Ordering::Relaxed);
+        if init_above_watermark {
+            if (inner.freq.len() + inner.rec.len()) < shared.watermark {
+                self.above_watermark.store(false, Ordering::Relaxed);
+            }
         } else {
-            self.above_watermark.store(false, Ordering::Relaxed);
+            if (inner.freq.len() + inner.rec.len()) >= shared.watermark {
+                self.above_watermark.store(true, Ordering::Relaxed);
+            }
         }
 
         // Commit the stats
@@ -1296,6 +1315,7 @@ impl<
         // commit on the wr txn.
         cache.commit();
         // done!
+        // eprintln!("quiesce took - {:?}", commit_ts.elapsed());
     }
 }
 
@@ -1317,6 +1337,7 @@ impl<
             self.tlocal,
             self.hit.into_inner(),
             self.clear.into_inner(),
+            self.above_watermark,
         )
     }
 
@@ -1616,13 +1637,12 @@ impl<
                 cache.set.get(k).map(|v| unsafe {
                     // Indicate a hit on the tlocal cache.
                     if self.above_watermark {
-                        self.tx
-                            .send(CacheEvent::Hit {
-                                t: Instant::now(),
-                                k_hash,
-                                is_tlocal: true,
-                            })
-                            .expect("Invalid tx state");
+                        // let _ = self.tx.try_send(
+                        let _ = self.queue.push(CacheEvent::Hit {
+                            t: Instant::now(),
+                            k_hash,
+                            is_tlocal: true,
+                        });
                     }
                     let v = &(**v).as_ref().v as *const _;
                     // This discards the lifetime and repins it to &'b.
@@ -1634,13 +1654,12 @@ impl<
                     (*v).to_vref().map(|vin| unsafe {
                         // Indicate a hit on the main cache.
                         if self.above_watermark {
-                            self.tx
-                                .send(CacheEvent::Hit {
-                                    t: Instant::now(),
-                                    k_hash,
-                                    is_tlocal: false,
-                                })
-                                .expect("Invalid tx state");
+                            // let _ = self.tx.try_send(
+                            let _ = self.queue.push(CacheEvent::Hit {
+                                t: Instant::now(),
+                                k_hash,
+                                is_tlocal: false,
+                            });
                         }
 
                         let vin = vin as *const _;
@@ -1665,15 +1684,14 @@ impl<
     pub fn insert_sized(&mut self, k: K, v: V, size: usize) {
         let mut v = v;
         // Send a copy forward through time and space.
-        self.tx
-            .send(CacheEvent::Include {
-                t: Instant::now(),
-                k: k.clone(),
-                v: v.clone(),
-                txid: self.cache.get_txid(),
-                size,
-            })
-            .expect("Invalid tx state!");
+        // let _ = self.tx.try_send(
+        let _ = self.queue.push(CacheEvent::Include {
+            t: Instant::now(),
+            k: k.clone(),
+            v: v.clone(),
+            txid: self.cache.get_txid(),
+            size,
+        });
 
         // We have a cache, so lets update it.
         if let Some(ref mut cache) = self.tlocal {

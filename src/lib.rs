@@ -23,7 +23,8 @@
 //! In the future, a concurrent BTree and HashTree will be added, that can be used inplace
 //! of a `RwLock<BTreeMap>` or `RwLock<HashMap>`. Stay tuned!
 
-#![deny(warnings)]
+// #![deny(warnings)]
+
 #![warn(unused_extern_crates)]
 #![warn(missing_docs)]
 #![allow(clippy::needless_lifetimes)]
@@ -42,6 +43,8 @@ pub mod cowcell;
 pub mod ebrcell;
 
 pub mod arcache;
+pub mod threadcache;
+
 pub mod bptree;
 pub mod hashmap;
 
