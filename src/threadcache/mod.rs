@@ -1,11 +1,17 @@
-// Thread local cache.
-
-// Writer locks on an array of sender queues for invalidations.
-// When taking read/write, ack our invalidation queue til empty OR up to current txid.
-
-// Max size div by threads.
-
-// Each thread has own ARC.
+//! ThreadCache - A per-thread cache with transactional behaviour.
+//!
+//! This provides a per-thread cache, which uses a broadcast invalidation
+//! queue to manage local content. This is similar to how a CPU cache works
+//! in hardware. Generally this is best for small, distinct caches with very
+//! few changes / writes.
+//!
+//! It's worth noting that each thread needs to frequently "read" it's cache.
+//! Any idle thread will end up with invalidations building up, that can consume
+//! a large volume of memory. This means you need your "readers" to have transactions
+//! opened/closed periodically to ensure that invalidations are acknowledged.
+//!
+//! Generally you should prefer to use `ARCache` over this module unless you really require
+//! the properties of this module.
 
 use parking_lot::{Mutex, MutexGuard};
 use std::collections::HashSet;
@@ -13,12 +19,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
-use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::hash::Hash;
 
 use lru::LruCache;
 
+/// An instance of a threads local cache store.
 pub struct ThreadLocal<K, V>
 where
     K: Hash + Eq + Debug + Clone,
@@ -38,6 +44,9 @@ where
     txs: Vec<Sender<Invalidate<K>>>,
 }
 
+/// A write transaction over this local threads cache. If you hold the write txn, no
+/// other thread can be in the write state. Changes to this cache will be broadcast to
+/// other threads to ensure they can revalidate their content correctly.
 pub struct ThreadLocalWriteTxn<'a, K, V>
 where
     K: Hash + Eq + Debug + Clone,
@@ -48,11 +57,13 @@ where
     rollback: HashSet<K>,
 }
 
+/// A read transaction of this cache. During a read, it is guaranteed that the content
+/// of this cache will not be updated or invalidated unless by this threads actions.
 pub struct ThreadLocalReadTxn<'a, K, V>
 where
     K: Hash + Eq + Debug + Clone,
 {
-    txid: u64,
+    // txid: u64,
     parent: &'a mut ThreadLocal<K, V>,
 }
 
@@ -69,6 +80,9 @@ impl<K, V> ThreadLocal<K, V>
 where
     K: Hash + Eq + Debug + Clone,
 {
+    /// Create a new set of caches. You must specify the number of threads caches to
+    /// create, and the per-thread size of the cache in capacity. An array of the
+    /// cache instances will be returned that you can then distribute to the threads.
     pub fn new(threads: usize, capacity: usize) -> Vec<Self> {
         assert!(threads > 0);
         let (txs, rxs): (Vec<_>, Vec<_>) = (0..threads)
@@ -96,12 +110,17 @@ where
             .collect()
     }
 
+    /// Begin a read transaction of this thread local cache. In the start of this read
+    /// invalidation requests will be acknowledged.
     pub fn read<'a>(&'a mut self) -> ThreadLocalReadTxn<'a, K, V> {
         let txid = self.inv_up_to_txid.load(Ordering::Acquire);
         self.invalidate(txid);
-        ThreadLocalReadTxn { txid, parent: self }
+        ThreadLocalReadTxn { parent: self }
     }
 
+    /// Begin a write transaction of this thread local cache. Once granted, only this
+    /// thread may be in the write state - all other threads will either block on
+    /// acquiring the write, or they can proceed to read.
     pub fn write<'a>(&'a mut self) -> ThreadLocalWriteTxn<'a, K, V> {
         // SAFETY this is safe, because while we are duplicating the mutable reference
         // which conflicts with the mutex, we aren't change the wrlock value so the mutex
@@ -120,9 +139,11 @@ where
         }
     }
 
+    /*
     pub fn try_write<'a>(&'a mut self) -> Option<ThreadLocalWriteTxn<'a, K, V>> {
         unimplemented!();
     }
+    */
 
     fn invalidate(&mut self, up_to: u64) {
         if let Some(inv) = self.last_inv.as_ref() {
@@ -152,27 +173,31 @@ impl<'a, K, V> ThreadLocalWriteTxn<'a, K, V>
 where
     K: Hash + Eq + Debug + Clone,
 {
+    /// Attempt to retrieve a k-v pain from the cache. If it is not present, `None` is returned.
     pub fn get(&mut self, k: &K) -> Option<&V> {
         self.parent.cache.get(k)
     }
 
+    /// Determine if the key exists in the cache.
     pub fn contains_key(&mut self, k: &K) -> bool {
         self.parent.cache.get(k).is_some()
     }
 
-    // insert
+    /// Insert a new item to this cache for this transaction.
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         // Store the k in our rollback set.
         self.rollback.insert(k.clone());
         self.parent.cache.put(k, v)
     }
 
+    /// Remove an item from the cache for this transaction. IE you are deleting the k-v.
     pub fn remove(&mut self, k: &K) -> Option<V> {
         self.rollback.insert(k.clone());
         self.parent.cache.pop(k)
     }
 
-    // commit
+    /// Commit the changes to this cache so they are visible to others. If you do NOT call
+    /// commit, all changes to this cache are rolled back to prevent invalidate states.
     pub fn commit(mut self) {
         // We are commiting, so lets get ready.
         // First, anything that we touched in the rollback set will need
@@ -181,7 +206,8 @@ where
         self.guard.txs.iter().enumerate().for_each(|(i, tx)| {
             if i != self.parent.tid {
                 self.rollback.iter().for_each(|k| {
-                    tx.send(Invalidate {
+                    // Ignore channel failures.
+                    let _ = tx.send(Invalidate {
                         k: k.clone(),
                         txid: self.txid,
                     });
@@ -214,14 +240,17 @@ impl<'a, K, V> ThreadLocalReadTxn<'a, K, V>
 where
     K: Hash + Eq + Debug + Clone,
 {
+    /// Attempt to retrieve a k-v pain from the cache. If it is not present, `None` is returned.
     pub fn get(&mut self, k: &K) -> Option<&V> {
         self.parent.cache.get(k)
     }
 
+    /// Determine if the key exists in the cache.
     pub fn contains_key(&mut self, k: &K) -> bool {
         self.parent.cache.get(k).is_some()
     }
 
+    /// Insert a new item to this cache for this transaction.
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         self.parent.cache.put(k, v)
     }
