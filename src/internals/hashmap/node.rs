@@ -7,6 +7,7 @@ use std::borrow::Borrow;
 use std::fmt::{self, Debug, Error};
 use std::hash::Hash;
 use std::marker::PhantomData;
+use std::mem::ManuallyDrop;
 use std::mem::MaybeUninit;
 use std::ptr;
 
@@ -100,18 +101,9 @@ pub(crate) fn assert_released() {
 #[repr(C)]
 pub(crate) struct Meta(u64);
 
-#[repr(C, align(64))]
-pub(crate) struct BranchSimd<K, V>
-where
-    K: Hash + Eq + Clone + Debug,
-    V: Clone,
-{
-    pub(crate) ctrl: u64x8,
-    #[cfg(all(test, not(miri)))]
-    poison: u64,
-    nodes: [*mut Node<K, V>; HBV_CAPACITY],
-    #[cfg(all(test, not(miri)))]
-    pub(crate) nid: usize,
+pub(crate) union Ctrl {
+    pub a: ManuallyDrop<(Meta, [u64; H_CAPACITY])>,
+    pub simd: ManuallyDrop<u64x8>,
 }
 
 #[repr(C, align(64))]
@@ -120,30 +112,15 @@ where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
-    pub meta: Meta,
-    pub key: [u64; H_CAPACITY],
+    pub ctrl: Ctrl,
     #[cfg(all(test, not(miri)))]
     poison: u64,
     nodes: [*mut Node<K, V>; HBV_CAPACITY],
     #[cfg(all(test, not(miri)))]
-    pub nid: usize,
+    pub(crate) nid: usize,
 }
 
 type Bucket<K, V> = SmallVec<[Datum<K, V>; DEFAULT_BUCKET_ALLOC]>;
-
-#[repr(C, align(64))]
-pub(crate) struct LeafSimd<K, V>
-where
-    K: Hash + Eq + Clone + Debug,
-    V: Clone,
-{
-    pub ctrl: u64x8,
-    #[cfg(all(test, not(miri)))]
-    poison: u64,
-    pub values: [MaybeUninit<Bucket<K, V>>; H_CAPACITY],
-    #[cfg(all(test, not(miri)))]
-    pub nid: usize,
-}
 
 #[repr(C, align(64))]
 pub(crate) struct Leaf<K, V>
@@ -151,8 +128,7 @@ where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
-    pub meta: Meta,
-    pub key: [u64; H_CAPACITY],
+    pub ctrl: Ctrl,
     #[cfg(all(test, not(miri)))]
     poison: u64,
     pub values: [MaybeUninit<Bucket<K, V>>; H_CAPACITY],
@@ -166,7 +142,7 @@ where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
-    pub(crate) meta: Meta,
+    pub(crate) ctrl: Ctrl,
     k: PhantomData<K>,
     v: PhantomData<V>,
 }
@@ -175,17 +151,19 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
     pub(crate) fn new_leaf(txid: u64) -> *mut Leaf<K, V> {
         // println!("Req new hash leaf");
         debug_assert!(txid < (TXID_MASK >> TXID_SHF));
-        let x: Box<CachePadded<LeafSimd<K, V>>> = Box::new(CachePadded::new(LeafSimd {
-            ctrl: u64x8::new(
-                (txid << TXID_SHF) | FLAG_HASH_LEAF,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-            ),
+        let x: Box<CachePadded<Leaf<K, V>>> = Box::new(CachePadded::new(Leaf {
+            ctrl: Ctrl {
+                simd: ManuallyDrop::new(u64x8::new(
+                    (txid << TXID_SHF) | FLAG_HASH_LEAF,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                )),
+            },
             #[cfg(all(test, not(miri)))]
             poison: FLAG_POISON,
             values: unsafe { MaybeUninit::uninit().assume_init() },
@@ -199,18 +177,20 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
         // println!("Req new hash leaf ins");
         // debug_assert!(false);
         debug_assert!((flags & FLAG_MASK) == FLAG_HASH_LEAF);
-        let x: Box<CachePadded<LeafSimd<K, V>>> = Box::new(CachePadded::new(LeafSimd {
+        let x: Box<CachePadded<Leaf<K, V>>> = Box::new(CachePadded::new(Leaf {
             // Let the flag, txid and the slots of value 1 through.
-            ctrl: u64x8::new(
-                flags & (TXID_MASK | FLAG_MASK | 1),
-                h,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-            ),
+            ctrl: Ctrl {
+                simd: ManuallyDrop::new(u64x8::new(
+                    flags & (TXID_MASK | FLAG_MASK | 1),
+                    h,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                )),
+            },
             #[cfg(all(test, not(miri)))]
             poison: FLAG_POISON,
             values: [
@@ -244,18 +224,20 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
         debug_assert!(unsafe { (*r).verify() });
         debug_assert!(txid < (TXID_MASK >> TXID_SHF));
         let pivot = unsafe { (*r).min() };
-        let x: Box<CachePadded<BranchSimd<K, V>>> = Box::new(CachePadded::new(BranchSimd {
+        let x: Box<CachePadded<Branch<K, V>>> = Box::new(CachePadded::new(Branch {
             // This sets the default (key) slots to 1, since we take an l/r
-            ctrl: u64x8::new(
-                (txid << TXID_SHF) | FLAG_HASH_BRANCH | 1,
-                pivot,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-            ),
+            ctrl: Ctrl {
+                simd: ManuallyDrop::new(u64x8::new(
+                    (txid << TXID_SHF) | FLAG_HASH_BRANCH | 1,
+                    pivot,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                )),
+            },
             #[cfg(all(test, not(miri)))]
             poison: FLAG_POISON,
             nodes: [
@@ -279,23 +261,23 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
     #[inline(always)]
     #[cfg(test)]
     pub(crate) fn get_txid(&self) -> u64 {
-        self.meta.get_txid()
+        unsafe { self.ctrl.a.0.get_txid() }
     }
 
     #[inline(always)]
     pub(crate) fn is_leaf(&self) -> bool {
-        self.meta.is_leaf()
+        unsafe { self.ctrl.a.0.is_leaf() }
     }
 
     #[inline(always)]
     #[allow(unused)]
     pub(crate) fn is_branch(&self) -> bool {
-        self.meta.is_branch()
+        unsafe { self.ctrl.a.0.is_branch() }
     }
 
     #[cfg(test)]
     pub(crate) fn tree_density(&self) -> (usize, usize, usize) {
-        match self.meta.0 & FLAG_MASK {
+        match unsafe { self.ctrl.a.0 .0 } & FLAG_MASK {
             FLAG_HASH_LEAF => {
                 let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
                 (lref.count(), lref.slots(), H_CAPACITY)
@@ -319,7 +301,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
     }
 
     pub(crate) fn leaf_count(&self) -> usize {
-        match self.meta.0 & FLAG_MASK {
+        match unsafe { self.ctrl.a.0 .0 } & FLAG_MASK {
             FLAG_HASH_LEAF => 1,
             FLAG_HASH_BRANCH => {
                 let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
@@ -341,7 +323,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
         K: Borrow<Q>,
         Q: Eq,
     {
-        match self.meta.0 & FLAG_MASK {
+        match unsafe { self.ctrl.a.0 .0 } & FLAG_MASK {
             FLAG_HASH_LEAF => {
                 let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
                 lref.get_ref(h, k)
@@ -359,7 +341,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
 
     #[inline(always)]
     pub(crate) fn min(&self) -> u64 {
-        match self.meta.0 & FLAG_MASK {
+        match unsafe { self.ctrl.a.0 .0 } & FLAG_MASK {
             FLAG_HASH_LEAF => {
                 let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
                 lref.min()
@@ -374,7 +356,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
 
     #[inline(always)]
     pub(crate) fn max(&self) -> u64 {
-        match self.meta.0 & FLAG_MASK {
+        match unsafe { self.ctrl.a.0 .0 } & FLAG_MASK {
             FLAG_HASH_LEAF => {
                 let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
                 lref.max()
@@ -389,7 +371,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
 
     #[inline(always)]
     pub(crate) fn verify(&self) -> bool {
-        match self.meta.0 & FLAG_MASK {
+        match unsafe { self.ctrl.a.0 .0 } & FLAG_MASK {
             FLAG_HASH_LEAF => {
                 let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
                 lref.verify()
@@ -404,7 +386,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
 
     #[cfg(test)]
     fn no_cycles_inner(&self, track: &mut BTreeSet<*const Self>) -> bool {
-        match self.meta.0 & FLAG_MASK {
+        match unsafe { self.ctrl.a.0 .0 } & FLAG_MASK {
             FLAG_HASH_LEAF => {
                 // check if we are in the set?
                 track.insert(self as *const Self)
@@ -445,7 +427,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
         // self.meta.0 &= FLAG_MASK | COUNT_MASK;
         // self.meta.0 |= txid << TXID_SHF;
 
-        if (self.meta.0 & FLAG_MASK) == FLAG_HASH_BRANCH {
+        if (unsafe { self.ctrl.a.0 .0 } & FLAG_MASK) == FLAG_HASH_BRANCH {
             let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
             for idx in 0..(bref.slots() + 1) {
                 alloc.push(bref.nodes[idx]);
@@ -520,31 +502,31 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
     #[cfg(test)]
     fn set_slots(&mut self, c: usize) {
         debug_assert_leaf!(self);
-        self.meta.set_slots(c)
+        unsafe { (*self.ctrl.a).0.set_slots(c) }
     }
 
     #[inline(always)]
     pub(crate) fn slots(&self) -> usize {
         debug_assert_leaf!(self);
-        self.meta.slots()
+        unsafe { self.ctrl.a.0.slots() }
     }
 
     #[inline(always)]
     fn inc_slots(&mut self) {
         debug_assert_leaf!(self);
-        self.meta.inc_slots()
+        unsafe { (*self.ctrl.a).0.inc_slots() }
     }
 
     #[inline(always)]
     fn dec_slots(&mut self) {
         debug_assert_leaf!(self);
-        self.meta.dec_slots()
+        unsafe { (*self.ctrl.a).0.dec_slots() }
     }
 
     #[inline(always)]
     pub(crate) fn get_txid(&self) -> u64 {
         debug_assert_leaf!(self);
-        self.meta.get_txid()
+        unsafe { self.ctrl.a.0.get_txid() }
     }
 
     pub(crate) fn count(&self) -> usize {
@@ -583,7 +565,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             })
     }
 
-    pub(crate) unsafe fn get_slot_mut_ref<Q: ?Sized>(
+    pub(crate) fn get_slot_mut_ref<Q: ?Sized>(
         &mut self,
         h: u64,
     ) -> Option<&mut [Datum<K, V>]>
@@ -592,8 +574,8 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
         Q: Eq,
     {
         debug_assert_leaf!(self);
-        leaf_simd_get_slot(self, h)
-            .map(|slot_idx| (*self.values[slot_idx].as_mut_ptr()).as_mut_slice())
+        unsafe { leaf_simd_get_slot(self, h)
+            .map(|slot_idx| (*self.values[slot_idx].as_mut_ptr()).as_mut_slice()) }
     }
 
     #[inline(always)]
@@ -609,12 +591,12 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
 
     pub(crate) fn min(&self) -> u64 {
         debug_assert!(self.slots() > 0);
-        self.key[0]
+        unsafe { self.ctrl.a.1[0] }
     }
 
     pub(crate) fn max(&self) -> u64 {
         debug_assert!(self.slots() > 0);
-        self.key[self.slots() - 1]
+        unsafe { self.ctrl.a.1[self.slots() - 1] }
     }
 
     pub(crate) fn req_clone(&self, txid: u64) -> Option<*mut Node<K, V>> {
@@ -627,18 +609,21 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             // println!("Req clone leaf");
             // debug_assert!(false);
             // Diff txn, must clone.
-            let new_txid = (self.meta.0 & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF);
-            let x: Box<CachePadded<LeafSimd<K, V>>> = Box::new(CachePadded::new(LeafSimd {
-                ctrl: u64x8::new(
-                    new_txid,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                ),
+            let new_txid =
+                (unsafe { self.ctrl.a.0 .0 } & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF);
+            let x: Box<CachePadded<Leaf<K, V>>> = Box::new(CachePadded::new(Leaf {
+                ctrl: Ctrl {
+                    simd: ManuallyDrop::new(u64x8::new(
+                        new_txid,
+                        u64::MAX,
+                        u64::MAX,
+                        u64::MAX,
+                        u64::MAX,
+                        u64::MAX,
+                        u64::MAX,
+                        u64::MAX,
+                    )),
+                },
                 #[cfg(all(test, not(miri)))]
                 poison: FLAG_POISON,
                 values: unsafe { MaybeUninit::uninit().assume_init() },
@@ -651,8 +636,8 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             // Dup the keys
             unsafe {
                 ptr::copy_nonoverlapping(
-                    &self.key as *const u64,
-                    (*xr).key.as_mut_ptr(),
+                    &self.ctrl.a.1 as *const u64,
+                    (*(*xr).ctrl.a).1.as_mut_ptr(),
                     H_CAPACITY,
                 )
             }
@@ -693,24 +678,24 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
                     // Overflow to a new node
                     if idx >= self.slots() {
                         // Greate than all else, split right
-                        let rnode = Node::new_leaf_ins(self.meta.0, h, k, v);
+                        let rnode = Node::new_leaf_ins(unsafe { self.ctrl.a.0 .0 }, h, k, v);
                         LeafInsertState::Split(rnode)
                     } else if idx == 0 {
                         // Lower than all else, split left.
                         // let lnode = ...;
-                        let lnode = Node::new_leaf_ins(self.meta.0, h, k, v);
+                        let lnode = Node::new_leaf_ins(unsafe { self.ctrl.a.0 .0 }, h, k, v);
                         LeafInsertState::RevSplit(lnode)
                     } else {
                         // Within our range, pop max, insert, and split right.
                         // This is not a bucket add, it's a new bucket!
-                        let pk = unsafe { slice_remove(&mut self.key, H_CAPACITY - 1) };
+                        let pk = unsafe { slice_remove(&mut (*self.ctrl.a).1, H_CAPACITY - 1) };
                         let pbk =
                             unsafe { slice_remove(&mut self.values, H_CAPACITY - 1).assume_init() };
 
-                        let rnode = Node::new_leaf_bk(self.meta.0, pk, pbk);
+                        let rnode = Node::new_leaf_bk(unsafe { self.ctrl.a.0 .0 }, pk, pbk);
 
                         unsafe {
-                            slice_insert(&mut self.key, h, idx);
+                            slice_insert(&mut (*self.ctrl.a).1, h, idx);
                             slice_insert(
                                 &mut self.values,
                                 MaybeUninit::new(smallvec![Datum { k, v }]),
@@ -727,7 +712,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
                     // We have space.
                     unsafe {
                         // self.key[idx] = h;
-                        slice_insert(&mut self.key, h, idx);
+                        slice_insert(&mut (*self.ctrl.a).1, h, idx);
                         slice_insert(
                             &mut self.values,
                             MaybeUninit::new(smallvec![Datum { k, v }]),
@@ -763,13 +748,15 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
 
                 // How much remains?
                 if unsafe { (*self.values[slot_idx].as_ptr()).is_empty() } {
-                    // Get the kv out
-                    let _ = unsafe { slice_remove(&mut self.key, slot_idx) };
-                    // AFTER the remove, set the top value to u64::MAX
-                    self.key[H_CAPACITY - 1] = u64::MAX;
+                    unsafe {
+                        // Get the kv out
+                        let _ = slice_remove(&mut (*self.ctrl.a).1, slot_idx);
+                        // AFTER the remove, set the top value to u64::MAX
+                        (*self.ctrl.a).1[H_CAPACITY - 1] = u64::MAX;
 
-                    // Remove the bucket.
-                    let _ = unsafe { slice_remove(&mut self.values, slot_idx).assume_init() };
+                        // Remove the bucket.
+                        let _ = slice_remove(&mut self.values, slot_idx).assume_init();
+                    }
 
                     self.dec_slots();
                     if self.slots() == 0 {
@@ -792,7 +779,13 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
 
         //move key and values
         unsafe {
-            slice_move(&mut right.key, 0, &mut self.key, start_idx, slots);
+            slice_move(
+                &mut (*right.ctrl.a).1,
+                0,
+                &mut (*self.ctrl.a).1,
+                start_idx,
+                slots,
+            );
             slice_move(&mut right.values, 0, &mut self.values, start_idx, slots);
             // Update the left keys to be valid.
             // so we took from:
@@ -801,7 +794,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             //                |     slots
             //                start
             //  so we need to fill from start_idx + slots
-            let tgt_ptr = self.key.as_mut_ptr().add(start_idx);
+            let tgt_ptr = (*self.ctrl.a).1.as_mut_ptr().add(start_idx);
             // https://doc.rust-lang.org/std/ptr/fn.write_bytes.html
             // Sets count * size_of::<T>() bytes of memory starting at dst to val.
             ptr::write_bytes::<u64>(tgt_ptr, 0xff, slots);
@@ -810,8 +803,10 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
         }
 
         // update the slotss
-        self.meta.set_slots(start_idx);
-        right.meta.set_slots(slots);
+        unsafe {
+            (*self.ctrl.a).0.set_slots(start_idx);
+            (*right.ctrl.a).0.set_slots(slots);
+        }
     }
 
     pub(crate) fn take_from_r_to_l(&mut self, right: &mut Self) {
@@ -821,14 +816,14 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
 
         // Move values from right to left.
         unsafe {
-            slice_move(&mut self.key, 0, &mut right.key, 0, slots);
+            slice_move(&mut (*self.ctrl.a).1, 0, &mut (*right.ctrl.a).1, 0, slots);
             slice_move(&mut self.values, 0, &mut right.values, 0, slots);
         }
         // Shift the values in right down.
         unsafe {
             ptr::copy(
-                right.key.as_ptr().add(slots),
-                right.key.as_mut_ptr(),
+                (*right.ctrl.a).1.as_ptr().add(slots),
+                (*right.ctrl.a).1.as_mut_ptr(),
                 start_idx,
             );
             ptr::copy(
@@ -839,11 +834,13 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
         }
 
         // Fix the slotss.
-        self.meta.set_slots(slots);
-        right.meta.set_slots(start_idx);
+        unsafe {
+            (*self.ctrl.a).0.set_slots(slots);
+            (*right.ctrl.a).0.set_slots(start_idx);
+        }
         // Update the upper keys in right
         unsafe {
-            let tgt_ptr = right.key.as_mut_ptr().add(start_idx);
+            let tgt_ptr = (*right.ctrl.a).1.as_mut_ptr().add(start_idx);
             // https://doc.rust-lang.org/std/ptr/fn.write_bytes.html
             // Sets count * size_of::<T>() bytes of memory starting at dst to val.
             ptr::write_bytes::<u64>(tgt_ptr, 0xff, H_CAPACITY - start_idx);
@@ -869,13 +866,15 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
         let sc = self.slots();
         let rc = right.slots();
         unsafe {
-            slice_merge(&mut self.key, sc, &mut right.key, rc);
+            slice_merge(&mut (*self.ctrl.a).1, sc, &mut (*right.ctrl.a).1, rc);
             slice_merge(&mut self.values, sc, &mut right.values, rc);
         }
         #[cfg(all(test, not(miri)))]
         debug_assert!(self.poison == FLAG_POISON);
-        self.meta.add_slots(right.count());
-        right.meta.set_slots(0);
+        unsafe {
+            (*self.ctrl.a).0.add_slots(right.count());
+            (*right.ctrl.a).0.set_slots(0);
+        }
         debug_assert!(self.verify());
     }
 
@@ -884,17 +883,17 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
         #[cfg(all(test, not(miri)))]
         debug_assert!(self.poison == FLAG_POISON);
         // println!("verify leaf -> {:?}", self);
-        if self.meta.slots() == 0 {
+        if unsafe { self.ctrl.a.0.slots() } == 0 {
             return true;
         }
         // Check everything above slots is u64::max
-        for work_idx in self.meta.slots()..H_CAPACITY {
-            debug_assert!(self.key[work_idx] == u64::MAX);
+        for work_idx in unsafe { (*self.ctrl.a).0.slots() }..H_CAPACITY {
+            debug_assert!(unsafe { (*self.ctrl.a).1[work_idx] } == u64::MAX);
         }
         // Check key sorting
-        let mut lk: &u64 = &self.key[0];
-        for work_idx in 1..self.meta.slots() {
-            let rk: &u64 = &self.key[work_idx];
+        let mut lk: &u64 = unsafe { &(*self.ctrl.a).1[0] };
+        for work_idx in 1..unsafe { self.ctrl.a.0.slots() } {
+            let rk: &u64 = unsafe { &(*self.ctrl.a).1[work_idx] };
             // Eq not ok as we have buckets.
             if lk >= rk {
                 // println!("{:?}", self);
@@ -925,7 +924,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Debug for Leaf<K, V> {
         write!(f, " nid: {}", self.nid)?;
         write!(f, "  \\-> [ ")?;
         for idx in 0..self.slots() {
-            write!(f, "{:?}, ", self.key[idx])?;
+            write!(f, "{:?}, ", unsafe { self.ctrl.a.1[idx] })?;
             write!(f, "[")?;
             for d in unsafe { (*self.values[idx].as_ptr()).as_slice().iter() } {
                 write!(f, "{:?}, ", d.k)?;
@@ -948,8 +947,10 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Drop for Leaf<K, V> {
             }
         }
         // Done
-        self.meta.0 = FLAG_DROPPED;
-        debug_assert!(self.meta.0 & FLAG_MASK != FLAG_HASH_LEAF);
+        unsafe {
+            (*self.ctrl.a).0 .0 = FLAG_DROPPED;
+        }
+        debug_assert!(unsafe { self.ctrl.a.0 .0 } & FLAG_MASK != FLAG_HASH_LEAF);
         // #[cfg(test)]
         // println!("set leaf {:?} to {:x}", self.nid, self.meta.0);
     }
@@ -960,31 +961,31 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
     #[allow(unused)]
     fn set_slots(&mut self, c: usize) {
         debug_assert_branch!(self);
-        self.meta.set_slots(c)
+        unsafe { (*self.ctrl.a).0.set_slots(c) }
     }
 
     #[inline(always)]
     pub(crate) fn slots(&self) -> usize {
         debug_assert_branch!(self);
-        self.meta.slots()
+        unsafe { self.ctrl.a.0.slots() }
     }
 
     #[inline(always)]
     fn inc_slots(&mut self) {
         debug_assert_branch!(self);
-        self.meta.inc_slots()
+        unsafe { (*self.ctrl.a).0.inc_slots() }
     }
 
     #[inline(always)]
     fn dec_slots(&mut self) {
         debug_assert_branch!(self);
-        self.meta.dec_slots()
+        unsafe { (*self.ctrl.a).0.dec_slots() }
     }
 
     #[inline(always)]
     pub(crate) fn get_txid(&self) -> u64 {
         debug_assert_branch!(self);
-        self.meta.get_txid()
+        unsafe { self.ctrl.a.0.get_txid() }
     }
 
     // Can't inline as this is recursive!
@@ -1009,20 +1010,23 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         } else {
             // println!("Req clone branch");
             // Diff txn, must clone.
-            let new_txid = (self.meta.0 & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF);
+            let new_txid =
+                (unsafe { self.ctrl.a.0 .0 } & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF);
 
-            let x: Box<CachePadded<BranchSimd<K, V>>> = Box::new(CachePadded::new(BranchSimd {
+            let x: Box<CachePadded<Branch<K, V>>> = Box::new(CachePadded::new(Branch {
                 // This sets the default (key) slots to 1, since we take an l/r
-                ctrl: u64x8::new(
-                    new_txid,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                ),
+                ctrl: Ctrl {
+                    simd: ManuallyDrop::new(u64x8::new(
+                        new_txid,
+                        u64::MAX,
+                        u64::MAX,
+                        u64::MAX,
+                        u64::MAX,
+                        u64::MAX,
+                        u64::MAX,
+                        u64::MAX,
+                    )),
+                },
                 #[cfg(all(test, not(miri)))]
                 poison: FLAG_POISON,
                 // Can clone the node pointers.
@@ -1036,8 +1040,8 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
             // Dup the keys
             unsafe {
                 ptr::copy_nonoverlapping(
-                    &self.key as *const u64,
-                    (*xr).key.as_mut_ptr(),
+                    &self.ctrl.a.1 as *const u64,
+                    (*(*xr).ctrl.a).1.as_mut_ptr(),
                     H_CAPACITY,
                 )
             }
@@ -1114,8 +1118,9 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 H_CAPACITY => {
                     // println!("case 1");
                     // Greater than all current values, so we'll just return max and node.
-                    self.key[H_CAPACITY - 1] = u64::MAX;
-                    // Now setup the ret val NOTICE compared to case 2 that we swap node and max?
+                    unsafe {
+                        (*self.ctrl.a).1[H_CAPACITY - 1] = u64::MAX;
+                    } // Now setup the ret val NOTICE compared to case 2 that we swap node and max?
                     BranchInsertState::Split(max, node)
                 }
                 // Case 2
@@ -1123,7 +1128,9 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                     // println!("case 2");
                     // Greater than all but max, so we return max and node in the correct order.
                     // Drop the key between them.
-                    self.key[H_CAPACITY - 1] = u64::MAX;
+                    unsafe {
+                        (*self.ctrl.a).1[H_CAPACITY - 1] = u64::MAX;
+                    }
                     // Now setup the ret val NOTICE compared to case 1 that we swap node and max?
                     BranchInsertState::Split(node, max)
                 }
@@ -1131,14 +1138,16 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 ins_idx => {
                     // Get the max - 1 and max nodes out.
                     let maxn1 = unsafe { *(self.nodes.get_unchecked(HBV_CAPACITY - 2)) };
-                    // Drop the key between them.
-                    self.key[H_CAPACITY - 1] = u64::MAX;
-                    // Drop the key before us that we are about to replace.
-                    self.key[H_CAPACITY - 2] = u64::MAX;
+                    unsafe {
+                        // Drop the key between them.
+                        (*self.ctrl.a).1[H_CAPACITY - 1] = u64::MAX;
+                        // Drop the key before us that we are about to replace.
+                        (*self.ctrl.a).1[H_CAPACITY - 2] = u64::MAX;
+                    }
                     // Add node and it's key to the correct location.
                     let leaf_ins_idx = ins_idx + 1;
                     unsafe {
-                        slice_insert(&mut self.key, kr, ins_idx);
+                        slice_insert(&mut (*self.ctrl.a).1, kr, ins_idx);
                         slice_insert(&mut self.nodes, node, leaf_ins_idx);
                     }
                     #[cfg(all(test, not(miri)))]
@@ -1226,7 +1235,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
             //
             // Magic!
             unsafe {
-                slice_insert(&mut self.key, k, ins_idx);
+                slice_insert(&mut (*self.ctrl.a).1, k, ins_idx);
                 slice_insert(&mut self.nodes, node, leaf_ins_idx);
             }
 
@@ -1261,7 +1270,9 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 //
                 // So in this case we drop k6, and return a split.
                 let max = self.nodes[HBV_CAPACITY - 1];
-                self.key[H_CAPACITY - 1] = u64::MAX;
+                unsafe {
+                    (*self.ctrl.a).1[H_CAPACITY - 1] = u64::MAX;
+                }
                 self.dec_slots();
                 BranchInsertState::Split(lnode, max)
             } else if sibidx == (self.slots() - 1) {
@@ -1279,8 +1290,10 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 // just append node after v5.
                 let maxn1 = self.nodes[HBV_CAPACITY - 2];
                 let max = self.nodes[HBV_CAPACITY - 1];
-                self.key[H_CAPACITY - 1] = u64::MAX;
-                self.key[H_CAPACITY - 2] = u64::MAX;
+                unsafe {
+                    (*self.ctrl.a).1[H_CAPACITY - 1] = u64::MAX;
+                    (*self.ctrl.a).1[H_CAPACITY - 2] = u64::MAX;
+                }
                 self.dec_slots();
                 self.dec_slots();
                 //    [   k1, k2, k3, k4, dd, xx   ]    [   k6   ]
@@ -1288,7 +1301,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 let h: u64 = unsafe { (*lnode).min() };
 
                 unsafe {
-                    slice_insert(&mut self.key, h, sibidx - 1);
+                    slice_insert(&mut (*self.ctrl.a).1, h, sibidx - 1);
                     slice_insert(&mut self.nodes, lnode, sibidx);
                     // slice_insert(&mut self.node, MaybeUninit::new(node), sibidx);
                 }
@@ -1319,8 +1332,10 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 // Setup the nodes we intend to split away.
                 let maxn1 = self.nodes[HBV_CAPACITY - 2];
                 let max = self.nodes[HBV_CAPACITY - 1];
-                self.key[H_CAPACITY - 1] = u64::MAX;
-                self.key[H_CAPACITY - 2] = u64::MAX;
+                unsafe {
+                    (*self.ctrl.a).1[H_CAPACITY - 1] = u64::MAX;
+                    (*self.ctrl.a).1[H_CAPACITY - 2] = u64::MAX;
+                }
                 self.dec_slots();
                 self.dec_slots();
 
@@ -1330,7 +1345,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 let nkey: u64 = unsafe { (*sibnode).min() };
 
                 unsafe {
-                    slice_insert(&mut self.key, nkey, sibidx);
+                    slice_insert(&mut (*self.ctrl.a).1, nkey, sibidx);
                     slice_insert(&mut self.nodes, lnode, sibidx);
                 }
                 #[cfg(all(test, not(miri)))]
@@ -1360,7 +1375,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
 
             unsafe {
                 slice_insert(&mut self.nodes, lnode, sibidx);
-                slice_insert(&mut self.key, nkey, sibidx);
+                slice_insert(&mut (*self.ctrl.a).1, nkey, sibidx);
             }
             #[cfg(all(test, not(miri)))]
             debug_assert!(self.poison == FLAG_POISON);
@@ -1376,9 +1391,11 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         debug_assert!(idx <= self.slots());
         debug_assert!(idx > 0);
         // remove by idx.
-        let _pk = unsafe { slice_remove(&mut self.key, idx - 1) };
+        let _pk = unsafe { slice_remove(&mut (*self.ctrl.a).1, idx - 1) };
         // AFTER the remove, set the top value to u64::MAX
-        self.key[H_CAPACITY - 1] = u64::MAX;
+        unsafe {
+            (*self.ctrl.a).1[H_CAPACITY - 1] = u64::MAX;
+        }
         let pn = unsafe { slice_remove(&mut self.nodes, idx) };
         self.dec_slots();
         pn
@@ -1445,7 +1462,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         debug_assert!(!left.is_null());
         debug_assert!(!right.is_null());
 
-        match unsafe { (*left).meta.0 & FLAG_MASK } {
+        match unsafe { (*left).ctrl.a.0 .0 & FLAG_MASK } {
             FLAG_HASH_LEAF => {
                 let lmut = leaf_ref!(left, K, V);
                 let rmut = leaf_ref!(right, K, V);
@@ -1536,7 +1553,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         debug_assert!(idx > 0);
         // For the node listed, rekey it.
         let nref = self.nodes[idx];
-        self.key[idx - 1] = unsafe { (*nref).min() };
+        unsafe { (*self.ctrl.a).1[idx - 1] = (*nref).min() };
     }
 
     #[inline(always)]
@@ -1552,7 +1569,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
             let ins_idx = self.slots();
             let leaf_ins_idx = ins_idx + 1;
             unsafe {
-                slice_insert(&mut self.key, h, ins_idx);
+                slice_insert(&mut (*self.ctrl.a).1, h, ins_idx);
                 slice_insert(&mut self.nodes, node, leaf_ins_idx);
             }
             #[cfg(all(test, not(miri)))]
@@ -1564,19 +1581,23 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 // Move all the nodes from right.
                 slice_merge(&mut self.nodes, 1, &mut right.nodes, rc + 1);
                 // Move the related keys.
-                slice_merge(&mut self.key, 1, &mut right.key, rc);
+                slice_merge(&mut (*self.ctrl.a).1, 1, &mut (*right.ctrl.a).1, rc);
             }
             #[cfg(all(test, not(miri)))]
             debug_assert!(self.poison == FLAG_POISON);
             // Set our slots correctly.
-            self.meta.set_slots(rc + 1);
+            unsafe {
+                (*self.ctrl.a).0.set_slots(rc + 1);
+            }
             // Set right len to 0
-            right.meta.set_slots(0);
+            unsafe {
+                (*right.ctrl.a).0.set_slots(0);
+            }
             // rekey the lowest pointer.
             unsafe {
                 let nptr = self.nodes[1];
                 let h: u64 = (*nptr).min();
-                self.key[0] = h;
+                (*self.ctrl.a).1[0] = h;
             }
             // done!
         }
@@ -1632,7 +1653,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         //
         // This means it's start_idx - 1 up to BK cap
         unsafe {
-            let tgt_ptr = self.key.as_mut_ptr().add(start_idx);
+            let tgt_ptr = (*self.ctrl.a).1.as_mut_ptr().add(start_idx);
             // https://doc.rust-lang.org/std/ptr/fn.write_bytes.html
             // Sets count * size_of::<T>() bytes of memory starting at dst to val.
             ptr::write_bytes::<u64>(tgt_ptr, 0xff, H_CAPACITY - start_idx);
@@ -1640,8 +1661,12 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
 
         // Adjust both slotss - we do this before rekey to ensure that the safety
         // checks hold in debugging.
-        right.meta.set_slots(slots);
-        self.meta.set_slots(start_idx);
+        unsafe {
+            (*right.ctrl.a).0.set_slots(slots);
+        }
+        unsafe {
+            (*self.ctrl.a).0.set_slots(start_idx);
+        }
         // Rekey right
         for kidx in 1..(slots + 1) {
             right.rekey_by_idx(kidx);
@@ -1671,8 +1696,8 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         // move keys down in right
         unsafe {
             ptr::copy(
-                right.key.as_ptr().add(slots),
-                right.key.as_mut_ptr(),
+                right.ctrl.a.1.as_ptr().add(slots),
+                (*right.ctrl.a).1.as_mut_ptr(),
                 start_idx,
             );
         }
@@ -1684,7 +1709,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         }
         */
         unsafe {
-            let tgt_ptr = right.key.as_mut_ptr().add(start_idx);
+            let tgt_ptr = (*right.ctrl.a).1.as_mut_ptr().add(start_idx);
             // https://doc.rust-lang.org/std/ptr/fn.write_bytes.html
             // Sets count * size_of::<T>() bytes of memory starting at dst to val.
             ptr::write_bytes::<u64>(tgt_ptr, 0xff, H_CAPACITY - start_idx);
@@ -1702,8 +1727,12 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         }
 
         // update slotss
-        right.meta.set_slots(start_idx);
-        self.meta.set_slots(slots);
+        unsafe {
+            (*right.ctrl.a).0.set_slots(start_idx);
+        }
+        unsafe {
+            (*self.ctrl.a).0.set_slots(slots);
+        }
         // Rekey left
         for kidx in 1..(slots + 1) {
             self.rekey_by_idx(kidx);
@@ -1746,7 +1775,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         let sib_ptr = self.nodes[idx];
         debug_assert!(!sib_ptr.is_null());
         // Do we need to clone?
-        let res = match unsafe { (*sib_ptr).meta.0 & FLAG_MASK } {
+        let res = match unsafe { (*sib_ptr).ctrl.a.0 .0 } & FLAG_MASK {
             FLAG_HASH_LEAF => {
                 let lref = unsafe { &*(sib_ptr as *const _ as *const Leaf<K, V>) };
                 lref.req_clone(txid)
@@ -1901,16 +1930,16 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         }
         // println!("verify branch -> {:?}", self);
         // Check everything above slots is u64::max
-        for work_idx in self.meta.slots()..H_CAPACITY {
-            if self.key[work_idx] != u64::MAX {
-                eprintln!("FAILED ARRAY -> {:?}", self.key);
+        for work_idx in unsafe { self.ctrl.a.0.slots() }..H_CAPACITY {
+            if unsafe { self.ctrl.a.1[work_idx] } != u64::MAX {
+                eprintln!("FAILED ARRAY -> {:?}", unsafe { self.ctrl.a.1 });
                 debug_assert!(false);
             }
         }
         // Check we are sorted.
-        let mut lk: u64 = self.key[0];
+        let mut lk: u64 = unsafe { self.ctrl.a.1[0] };
         for work_idx in 1..self.slots() {
-            let rk: u64 = self.key[work_idx];
+            let rk: u64 = unsafe { self.ctrl.a.1[work_idx] };
             // println!("{:?} >= {:?}", lk, rk);
             if lk >= rk {
                 debug_assert!(false);
@@ -1939,7 +1968,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
             let lnode = unsafe { &*self.nodes[work_idx] };
             let rnode = unsafe { &*self.nodes[work_idx + 1] };
 
-            let pkey = self.key[work_idx];
+            let pkey = unsafe { self.ctrl.a.1[work_idx] };
             let lkey: u64 = lnode.max();
             let rkey: u64 = rnode.min();
             if lkey >= pkey || pkey > rkey {
@@ -1976,7 +2005,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Debug for Branch<K, V> {
         write!(f, " nid: {}", self.nid)?;
         write!(f, "  \\-> [ ")?;
         for idx in 0..self.slots() {
-            write!(f, "{:?}, ", self.key[idx])?;
+            write!(f, "{:?}, ", unsafe { self.ctrl.a.1[idx] })?;
         }
         write!(f, " ]")
     }
@@ -1988,8 +2017,10 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Drop for Branch<K, V> {
         #[cfg(all(test, not(miri)))]
         release_nid(self.nid);
         // Done
-        self.meta.0 = FLAG_DROPPED;
-        debug_assert!(self.meta.0 & FLAG_MASK != FLAG_HASH_BRANCH);
+        unsafe {
+            (*self.ctrl.a).0 .0 = FLAG_DROPPED;
+        }
+        debug_assert!(unsafe { self.ctrl.a.0 .0 } & FLAG_MASK != FLAG_HASH_BRANCH);
         // println!("set branch {:?} to {:x}", self.nid, self.meta.0);
     }
 }

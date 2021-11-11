@@ -5,8 +5,6 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use super::node::{Branch, Leaf};
-#[cfg(feature = "simd_support")]
-use super::node::{BranchSimd, LeafSimd};
 
 pub(crate) enum KeyLoc {
     Ok(usize, usize),
@@ -32,13 +30,13 @@ where
 {
     debug_assert!(h < u64::MAX);
     for i in 0..branch.slots() {
-        if h == branch.key[i] {
+        if h == unsafe { branch.ctrl.a.1[i] } {
             return Ok(i);
         }
     }
 
     for i in 0..branch.slots() {
-        if h < branch.key[i] {
+        if h < unsafe { branch.ctrl.a.1[i] } {
             return Err(i);
         }
     }
@@ -52,11 +50,10 @@ where
     V: Clone,
 {
     debug_assert!(h < u64::MAX);
-    let branch_simd = unsafe { &*(branch as *const Branch<K, V> as *const BranchSimd<K, V>) };
 
     debug_assert!({
         let want = u64x8::splat(u64::MAX);
-        let r1 = want.eq(branch_simd.ctrl);
+        let r1 = want.eq(unsafe { *branch.ctrl.simd });
         let mask = r1.bitmask() & 0b1111_1110;
 
         match (mask, branch.slots()) {
@@ -77,7 +74,7 @@ where
     });
 
     let want = u64x8::splat(h);
-    let r1 = want.eq(branch_simd.ctrl);
+    let r1 = want.eq(unsafe { *branch.ctrl.simd });
 
     let mask = r1.bitmask() & 0b1111_1110;
 
@@ -94,7 +91,7 @@ where
         _ => unreachable!(),
     };
 
-    let r2 = want.lt(branch_simd.ctrl);
+    let r2 = want.lt(unsafe { *branch.ctrl.simd });
     let mask = r2.bitmask() & 0b1111_1110;
 
     match mask {
@@ -120,7 +117,7 @@ where
     debug_assert!(h < u64::MAX);
 
     for cand_idx in 0..leaf.slots() {
-        if h == leaf.key[cand_idx] {
+        if h == unsafe { leaf.ctrl.a.1[cand_idx] } {
             return Some(cand_idx);
         }
     }
@@ -136,11 +133,10 @@ where
 {
     // This is an important piece of logic!
     debug_assert!(h < u64::MAX);
-    let leaf_simd = unsafe { &*(leaf as *const Leaf<K, V> as *const LeafSimd<K, V>) };
 
     debug_assert!({
         let want = u64x8::splat(u64::MAX);
-        let r1 = want.eq(leaf_simd.ctrl);
+        let r1 = want.eq(unsafe { *leaf.ctrl.simd });
         let mask = r1.bitmask() & 0b1111_1110;
 
         match (mask, leaf.slots()) {
@@ -157,10 +153,10 @@ where
     });
 
     let want = u64x8::splat(h);
-    let r1 = want.eq(leaf_simd.ctrl);
+    let r1 = want.eq(unsafe { *leaf.ctrl.simd });
 
     // println!("want: {:?}", want);
-    // println!("ctrl: {:?}", leaf_simd.ctrl);
+    // println!("ctrl: {:?}", unsafe { *leaf.ctrl.simd });
 
     // Always discard the meta field
     let mask = r1.bitmask() & 0b1111_1110;
@@ -194,7 +190,7 @@ where
     debug_assert!(h < u64::MAX);
 
     for cand_idx in 0..leaf.slots() {
-        if h == leaf.key[cand_idx] {
+        if h == unsafe { leaf.ctrl.a.1[cand_idx] } {
             let bucket = unsafe { (*leaf.values[cand_idx].as_ptr()).as_slice() };
             for (i, d) in bucket.iter().enumerate() {
                 if k.eq(d.k.borrow()) {
@@ -207,7 +203,7 @@ where
     }
 
     for i in 0..leaf.slots() {
-        if h < leaf.key[i] {
+        if h < unsafe { leaf.ctrl.a.1[i] } {
             return KeyLoc::Missing(i);
         }
     }
@@ -223,11 +219,10 @@ where
 {
     // This is an important piece of logic!
     debug_assert!(h < u64::MAX);
-    let leaf_simd = unsafe { &*(leaf as *const Leaf<K, V> as *const LeafSimd<K, V>) };
 
     debug_assert!({
         let want = u64x8::splat(u64::MAX);
-        let r1 = want.eq(leaf_simd.ctrl);
+        let r1 = want.eq(unsafe { *leaf.ctrl.simd });
         let mask = r1.bitmask() & 0b1111_1110;
 
         match (mask, leaf.slots()) {
@@ -244,10 +239,10 @@ where
     });
 
     let want = u64x8::splat(h);
-    let r1 = want.eq(leaf_simd.ctrl);
+    let r1 = want.eq(unsafe { *leaf.ctrl.simd });
 
     // println!("want: {:?}", want);
-    // println!("ctrl: {:?}", leaf_simd.ctrl);
+    // println!("ctrl: {:?}", unsafe { *leaf.ctrl.simd });
 
     // Always discard the meta field
     let mask = r1.bitmask() & 0b1111_1110;
@@ -268,7 +263,7 @@ where
         };
 
         // Search in the bucket. Generally this is inlined and one element.
-        let bucket = unsafe { (*leaf_simd.values[cand_idx].as_ptr()).as_slice() };
+        let bucket = unsafe { (*leaf.values[cand_idx].as_ptr()).as_slice() };
         for (i, d) in bucket.iter().enumerate() {
             if k.eq(d.k.borrow()) {
                 return KeyLoc::Ok(cand_idx, i);
@@ -278,7 +273,7 @@ where
         return KeyLoc::Collision(cand_idx);
     }
 
-    let r2 = want.lt(leaf_simd.ctrl);
+    let r2 = want.lt(unsafe { *leaf.ctrl.simd });
     // Always discard the meta field
     let mask = r2.bitmask() & 0b1111_1110;
     // println!("res lt: 0b{:b}", mask);
