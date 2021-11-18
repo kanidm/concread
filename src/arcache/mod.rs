@@ -189,6 +189,14 @@ where
     watermark: usize,
 }
 
+/// A configurable builder to create new concurrent Adaptive Replacement Caches.
+pub struct ARCacheBuilder {
+    stats: Option<CacheStats>,
+    max: Option<usize>,
+    read_max: Option<usize>,
+    watermark: Option<usize>,
+}
+
 /// A concurrently readable adaptive replacement cache. Operations are performed on the
 /// cache via read and write operations.
 pub struct ARCache<K, V>
@@ -468,12 +476,24 @@ macro_rules! evict_to_haunted_len {
     }};
 }
 
-impl<
-        K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
-        V: Clone + Debug + Sync + Send + 'static,
-    > ARCache<K, V>
-{
-    /// Create a new ARCache, that derives it's size based on your expected workload.
+impl Default for ARCacheBuilder {
+    fn default() -> Self {
+        ARCacheBuilder {
+            stats: None,
+            max: None,
+            read_max: None,
+            watermark: None,
+        }
+    }
+}
+
+impl ARCacheBuilder {
+    /// Create a new ARCache builder that you can configure before creation.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Configure a new ARCache, that derives it's size based on your expected workload.
     ///
     /// The values are total number of items you want to have in memory, the number
     /// of read threads you expect concurrently, the expected average number of cache
@@ -491,7 +511,8 @@ impl<
     ///
     /// If you set ex_ro_miss to zero, no read thread local cache will be configured, but
     /// space will still be reserved for channel communication.
-    pub fn new(
+    pub fn set_expected_workload(
+        self,
         total: usize,
         threads: usize,
         ex_ro_miss: usize,
@@ -510,51 +531,67 @@ impl<
         let max = usize::try_from(max).unwrap();
         let read_max = usize::try_from(read_max).unwrap();
 
-        Self::new_size(max, read_max)
+        ARCacheBuilder {
+            stats: self.stats,
+            max: Some(max),
+            read_max: Some(read_max),
+            watermark: self.watermark,
+        }
     }
 
-    /// Create a new ARCache, with a capacity of `max` main cache items and `read_max`
+    /// Configure a new ARCache, with a capacity of `max` main cache items and `read_max`
     /// Note that due to the way the cache operates, the number of items can and
-    /// will exceed `max` on a regular basis, so you should consider using `new`
+    /// will exceed `max` on a regular basis, so you should consider using `set_expected_workload`
     /// and specifying your expected workload parameters to have a better derived
     /// cache size.
-    pub fn new_size(max: usize, read_max: usize) -> Self {
-        // Based on max, what should our watermark be?
-        let watermark = if max < 128 { 0 } else { (max / 20) * 16 };
-        Self::new_size_watermark(max, read_max, watermark)
+    pub fn set_size(self, max: usize, read_max: usize) -> Self {
+        ARCacheBuilder {
+            stats: self.stats,
+            max: Some(max),
+            read_max: Some(read_max),
+            watermark: self.watermark,
+        }
     }
 
     /// See [new_size] for more information. This allows manual configuration of the data
-    /// tracking watermark. To disable this, set to 0. Watermark must be less than max.
-    pub fn new_size_watermark(max: usize, read_max: usize, watermark: usize) -> Self {
-        assert!(max > 0);
-        assert!(watermark <= max);
+    /// tracking watermark. To disable this, set to 0. If watermark is greater than
+    /// max, it will be clamped to max.
+    pub fn set_watermark(self, watermark: usize) -> Self {
+        ARCacheBuilder {
+            stats: self.stats,
+            max: self.max,
+            read_max: self.read_max,
+            watermark: Some(watermark),
+        }
+    }
 
-        // for now we set the back pressure to 10% of max.
-        let chan_size = max / 10;
-        let chan_size = if chan_size < 16 { 16 } else { chan_size };
+    /// Import read/write hit stats from a previous execution of this cache.
+    pub fn set_stats(self, stats: CacheStats) -> Self {
+        ARCacheBuilder {
+            stats: Some(stats),
+            max: self.max,
+            read_max: self.read_max,
+            watermark: self.watermark,
+        }
+    }
 
-        // let (tx, rx) = bounded(chan_size);
-        let queue = Arc::new(ArrayQueue::new(chan_size));
-        let shared = RwLock::new(ArcShared {
+    /// Consume this builder, returning a cache if successful. If configured parameters are
+    /// missing or incorrect, a None will be returned.
+    pub fn build<K, V>(self) -> Option<ARCache<K, V>>
+    where
+        K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Debug + Sync + Send + 'static,
+    {
+        let ARCacheBuilder {
+            stats,
             max,
             read_max,
-            // tx,
-            queue: queue.clone(),
             watermark,
-        });
-        let inner = Mutex::new(ArcInner {
-            p: 0,
-            freq: LL::new(),
-            rec: LL::new(),
-            ghost_freq: LL::new(),
-            ghost_rec: LL::new(),
-            haunted: LL::new(),
-            // rx,
-            queue,
-            min_txid: 0,
-        });
-        let stats = CowCell::new(CacheStats {
+        } = self;
+
+        let (max, read_max) = max.zip(read_max)?;
+
+        let mut stats = stats.unwrap_or_else(|| CacheStats {
             reader_hits: 0,
             reader_tlocal_hits: 0,
             reader_includes: 0,
@@ -568,13 +605,92 @@ impl<
             p_weight: 0,
             all_seen_keys: 0,
         });
-        ARCache {
+
+        // Reset some values to 0 because else it doesn't really max sense ...
+        stats.shared_max = 0;
+        stats.freq = 0;
+        stats.recent = 0;
+        stats.all_seen_keys = 0;
+
+        // Ensure that p isn't too large. Could happen if the cache size was reduced from
+        // a previous stats invocation.
+        stats.p_weight = stats.p_weight.clamp(0, max);
+
+        let watermark = watermark.unwrap_or_else(|| if max < 128 { 0 } else { (max / 20) * 16 });
+        let watermark = watermark.clamp(0, max);
+
+        let chan_size = max / 10;
+        let chan_size = if chan_size < 16 { 16 } else { chan_size };
+
+        // let (tx, rx) = bounded(chan_size);
+        let queue = Arc::new(ArrayQueue::new(chan_size));
+        let shared = RwLock::new(ArcShared {
+            max,
+            read_max,
+            // tx,
+            queue: queue.clone(),
+            watermark,
+        });
+        let inner = Mutex::new(ArcInner {
+            // We use p from the former stats.
+            p: stats.p_weight,
+            freq: LL::new(),
+            rec: LL::new(),
+            ghost_freq: LL::new(),
+            ghost_rec: LL::new(),
+            haunted: LL::new(),
+            // rx,
+            queue,
+            min_txid: 0,
+        });
+
+        Some(ARCache {
             cache: HashMap::new(),
             shared,
             inner,
-            stats,
+            stats: CowCell::new(stats),
             above_watermark: AtomicBool::new(true),
-        }
+        })
+    }
+}
+
+impl<
+        K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Debug + Sync + Send + 'static,
+    > ARCache<K, V>
+{
+    /// Use ARCacheBuilder instead
+    #[deprecated(since = "0.2.20", note = "please use`ARCacheBuilder` instead")]
+    pub fn new(
+        total: usize,
+        threads: usize,
+        ex_ro_miss: usize,
+        ex_rw_miss: usize,
+        read_cache: bool,
+    ) -> Self {
+        ARCacheBuilder::default()
+            .set_expected_workload(total, threads, ex_ro_miss, ex_rw_miss, read_cache)
+            .build()
+            .expect("Invaled cache parameters!")
+    }
+
+    /// Use ARCacheBuilder instead
+    #[deprecated(since = "0.2.20", note = "please use`ARCacheBuilder` instead")]
+    pub fn new_size(max: usize, read_max: usize) -> Self {
+        ARCacheBuilder::default()
+            .set_size(max, read_max)
+            .build()
+            .expect("Invaled cache parameters!")
+    }
+
+    /// Use ARCacheBuilder instead
+    #[deprecated(since = "0.2.20", note = "please use`ARCacheBuilder` instead")]
+    pub fn new_size_watermark(max: usize, read_max: usize, watermark: usize) -> Self {
+        ARCacheBuilder::default()
+            .set_size(max, read_max)
+            .set_watermark(watermark)
+            .build()
+            .expect("Invaled cache parameters!")
     }
 
     /// Begin a read operation on the cache. This reader has a thread-local cache for items
@@ -1749,12 +1865,16 @@ impl<
 #[cfg(test)]
 mod tests {
     use crate::arcache::ARCache as Arc;
+    use crate::arcache::ARCacheBuilder;
     use crate::arcache::CStat;
     use crate::arcache::CacheState;
 
     #[test]
     fn test_cache_arc_basic() {
-        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
+        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+            .set_size(4, 4)
+            .build()
+            .expect("Invaled cache parameters!");
         let mut wr_txn = arc.write();
 
         assert!(wr_txn.get(&1) == None);
@@ -1780,7 +1900,10 @@ mod tests {
     #[test]
     fn test_cache_evict() {
         println!("== 1");
-        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
+        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+            .set_size(4, 4)
+            .build()
+            .expect("Invaled cache parameters!");
         let mut wr_txn = arc.write();
         assert!(
             CStat {
@@ -2038,7 +2161,10 @@ mod tests {
         // Now we want to check some basic interactions of read and write together.
 
         // Setup the cache.
-        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
+        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+            .set_size(4, 4)
+            .build()
+            .expect("Invaled cache parameters!");
         // start a rd
         {
             let mut rd_txn = arc.read();
@@ -2158,7 +2284,10 @@ mod tests {
         // so that all keys and their eviction ids are always tracked for all of time
         // to ensure that we never incorrectly include a value that may have been updated
         // more recently.
-        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
+        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+            .set_size(4, 4)
+            .build()
+            .expect("Invaled cache parameters!");
 
         // Start a wr
         let mut wr_txn = arc.write();
@@ -2210,7 +2339,10 @@ mod tests {
 
     #[test]
     fn test_cache_clear() {
-        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
+        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+            .set_size(4, 4)
+            .build()
+            .expect("Invaled cache parameters!");
 
         // Start a wr
         let mut wr_txn = arc.write();
@@ -2280,7 +2412,10 @@ mod tests {
 
     #[test]
     fn test_cache_clear_rollback() {
-        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
+        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+            .set_size(4, 4)
+            .build()
+            .expect("Invaled cache parameters!");
 
         // Start a wr
         let mut wr_txn = arc.write();
@@ -2346,7 +2481,10 @@ mod tests {
 
     #[test]
     fn test_cache_clear_cursed() {
-        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
+        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+            .set_size(4, 4)
+            .build()
+            .expect("Invaled cache parameters!");
         // Setup for the test
         // --
         let mut wr_txn = arc.write();
@@ -2386,7 +2524,10 @@ mod tests {
 
     #[test]
     fn test_cache_dirty_write() {
-        let arc: Arc<usize, usize> = Arc::new_size(4, 4);
+        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+            .set_size(4, 4)
+            .build()
+            .expect("Invaled cache parameters!");
         let mut wr_txn = arc.write();
         wr_txn.insert_dirty(10, 1);
         wr_txn.iter_mut_mark_clean().for_each(|(_k, _v)| {});
@@ -2397,7 +2538,10 @@ mod tests {
     fn test_cache_read_no_tlocal() {
         // Check a cache with no read local thread capacity
         // Setup the cache.
-        let arc: Arc<usize, usize> = Arc::new_size(4, 0);
+        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+            .set_size(4, 0)
+            .build()
+            .expect("Invaled cache parameters!");
         // start a rd
         {
             let mut rd_txn = arc.read();
@@ -2443,7 +2587,10 @@ mod tests {
 
     #[test]
     fn test_cache_weighted() {
-        let arc: Arc<usize, Weighted> = Arc::new_size(4, 0);
+        let arc: Arc<usize, Weighted> = ARCacheBuilder::default()
+            .set_size(4, 0)
+            .build()
+            .expect("Invaled cache parameters!");
         let mut wr_txn = arc.write();
 
         assert!(
@@ -2541,5 +2688,30 @@ mod tests {
 
         let stats = arc.view_stats();
         println!("{:?}", *stats);
+    }
+
+    #[test]
+    fn test_cache_stats_reload() {
+        // Make a cache
+        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+            .set_size(4, 0)
+            .build()
+            .expect("Invaled cache parameters!");
+        let mut wr_txn = arc.write();
+        wr_txn.insert(1, 1);
+        wr_txn.commit();
+
+        let stats = arc.view_stats();
+        println!("{:?}", *stats);
+
+        let arc2: Arc<usize, usize> = ARCacheBuilder::default()
+            .set_size(4, 0)
+            .set_stats((*stats).clone())
+            .build()
+            .expect("Failed to build");
+
+        let stats2 = arc2.view_stats();
+        println!("{:?}", *stats2);
+        assert!(stats.write_inc_or_mod == stats2.write_inc_or_mod);
     }
 }
