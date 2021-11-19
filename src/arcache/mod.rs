@@ -611,10 +611,14 @@ impl ARCacheBuilder {
         stats.freq = 0;
         stats.recent = 0;
         stats.all_seen_keys = 0;
+        stats.p_weight = 0;
 
         // Ensure that p isn't too large. Could happen if the cache size was reduced from
         // a previous stats invocation.
-        stats.p_weight = stats.p_weight.clamp(0, max);
+        //
+        // NOTE: I decided not to port this over, because it may cause issues in early cache start
+        // up when the lists are empty.
+        // stats.p_weight = stats.p_weight.clamp(0, max);
 
         let watermark = watermark.unwrap_or_else(|| if max < 128 { 0 } else { (max / 20) * 16 });
         let watermark = watermark.clamp(0, max);
@@ -633,7 +637,7 @@ impl ARCacheBuilder {
         });
         let inner = Mutex::new(ArcInner {
             // We use p from the former stats.
-            p: stats.p_weight,
+            p: 0,
             freq: LL::new(),
             rec: LL::new(),
             ghost_freq: LL::new(),
