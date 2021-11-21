@@ -565,17 +565,16 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             })
     }
 
-    pub(crate) fn get_slot_mut_ref<Q: ?Sized>(
-        &mut self,
-        h: u64,
-    ) -> Option<&mut [Datum<K, V>]>
+    pub(crate) fn get_slot_mut_ref<Q: ?Sized>(&mut self, h: u64) -> Option<&mut [Datum<K, V>]>
     where
         K: Borrow<Q>,
         Q: Eq,
     {
         debug_assert_leaf!(self);
-        unsafe { leaf_simd_get_slot(self, h)
-            .map(|slot_idx| (*self.values[slot_idx].as_mut_ptr()).as_mut_slice()) }
+        unsafe {
+            leaf_simd_get_slot(self, h)
+                .map(|slot_idx| (*self.values[slot_idx].as_mut_ptr()).as_mut_slice())
+        }
     }
 
     #[inline(always)]
