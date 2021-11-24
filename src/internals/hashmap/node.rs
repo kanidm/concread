@@ -49,13 +49,9 @@ pub struct u64x8 {
 
 #[cfg(not(feature = "simd_support"))]
 impl u64x8 {
-    #[allow(clippy::many_single_char_names)]
-    #[allow(clippy::too_many_arguments)]
     #[inline(always)]
-    fn new(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64) -> Self {
-        Self {
-            _data: [a, b, c, d, e, f, g, h],
-        }
+    fn from_array(data: [u64; 8]) -> Self {
+        Self { _data: data }
     }
 }
 

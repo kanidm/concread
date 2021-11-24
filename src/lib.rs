@@ -27,8 +27,7 @@
 #![warn(unused_extern_crates)]
 #![warn(missing_docs)]
 #![allow(clippy::needless_lifetimes)]
-#![cfg(feature = "simd_support")]
-#![feature(portable_simd)]
+#![cfg_attr(feature = "simd_support", feature(portable_simd))]
 
 #[macro_use]
 extern crate smallvec;
