@@ -405,7 +405,7 @@ mod tests {
 
     #[derive(Debug)]
     struct TestGcWrapperReadTxn<T> {
-        data: T,
+        _data: T,
     }
 
     #[derive(Debug)]
@@ -418,7 +418,7 @@ mod tests {
     {
         fn create_reader(&self) -> TestGcWrapperReadTxn<T> {
             TestGcWrapperReadTxn {
-                data: self.data.clone(),
+                _data: self.data.clone(),
             }
         }
 
@@ -437,7 +437,7 @@ mod tests {
             self.data = new.data.clone();
             // return a new reader.
             TestGcWrapperReadTxn {
-                data: self.data.clone(),
+                _data: self.data.clone(),
             }
         }
     }
@@ -500,7 +500,7 @@ mod tests_linear {
 
     #[derive(Debug)]
     struct TestGcWrapperReadTxn<T> {
-        data: T,
+        _data: T,
     }
 
     #[derive(Debug)]
@@ -513,7 +513,7 @@ mod tests_linear {
     {
         fn create_reader(&self) -> TestGcWrapperReadTxn<T> {
             TestGcWrapperReadTxn {
-                data: self.data.clone(),
+                _data: self.data.clone(),
             }
         }
 
@@ -532,7 +532,7 @@ mod tests_linear {
             self.data = new.data.clone();
             // return a new reader.
             TestGcWrapperReadTxn {
-                data: self.data.clone(),
+                _data: self.data.clone(),
             }
         }
     }
