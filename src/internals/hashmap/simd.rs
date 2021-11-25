@@ -1,5 +1,5 @@
 #[cfg(feature = "simd_support")]
-use packed_simd::u64x8;
+use core_simd::u64x8;
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -53,8 +53,8 @@ where
 
     debug_assert!({
         let want = u64x8::splat(u64::MAX);
-        let r1 = want.eq(unsafe { *branch.ctrl.simd });
-        let mask = r1.bitmask() & 0b1111_1110;
+        let r1 = want.lanes_eq(unsafe { *branch.ctrl.simd });
+        let mask = r1.to_bitmask()[0] & 0b1111_1110;
 
         match (mask, branch.slots()) {
             (0b1111_1110, 0)
@@ -74,9 +74,9 @@ where
     });
 
     let want = u64x8::splat(h);
-    let r1 = want.eq(unsafe { *branch.ctrl.simd });
+    let r1 = want.lanes_eq(unsafe { *branch.ctrl.simd });
 
-    let mask = r1.bitmask() & 0b1111_1110;
+    let mask = r1.to_bitmask()[0] & 0b1111_1110;
 
     match mask {
         0b0000_0001 => unreachable!(),
@@ -91,8 +91,8 @@ where
         _ => unreachable!(),
     };
 
-    let r2 = want.lt(unsafe { *branch.ctrl.simd });
-    let mask = r2.bitmask() & 0b1111_1110;
+    let r2 = want.lanes_lt(unsafe { *branch.ctrl.simd });
+    let mask = r2.to_bitmask()[0] & 0b1111_1110;
 
     match mask {
         0b1111_1110 => Err(0),
@@ -136,8 +136,8 @@ where
 
     debug_assert!({
         let want = u64x8::splat(u64::MAX);
-        let r1 = want.eq(unsafe { *leaf.ctrl.simd });
-        let mask = r1.bitmask() & 0b1111_1110;
+        let r1 = want.lanes_eq(unsafe { *leaf.ctrl.simd });
+        let mask = r1.to_bitmask()[0] & 0b1111_1110;
 
         match (mask, leaf.slots()) {
             (0b1111_1110, 0)
@@ -153,13 +153,13 @@ where
     });
 
     let want = u64x8::splat(h);
-    let r1 = want.eq(unsafe { *leaf.ctrl.simd });
+    let r1 = want.lanes_eq(unsafe { *leaf.ctrl.simd });
 
     // println!("want: {:?}", want);
     // println!("ctrl: {:?}", unsafe { *leaf.ctrl.simd });
 
     // Always discard the meta field
-    let mask = r1.bitmask() & 0b1111_1110;
+    let mask = r1.to_bitmask()[0] & 0b1111_1110;
     // println!("res eq: 0b{:b}", mask);
 
     if mask != 0 {
@@ -222,8 +222,8 @@ where
 
     debug_assert!({
         let want = u64x8::splat(u64::MAX);
-        let r1 = want.eq(unsafe { *leaf.ctrl.simd });
-        let mask = r1.bitmask() & 0b1111_1110;
+        let r1 = want.lanes_eq(unsafe { *leaf.ctrl.simd });
+        let mask = r1.to_bitmask()[0] & 0b1111_1110;
 
         match (mask, leaf.slots()) {
             (0b1111_1110, 0)
@@ -239,13 +239,13 @@ where
     });
 
     let want = u64x8::splat(h);
-    let r1 = want.eq(unsafe { *leaf.ctrl.simd });
+    let r1 = want.lanes_eq(unsafe { *leaf.ctrl.simd });
 
     // println!("want: {:?}", want);
     // println!("ctrl: {:?}", unsafe { *leaf.ctrl.simd });
 
     // Always discard the meta field
-    let mask = r1.bitmask() & 0b1111_1110;
+    let mask = r1.to_bitmask()[0] & 0b1111_1110;
     // println!("res eq: 0b{:b}", mask);
 
     if mask != 0 {
@@ -273,9 +273,9 @@ where
         return KeyLoc::Collision(cand_idx);
     }
 
-    let r2 = want.lt(unsafe { *leaf.ctrl.simd });
+    let r2 = want.lanes_lt(unsafe { *leaf.ctrl.simd });
     // Always discard the meta field
-    let mask = r2.bitmask() & 0b1111_1110;
+    let mask = r2.to_bitmask()[0] & 0b1111_1110;
     // println!("res lt: 0b{:b}", mask);
     let r = match mask {
         0b1111_1110 => 0,

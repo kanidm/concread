@@ -12,8 +12,12 @@ keywords = ["concurrency", "lru", "arc", "hashmap", "btree"]
 categories = ["data-structures", "memory-management", "caching", "concurrency"]
 license = "MPL-2.0"
 
+[lib]
+name = "concread"
+path = "src/lib.rs"
+
 [features]
-simd_support = ["packed_simd"]
+simd_support = ["core_simd"]
 skinny = []
 unsoundness = []
 asynch = ["tokio"]
@@ -27,29 +31,17 @@ parking_lot = "0.11"
 smallvec = "1.4"
 ahash = "0.7"
 rand = "0.8"
-packed_simd = { version = "0.3", optional = true, package = "packed_simd_2" }
 
 tokio = { version = "1", features = ["sync", "rt", "macros"], optional = true }
-
 lru = "0.6"
+
+core_simd = { git = "https://github.com/rust-lang/portable-simd", optional = true }
 
 [dev-dependencies]
 time = "0.2"
 criterion = { version = "0.3", features = ["html_reports"] }
 function_name = "0.2"
 uuid = "0.8"
-
-[[bin]]
-name = "unsound"
-path = "src/unsound.rs"
-
-[[bin]]
-name = "unsound2"
-path = "src/unsound2.rs"
-
-[[bin]]
-name = "unsound3"
-path = "src/unsound3.rs"
 
 [[bench]]
 name = "hashmap_benchmark"

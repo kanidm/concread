@@ -2586,7 +2586,7 @@ mod tests {
 
     #[derive(Clone, Debug)]
     struct Weighted {
-        i: u64,
+        _i: u64,
     }
 
     #[test]
@@ -2612,8 +2612,8 @@ mod tests {
         );
 
         // In the first txn we insert 2 weight 2 items.
-        wr_txn.insert_sized(1, Weighted { i: 1 }, 2);
-        wr_txn.insert_sized(2, Weighted { i: 2 }, 2);
+        wr_txn.insert_sized(1, Weighted { _i: 1 }, 2);
+        wr_txn.insert_sized(2, Weighted { _i: 2 }, 2);
 
         assert!(
             CStat {
@@ -2669,8 +2669,8 @@ mod tests {
             } == wr_txn.peek_stat()
         );
 
-        wr_txn.insert_sized(3, Weighted { i: 3 }, 2);
-        wr_txn.insert_sized(4, Weighted { i: 4 }, 2);
+        wr_txn.insert_sized(3, Weighted { _i: 3 }, 2);
+        wr_txn.insert_sized(4, Weighted { _i: 4 }, 2);
         wr_txn.commit();
 
         // Check the evicts

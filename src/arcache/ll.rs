@@ -384,7 +384,7 @@ mod tests {
 
     #[derive(Clone, Debug)]
     struct Weighted {
-        i: u64,
+        _i: u64,
     }
 
     impl LLWeight for Weighted {
@@ -398,9 +398,9 @@ mod tests {
         // We test with box so that we leak on error
         let mut ll: LL<Weighted> = LL::new();
         assert!(ll.len() == 0);
-        let _n1 = ll.append_k(Weighted { i: 1 });
+        let _n1 = ll.append_k(Weighted { _i: 1 });
         assert!(ll.len() == 8);
-        let _n2 = ll.append_k(Weighted { i: 2 });
+        let _n2 = ll.append_k(Weighted { _i: 2 });
         assert!(ll.len() == 16);
         let n1 = ll.pop();
         assert!(ll.len() == 8);

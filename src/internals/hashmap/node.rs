@@ -14,7 +14,7 @@ use std::ptr;
 use smallvec::SmallVec;
 
 #[cfg(feature = "simd_support")]
-use packed_simd::u64x8;
+use core_simd::u64x8;
 
 #[cfg(all(test, not(miri)))]
 use parking_lot::Mutex;
@@ -49,13 +49,9 @@ pub struct u64x8 {
 
 #[cfg(not(feature = "simd_support"))]
 impl u64x8 {
-    #[allow(clippy::many_single_char_names)]
-    #[allow(clippy::too_many_arguments)]
     #[inline(always)]
-    fn new(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64) -> Self {
-        Self {
-            _data: [a, b, c, d, e, f, g, h],
-        }
+    fn from_array(data: [u64; 8]) -> Self {
+        Self { _data: data }
     }
 }
 
@@ -153,7 +149,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
         debug_assert!(txid < (TXID_MASK >> TXID_SHF));
         let x: Box<CachePadded<Leaf<K, V>>> = Box::new(CachePadded::new(Leaf {
             ctrl: Ctrl {
-                simd: ManuallyDrop::new(u64x8::new(
+                simd: ManuallyDrop::new(u64x8::from_array([
                     (txid << TXID_SHF) | FLAG_HASH_LEAF,
                     u64::MAX,
                     u64::MAX,
@@ -162,7 +158,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
                     u64::MAX,
                     u64::MAX,
                     u64::MAX,
-                )),
+                ])),
             },
             #[cfg(all(test, not(miri)))]
             poison: FLAG_POISON,
@@ -180,7 +176,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
         let x: Box<CachePadded<Leaf<K, V>>> = Box::new(CachePadded::new(Leaf {
             // Let the flag, txid and the slots of value 1 through.
             ctrl: Ctrl {
-                simd: ManuallyDrop::new(u64x8::new(
+                simd: ManuallyDrop::new(u64x8::from_array([
                     flags & (TXID_MASK | FLAG_MASK | 1),
                     h,
                     u64::MAX,
@@ -189,7 +185,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
                     u64::MAX,
                     u64::MAX,
                     u64::MAX,
-                )),
+                ])),
             },
             #[cfg(all(test, not(miri)))]
             poison: FLAG_POISON,
@@ -227,7 +223,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
         let x: Box<CachePadded<Branch<K, V>>> = Box::new(CachePadded::new(Branch {
             // This sets the default (key) slots to 1, since we take an l/r
             ctrl: Ctrl {
-                simd: ManuallyDrop::new(u64x8::new(
+                simd: ManuallyDrop::new(u64x8::from_array([
                     (txid << TXID_SHF) | FLAG_HASH_BRANCH | 1,
                     pivot,
                     u64::MAX,
@@ -236,7 +232,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
                     u64::MAX,
                     u64::MAX,
                     u64::MAX,
-                )),
+                ])),
             },
             #[cfg(all(test, not(miri)))]
             poison: FLAG_POISON,
@@ -612,7 +608,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
                 (unsafe { self.ctrl.a.0 .0 } & (FLAG_MASK | COUNT_MASK)) | (txid << TXID_SHF);
             let x: Box<CachePadded<Leaf<K, V>>> = Box::new(CachePadded::new(Leaf {
                 ctrl: Ctrl {
-                    simd: ManuallyDrop::new(u64x8::new(
+                    simd: ManuallyDrop::new(u64x8::from_array([
                         new_txid,
                         u64::MAX,
                         u64::MAX,
@@ -621,7 +617,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
                         u64::MAX,
                         u64::MAX,
                         u64::MAX,
-                    )),
+                    ])),
                 },
                 #[cfg(all(test, not(miri)))]
                 poison: FLAG_POISON,
@@ -1015,7 +1011,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
             let x: Box<CachePadded<Branch<K, V>>> = Box::new(CachePadded::new(Branch {
                 // This sets the default (key) slots to 1, since we take an l/r
                 ctrl: Ctrl {
-                    simd: ManuallyDrop::new(u64x8::new(
+                    simd: ManuallyDrop::new(u64x8::from_array([
                         new_txid,
                         u64::MAX,
                         u64::MAX,
@@ -1024,7 +1020,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                         u64::MAX,
                         u64::MAX,
                         u64::MAX,
-                    )),
+                    ])),
                 },
                 #[cfg(all(test, not(miri)))]
                 poison: FLAG_POISON,
