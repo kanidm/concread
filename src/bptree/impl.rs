@@ -269,7 +269,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     /// write txn are called while this snapshot is active.
     pub fn to_snapshot(&'a self) -> BptreeMapReadSnapshot<K, V> {
         BptreeMapReadSnapshot {
-            inner: SnapshotType::W(&self.inner.as_ref()),
+            inner: SnapshotType::W(self.inner.as_ref()),
         }
     }
 }
@@ -331,7 +331,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     /// As this is the read variant, it IS safe, and guaranteed the tree will not change.
     pub fn to_snapshot(&'a self) -> BptreeMapReadSnapshot<K, V> {
         BptreeMapReadSnapshot {
-            inner: SnapshotType::R(&self.inner.as_ref()),
+            inner: SnapshotType::R(self.inner.as_ref()),
         }
     }
 

@@ -2,7 +2,7 @@
 name = "concread"
 version = "0.2.20"
 authors = ["William Brown <william@blackhats.net.au>"]
-edition = "2018"
+edition = "2021"
 description = "Concurrently Readable Data-Structures for Rust"
 documentation = "https://docs.rs/concread/latest/concread/"
 homepage = "https://github.com/kanidm/concread/"
@@ -17,9 +17,8 @@ name = "concread"
 path = "src/lib.rs"
 
 [features]
-simd_support = ["core_simd"]
+# simd_support = ["core_simd"]
 skinny = []
-unsoundness = []
 asynch = ["tokio"]
 default = ["asynch"]
 
@@ -33,12 +32,12 @@ ahash = "0.7"
 rand = "0.8"
 
 tokio = { version = "1", features = ["sync", "rt", "macros"], optional = true }
-lru = "0.6"
+lru = "0.7"
 
-core_simd = { git = "https://github.com/rust-lang/portable-simd", optional = true }
+# core_simd = { git = "https://github.com/rust-lang/portable-simd", optional = true }
 
 [dev-dependencies]
-time = "0.2"
+time = "0.3"
 criterion = { version = "0.3", features = ["html_reports"] }
 function_name = "0.2"
 uuid = "0.8"

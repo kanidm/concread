@@ -204,6 +204,7 @@ where
 }
 
 /// A configurable builder to create new concurrent Adaptive Replacement Caches.
+#[derive(Default)]
 pub struct ARCacheBuilder {
     stats: Option<CacheStats>,
     max: Option<usize>,
@@ -349,7 +350,7 @@ impl<
 {
     fn to_vref(&self) -> Option<&V> {
         match &self {
-            CacheItem::Freq(_, v) | CacheItem::Rec(_, v) => Some(&v),
+            CacheItem::Freq(_, v) | CacheItem::Rec(_, v) => Some(v),
             _ => None,
         }
     }
@@ -496,17 +497,6 @@ macro_rules! evict_to_haunted_len {
     }};
 }
 
-impl Default for ARCacheBuilder {
-    fn default() -> Self {
-        ARCacheBuilder {
-            stats: None,
-            max: None,
-            read_max: None,
-            watermark: None,
-        }
-    }
-}
-
 impl ARCacheBuilder {
     /// Create a new ARCache builder that you can configure before creation.
     pub fn new() -> Self {
@@ -531,6 +521,7 @@ impl ARCacheBuilder {
     ///
     /// If you set ex_ro_miss to zero, no read thread local cache will be configured, but
     /// space will still be reserved for channel communication.
+    #[must_use]
     pub fn set_expected_workload(
         self,
         total: usize,
@@ -564,6 +555,7 @@ impl ARCacheBuilder {
     /// will exceed `max` on a regular basis, so you should consider using `set_expected_workload`
     /// and specifying your expected workload parameters to have a better derived
     /// cache size.
+    #[must_use]
     pub fn set_size(self, max: usize, read_max: usize) -> Self {
         ARCacheBuilder {
             stats: self.stats,
@@ -576,6 +568,7 @@ impl ARCacheBuilder {
     /// See [new_size] for more information. This allows manual configuration of the data
     /// tracking watermark. To disable this, set to 0. If watermark is greater than
     /// max, it will be clamped to max.
+    #[must_use]
     pub fn set_watermark(self, watermark: usize) -> Self {
         ARCacheBuilder {
             stats: self.stats,
@@ -586,6 +579,7 @@ impl ARCacheBuilder {
     }
 
     /// Import read/write hit stats from a previous execution of this cache.
+    #[must_use]
     pub fn set_stats(self, stats: CacheStats) -> Self {
         ARCacheBuilder {
             stats: Some(stats),
@@ -611,7 +605,7 @@ impl ARCacheBuilder {
 
         let (max, read_max) = max.zip(read_max)?;
 
-        let mut stats = stats.unwrap_or_else(|| CacheStats {
+        let mut stats = stats.unwrap_or(CacheStats {
             reader_hits: 0,
             reader_tlocal_hits: 0,
             reader_tlocal_includes: 0,
@@ -642,7 +636,7 @@ impl ARCacheBuilder {
         // up when the lists are empty.
         // stats.p_weight = stats.p_weight.clamp(0, max);
 
-        let watermark = watermark.unwrap_or_else(|| if max < 128 { 0 } else { (max / 20) * 16 });
+        let watermark = watermark.unwrap_or(if max < 128 { 0 } else { (max / 20) * 16 });
         let watermark = watermark.clamp(0, max);
 
         let (stat_tx, stat_rx) = unbounded();
@@ -748,7 +742,7 @@ impl<
         };
         let above_watermark = self.above_watermark.load(Ordering::Relaxed);
         ARCacheReadTxn {
-            caller: &self,
+            caller: self,
             cache: self.cache.read(),
             tlocal,
             stat_tx: rshared.stat_tx.clone(),
@@ -768,7 +762,7 @@ impl<
     pub fn write(&self) -> ARCacheWriteTxn<K, V> {
         let above_watermark = self.above_watermark.load(Ordering::Relaxed);
         ARCacheWriteTxn {
-            caller: &self,
+            caller: self,
             cache: self.cache.write(),
             tlocal: Map::new(),
             hit: UnsafeCell::new(Vec::new()),
@@ -787,7 +781,7 @@ impl<
         self.cache.try_write().map(|cache| {
             let above_watermark = self.above_watermark.load(Ordering::Relaxed);
             ARCacheWriteTxn {
-                caller: &self,
+                caller: self,
                 cache,
                 tlocal: Map::new(),
                 hit: UnsafeCell::new(Vec::new()),
@@ -1238,7 +1232,7 @@ impl<
         stats: &mut CacheStats,
         commit_ts: Instant,
     ) {
-        while let Some(ce) = inner.stat_rx.try_recv().ok() {
+        while let Ok(ce) = inner.stat_rx.try_recv() {
             let ReaderStatEvent {
                 t,
                 hits,
@@ -1483,10 +1477,8 @@ impl<
             if (inner.freq.len() + inner.rec.len()) < shared.watermark {
                 self.above_watermark.store(false, Ordering::Relaxed);
             }
-        } else {
-            if (inner.freq.len() + inner.rec.len()) >= shared.watermark {
-                self.above_watermark.store(true, Ordering::Relaxed);
-            }
+        } else if (inner.freq.len() + inner.rec.len()) >= shared.watermark {
+            self.above_watermark.store(true, Ordering::Relaxed);
         }
 
         // Commit the stats

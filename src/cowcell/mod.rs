@@ -215,7 +215,7 @@ where
     #[inline(always)]
     fn deref(&self) -> &T {
         match &self.work {
-            Some(v) => &v,
+            Some(v) => v,
             None => &(*self.read),
         }
     }

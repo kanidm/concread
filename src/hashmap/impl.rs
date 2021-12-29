@@ -233,7 +233,7 @@ impl<
     /// write txn are called while this snapshot is active.
     pub fn to_snapshot(&'a self) -> HashMapReadSnapshot<K, V> {
         HashMapReadSnapshot {
-            inner: SnapshotType::W(&self.inner.as_ref()),
+            inner: SnapshotType::W(self.inner.as_ref()),
         }
     }
 }
@@ -301,7 +301,7 @@ impl<
     /// As this is the read variant, it IS safe, and guaranteed the tree will not change.
     pub fn to_snapshot(&'a self) -> HashMapReadSnapshot<'a, K, V> {
         HashMapReadSnapshot {
-            inner: SnapshotType::R(&self.inner.as_ref()),
+            inner: SnapshotType::R(self.inner.as_ref()),
         }
     }
 }

@@ -33,12 +33,12 @@ impl<K: Clone + Ord + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, Curso
 {
     fn create_reader(&self) -> CursorRead<K, V> {
         // This sets up the first reader.
-        CursorRead::new(&self)
+        CursorRead::new(self)
     }
 
     fn create_writer(&self) -> CursorWrite<K, V> {
         // Create a writer.
-        CursorWrite::new(&self)
+        CursorWrite::new(self)
     }
 
     fn pre_commit(
@@ -68,7 +68,7 @@ impl<K: Clone + Ord + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, Curso
         self.txid = new.txid;
 
         // Create the new reader.
-        CursorRead::new(&self)
+        CursorRead::new(self)
     }
 }
 
@@ -825,7 +825,7 @@ fn path_clone<K: Clone + Ord + Debug, V: Clone>(
         // to clone if needed.
         // println!("txid -> {:?} {:?}", node_txid, txid);
         let nmref = branch_ref!(node, K, V);
-        let anode_idx = nmref.locate_node(&k);
+        let anode_idx = nmref.locate_node(k);
         let anode = nmref.get_idx_unchecked(anode_idx);
         match path_clone(anode, txid, k, last_seen, first_seen) {
             CRCloneState::Clone(cnode) => {
@@ -893,7 +893,7 @@ fn clone_and_remove<K: Clone + Ord + Debug, V: Clone>(
                 last_seen.push(node);
                 // Done mm
                 let nmref = branch_ref!(cnode, K, V);
-                let anode_idx = nmref.locate_node(&k);
+                let anode_idx = nmref.locate_node(k);
                 let anode = nmref.get_idx_unchecked(anode_idx);
                 match clone_and_remove(anode, txid, k, last_seen, first_seen) {
                     CRRemoveState::NoClone(_res) => {
@@ -945,7 +945,7 @@ fn clone_and_remove<K: Clone + Ord + Debug, V: Clone>(
             .unwrap_or_else(|| {
                 // We are already part of this txn
                 let nmref = branch_ref!(node, K, V);
-                let anode_idx = nmref.locate_node(&k);
+                let anode_idx = nmref.locate_node(k);
                 let anode = nmref.get_idx_unchecked(anode_idx);
                 match clone_and_remove(anode, txid, k, last_seen, first_seen) {
                     CRRemoveState::NoClone(res) => CRRemoveState::NoClone(res),
@@ -1034,7 +1034,7 @@ where
     } else {
         // This nmref binds the life of the reference ...
         let nmref = branch_ref!(node, K, V);
-        let anode_idx = nmref.locate_node(&k);
+        let anode_idx = nmref.locate_node(k);
         let anode = nmref.get_idx_unchecked(anode_idx);
         // That we get here. So we can't just return it, and we need to 'strip' the
         // lifetime so that it's bound to the lifetime of the outer node

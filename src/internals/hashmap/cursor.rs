@@ -78,7 +78,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>,
         self.txid = new.txid;
 
         // Create the new reader.
-        CursorRead::new(&self)
+        CursorRead::new(self)
     }
 }
 
