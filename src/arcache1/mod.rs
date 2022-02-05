@@ -15,7 +15,7 @@ mod ll;
 use self::ll::{LLNode, LLWeight, LL};
 // use self::traits::ArcWeight;
 use crate::cowcell::{CowCell, CowCellReadTxn};
-use crate::hashtrie::*;
+use crate::hashmap::*;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use crossbeam::queue::ArrayQueue;
 use parking_lot::{Mutex, RwLock};
@@ -221,7 +221,7 @@ where
 {
     // Use a unified tree, allows simpler movement of items between the
     // cache types.
-    cache: HashTrie<K, CacheItem<K, V>>,
+    cache: HashMap<K, CacheItem<K, V>>,
     // This is normally only ever taken in "read" mode, so it's effectively
     // an uncontended barrier.
     shared: RwLock<ArcShared<K, V>>,
@@ -288,7 +288,7 @@ where
 {
     caller: &'a ARCache<K, V>,
     // ro_txn to cache
-    cache: HashTrieReadTxn<'a, K, CacheItem<K, V>>,
+    cache: HashMapReadTxn<'a, K, CacheItem<K, V>>,
     tlocal: Option<ReadCache<K, V>>,
     // channel to send stat information
     stat_tx: Sender<ReaderStatEvent>,
@@ -327,7 +327,7 @@ where
 {
     caller: &'a ARCache<K, V>,
     // wr_txn to cache
-    cache: HashTrieWriteTxn<'a, K, CacheItem<K, V>>,
+    cache: HashMapWriteTxn<'a, K, CacheItem<K, V>>,
     // Cache of missed items (w_ dirty/clean)
     // On COMMIT we drain this to the main cache
     tlocal: Map<K, ThreadCacheItem<V>>,
@@ -678,7 +678,7 @@ impl ARCacheBuilder {
         });
 
         Some(ARCache {
-            cache: HashTrie::new(),
+            cache: HashMap::new(),
             shared,
             inner,
             stats: CowCell::new(stats),
@@ -825,7 +825,7 @@ impl<
 
     fn drain_tlocal_inc<'a>(
         &'a self,
-        cache: &mut HashTrieWriteTxn<'a, K, CacheItem<K, V>>,
+        cache: &mut HashMapWriteTxn<'a, K, CacheItem<K, V>>,
         inner: &mut ArcInner<K, V>,
         shared: &ArcShared<K, V>,
         stats: &mut CacheStats,
@@ -976,7 +976,7 @@ impl<
 
     fn drain_hit_rx<'a>(
         &'a self,
-        cache: &mut HashTrieWriteTxn<'a, K, CacheItem<K, V>>,
+        cache: &mut HashMapWriteTxn<'a, K, CacheItem<K, V>>,
         inner: &mut ArcInner<K, V>,
         commit_ts: Instant,
     ) {
@@ -1030,7 +1030,7 @@ impl<
 
     fn drain_inc_rx<'a>(
         &'a self,
-        cache: &mut HashTrieWriteTxn<'a, K, CacheItem<K, V>>,
+        cache: &mut HashMapWriteTxn<'a, K, CacheItem<K, V>>,
         inner: &mut ArcInner<K, V>,
         shared: &ArcShared<K, V>,
         commit_ts: Instant,
@@ -1162,7 +1162,7 @@ impl<
 
     fn drain_tlocal_hits<'a>(
         &'a self,
-        cache: &mut HashTrieWriteTxn<'a, K, CacheItem<K, V>>,
+        cache: &mut HashMapWriteTxn<'a, K, CacheItem<K, V>>,
         inner: &mut ArcInner<K, V>,
         // shared: &ArcShared<K, V>,
         commit_txid: u64,
@@ -1256,7 +1256,7 @@ impl<
     #[allow(clippy::cognitive_complexity)]
     fn evict<'a>(
         &'a self,
-        cache: &mut HashTrieWriteTxn<'a, K, CacheItem<K, V>>,
+        cache: &mut HashMapWriteTxn<'a, K, CacheItem<K, V>>,
         inner: &mut ArcInner<K, V>,
         shared: &ArcShared<K, V>,
         stats: &mut CacheStats,
@@ -1374,7 +1374,7 @@ impl<
     #[allow(clippy::unnecessary_mut_passed)]
     fn commit<'a>(
         &'a self,
-        mut cache: HashTrieWriteTxn<'a, K, CacheItem<K, V>>,
+        mut cache: HashMapWriteTxn<'a, K, CacheItem<K, V>>,
         tlocal: Map<K, ThreadCacheItem<V>>,
         hit: Vec<u64>,
         clear: bool,
@@ -2164,17 +2164,8 @@ mod tests {
         // Eight txn - now that we had a demand for items before, we re-demand them - this will trigger
         // a shift in p, causing some more to be in the rec cache.
         let grec_set: Vec<usize> = wr_txn.iter_ghost_rec().take(3).copied().collect();
-        println!("{:?}", grec_set);
-
-        grec_set
-            .iter()
-            .for_each(|i| println!("{:?}", wr_txn.peek_cache(i)));
 
         grec_set.iter().for_each(|i| wr_txn.insert(*i, *i));
-
-        grec_set
-            .iter()
-            .for_each(|i| println!("{:?}", wr_txn.peek_cache(i)));
         wr_txn.commit();
 
         println!("== 8");
@@ -2194,9 +2185,6 @@ mod tests {
             } == wr_txn.peek_stat()
         );
 
-        grec_set
-            .iter()
-            .for_each(|i| println!("{:?}", wr_txn.peek_cache(i)));
         grec_set
             .iter()
             .for_each(|i| assert!(wr_txn.peek_cache(i) == CacheState::Rec));

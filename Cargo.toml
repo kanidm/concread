@@ -1,6 +1,6 @@
 [package]
 name = "concread"
-version = "0.2.21"
+version = "0.3.0-dev"
 authors = ["William Brown <william@blackhats.net.au>"]
 edition = "2021"
 description = "Concurrently Readable Data-Structures for Rust"

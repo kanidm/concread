@@ -43,10 +43,13 @@ pub mod cowcell;
 pub mod ebrcell;
 
 pub mod arcache;
+pub mod arcache1;
+
 pub mod threadcache;
 
 pub mod bptree;
 pub mod hashmap;
+pub mod hashtrie;
 
 pub use cowcell::CowCell;
 pub use ebrcell::EbrCell;
