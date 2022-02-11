@@ -43,7 +43,6 @@ pub mod cowcell;
 pub mod ebrcell;
 
 pub mod arcache;
-pub mod arcache1;
 
 pub mod threadcache;
 

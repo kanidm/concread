@@ -37,44 +37,122 @@ use std::time::Instant;
 const READ_THREAD_RATIO: usize = 16;
 
 /// Statistics related to the Arc
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct CacheStats {
+    /// The number of attempts to read from the cache
+    pub reader_ops: u64,
     /// The number of hits during all read operations on the primary cache.
-    pub reader_hits: usize,
-    /// The number of hits during all read operations on the thread local caches.
-    pub reader_tlocal_hits: usize,
-    /// The number of inclusions to the thread local storage.
-    pub reader_tlocal_includes: usize,
-    /// The number of inclusions through read operations.
-    pub reader_includes: usize,
-    /// The number of hits during all write operations.
-    pub write_hits: usize,
-    /// The number of inclusions or changes through write operations.
-    pub write_includes: usize,
-    /// The number of modifications to the cache content during a write.
-    pub write_modifies: usize,
+    pub reader_hits: u64,
+    /// The number of hits during all read operations on the thread local caches. If
+    /// thread local storage is disabled, this will always be 0. This is measured in
+    /// seperately to a reader hit  - either we hit the main cache, or the tlocal, never
+    /// both.
+    pub reader_tlocal_hits: u64,
+    /// The number of inclusions to the thread local storage. If thread local storage is
+    /// disabled, this will always be 0. This is measured in addition to reader async
+    /// inclusions.
+    pub reader_tlocal_includes: u64,
+    /// The number of successful async main cache inclusions through read operations.
+    pub reader_includes: u64,
+    /// The number of failed async main cache inclusions through read operations.
+    pub reader_failed_includes: u64,
+    /// The number of attempts to read from the write cache
+    pub write_read_ops: u64,
+    /// The number of cache hits during all write operations.
+    pub write_hits: u64,
+    /// The number of inclusions through write operations. This does NOT track updates
+    /// to the main cache, where the updates may change the value.
+    pub write_includes: u64,
+    /// The number of modifications to the cache content during a write. This does NOT
+    /// track inclusions, where includes add a new value.
+    pub write_modifies: u64,
     /// The maximum number of items in the shared cache.
-    pub shared_max: usize,
-    /// The number of items in the frequent set
-    pub freq: usize,
-    /// The number of items in the recent set
-    pub recent: usize,
-    /// The number of items evicted from the frequent set
-    pub freq_evicts: usize,
-    /// The number of items evicted from the recent set
-    pub recent_evicts: usize,
+    pub shared_max: u64,
+    /// The number of items in the frequent set at this point in time.
+    pub freq: u64,
+    /// The number of items in the recent set at this point in time.
+    pub recent: u64,
+    /// The number of items evicted from the frequent over all time.
+    pub freq_evicts: u64,
+    /// The number of items evicted from the recent set over all time.
+    pub recent_evicts: u64,
     /// The current cache weight between recent and frequent.
-    pub p_weight: usize,
-    /// The number of keys seen through the cache's lifetime.
-    pub all_seen_keys: usize,
+    pub p_weight: u64,
+    /// The number of total keys seen through the cache's lifetime.
+    pub all_seen_keys: u64,
+}
+
+/// Change between two points in time of the usage of the arc.
+#[derive(Clone, Debug)]
+pub struct CacheStatsDiff {
+    /// The number of attempts to read from the cache since previous.
+    pub reader_ops: u64,
+    /// The number of hits against the cache as a reader.
+    pub reader_hits: u64,
+    /// The percentage hit rate of all accesses to readers. Inverse, the miss rate is
+    /// `100.0 - reader_hit_pct`.
+    pub reader_hit_pct: f64,
+
+    /// The number of hits during all read operations on the thread local caches. If
+    pub reader_tlocal_hits: u64,
+    /// The number of inclusions to the thread local storage.
+    pub reader_tlocal_includes: u64,
+    /// The number of successful async main cache inclusions through read operations.
+    pub reader_includes: u64,
+    /// The number of failed async main cache inclusions through read operations.
+    pub reader_failed_includes: u64,
+
+    /// The number of attempts to read from the write cache
+    pub write_read_ops: u64,
+    /// The number of read cache hits during all write operations.
+    pub write_hits: u64,
+    /// The percentage hit rate of all accesses to writers. Inverse, the miss rate is
+    /// `1.0 - writer_read_hit_pct`.
+    pub writer_read_hit_pct: f64,
+
+    /// The number of inclusions through write operations. This does NOT track updates
+    /// to the main cache, where the updates may change the value.
+    pub write_includes: u64,
+    /// The number of modifications to the cache content during a write. This does NOT
+    /// track inclusions, where includes add a new value.
+    pub write_modifies: u64,
+
+    /// The total number of read operations over all transaction types
+    pub total_ops: u64,
+    /// The total number of hits against any cache over all transaction types.
+    pub total_hits: u64,
+    /// The percentage hit rate of all accesses to the cache. Inverse, the miss rate is
+    /// `1.0 - total_hit_pct`.
+    pub total_hit_pct: f64,
+
+    /*
+    /// The change in the number of items in the frequent set at this point in time.
+    pub freq: i64,
+    /// The change in the number of items in the recent set at this point in time.
+    pub recent: i64,
+    */
+    /// The number of items evicted from the frequent set over all time.
+    pub freq_evicts: u64,
+    /// The number of items evicted from the recent set over all time.
+    pub recent_evicts: u64,
+
+    /// The change in cache weight between recent and frequent. Trending toward 0 (negative)
+    /// means demand on recent sets, while increase implies demand on frequent causes a trend
+    /// to more positive numbers (positive)
+    pub p_weight: i64,
+
+    /// The maximum number of items in the shared cache.
+    pub shared_max: u64,
 }
 
 struct ReaderStatEvent {
     t: Instant,
-    hits: usize,
-    tlocal_hits: usize,
-    tlocal_includes: usize,
-    reader_includes: usize,
+    ops: u32,
+    hits: u32,
+    tlocal_hits: u32,
+    tlocal_includes: u32,
+    reader_includes: u32,
+    reader_failed_includes: u32,
 }
 
 enum ThreadCacheItem<V> {
@@ -201,15 +279,17 @@ where
     /// The number of items that are present in the cache before we start to process
     /// the arc sets/lists.
     watermark: usize,
+    /// If readers should attempt to quiesce the cache. Default true
+    reader_quiesce: bool,
 }
 
 /// A configurable builder to create new concurrent Adaptive Replacement Caches.
-#[derive(Default)]
 pub struct ARCacheBuilder {
     stats: Option<CacheStats>,
     max: Option<usize>,
     read_max: Option<usize>,
     watermark: Option<usize>,
+    reader_quiesce: bool,
 }
 
 /// A concurrently readable adaptive replacement cache. Operations are performed on the
@@ -297,10 +377,13 @@ where
     hit_queue: Arc<ArrayQueue<CacheHitEvent>>,
     inc_queue: Arc<ArrayQueue<CacheIncludeEvent<K, V>>>,
     above_watermark: bool,
-    hits: usize,
-    tlocal_hits: usize,
-    tlocal_includes: usize,
-    reader_includes: usize,
+    hits: u32,
+    ops: u32,
+    tlocal_hits: u32,
+    tlocal_includes: u32,
+    reader_includes: u32,
+    reader_failed_includes: u32,
+    reader_quiesce: bool,
 }
 
 unsafe impl<
@@ -334,6 +417,7 @@ where
     hit: UnsafeCell<Vec<u64>>,
     clear: UnsafeCell<bool>,
     above_watermark: bool,
+    read_ops: UnsafeCell<u32>,
 }
 
 /*
@@ -497,6 +581,18 @@ macro_rules! evict_to_haunted_len {
     }};
 }
 
+impl Default for ARCacheBuilder {
+    fn default() -> Self {
+        ARCacheBuilder {
+            stats: None,
+            max: None,
+            read_max: None,
+            watermark: None,
+            reader_quiesce: true,
+        }
+    }
+}
+
 impl ARCacheBuilder {
     /// Create a new ARCache builder that you can configure before creation.
     pub fn new() -> Self {
@@ -547,6 +643,7 @@ impl ARCacheBuilder {
             max: Some(max),
             read_max: Some(read_max),
             watermark: self.watermark,
+            reader_quiesce: self.reader_quiesce,
         }
     }
 
@@ -562,6 +659,7 @@ impl ARCacheBuilder {
             max: Some(max),
             read_max: Some(read_max),
             watermark: self.watermark,
+            reader_quiesce: self.reader_quiesce,
         }
     }
 
@@ -575,6 +673,7 @@ impl ARCacheBuilder {
             max: self.max,
             read_max: self.read_max,
             watermark: Some(watermark),
+            reader_quiesce: self.reader_quiesce,
         }
     }
 
@@ -586,6 +685,22 @@ impl ARCacheBuilder {
             max: self.max,
             read_max: self.read_max,
             watermark: self.watermark,
+            reader_quiesce: self.reader_quiesce,
+        }
+    }
+
+    /// Enable or Disable reader cache quiescing. In some cases this can improve
+    /// reader performance, at the expense that cache includes or hits may be delayed
+    /// before acknowledgement. You must MANUALLY run periodic quiesces if you mark
+    /// this as "false" to disable reader quiescing.
+    #[must_use]
+    pub fn set_reader_quiesce(self, reader_quiesce: bool) -> Self {
+        ARCacheBuilder {
+            stats: self.stats,
+            max: self.max,
+            read_max: self.read_max,
+            watermark: self.watermark,
+            reader_quiesce,
         }
     }
 
@@ -601,40 +716,29 @@ impl ARCacheBuilder {
             max,
             read_max,
             watermark,
+            reader_quiesce,
         } = self;
 
         let (max, read_max) = max.zip(read_max)?;
 
-        let mut stats = stats.unwrap_or(CacheStats {
-            reader_hits: 0,
-            reader_tlocal_hits: 0,
-            reader_tlocal_includes: 0,
-            reader_includes: 0,
-            write_hits: 0,
-            write_includes: 0,
-            write_modifies: 0,
-            shared_max: 0,
-            freq: 0,
-            recent: 0,
-            freq_evicts: 0,
-            recent_evicts: 0,
-            p_weight: 0,
-            all_seen_keys: 0,
-        });
+        let stats = stats
+            .map(|mut stats| {
+                // Reset some values to 0 because else it doesn't really max sense ...
+                stats.shared_max = 0;
+                stats.freq = 0;
+                stats.recent = 0;
+                stats.all_seen_keys = 0;
+                stats.p_weight = 0;
 
-        // Reset some values to 0 because else it doesn't really max sense ...
-        stats.shared_max = 0;
-        stats.freq = 0;
-        stats.recent = 0;
-        stats.all_seen_keys = 0;
-        stats.p_weight = 0;
-
-        // Ensure that p isn't too large. Could happen if the cache size was reduced from
-        // a previous stats invocation.
-        //
-        // NOTE: I decided not to port this over, because it may cause issues in early cache start
-        // up when the lists are empty.
-        // stats.p_weight = stats.p_weight.clamp(0, max);
+                // Ensure that p isn't too large. Could happen if the cache size was reduced from
+                // a previous stats invocation.
+                //
+                // NOTE: I decided not to port this over, because it may cause issues in early cache start
+                // up when the lists are empty.
+                // stats.p_weight = stats.p_weight.clamp(0, max);
+                stats
+            })
+            .unwrap_or(CacheStats::default());
 
         let watermark = watermark.unwrap_or(if max < 128 { 0 } else { (max / 20) * 16 });
         let watermark = watermark.clamp(0, max);
@@ -662,6 +766,7 @@ impl ARCacheBuilder {
             hit_queue: hit_queue.clone(),
             inc_queue: inc_queue.clone(),
             watermark,
+            reader_quiesce,
         });
         let inner = Mutex::new(ArcInner {
             // We use p from the former stats.
@@ -750,9 +855,12 @@ impl<
             inc_queue: rshared.inc_queue.clone(),
             above_watermark,
             hits: 0,
+            ops: 0,
             tlocal_hits: 0,
             tlocal_includes: 0,
             reader_includes: 0,
+            reader_failed_includes: 0,
+            reader_quiesce: rshared.reader_quiesce.clone(),
         }
     }
 
@@ -768,13 +876,34 @@ impl<
             hit: UnsafeCell::new(Vec::new()),
             clear: UnsafeCell::new(false),
             above_watermark,
+            read_ops: UnsafeCell::new(0),
         }
     }
 
     /// View the statistics for this cache. These values are a snapshot of a point in
-    /// time and may not be accurate at "this exact moment".
+    /// time and may not be accurate at "this exact moment". You *may* pin this value
+    /// for as long as you wish without causing excess memory usage or transaction
+    /// cleanup issues.
     pub fn view_stats(&self) -> CowCellReadTxn<CacheStats> {
         self.stats.read()
+    }
+
+    /// Reset access stats for this cache. This will reset all the hit and include
+    /// fields, but values related to current cache state are not altered. This can
+    /// be useful after a bulk import to prevent polution of the stats from that
+    /// operation.
+    pub fn reset_stats(&self) {
+        let mut stat_guard = self.stats.write();
+        stat_guard.reader_hits = 0;
+        stat_guard.reader_tlocal_hits = 0;
+        stat_guard.reader_tlocal_includes = 0;
+        stat_guard.reader_includes = 0;
+        stat_guard.write_hits = 0;
+        stat_guard.write_includes = 0;
+        stat_guard.write_modifies = 0;
+        stat_guard.freq_evicts = 0;
+        stat_guard.recent_evicts = 0;
+        stat_guard.commit();
     }
 
     fn try_write(&self) -> Option<ARCacheWriteTxn<K, V>> {
@@ -787,6 +916,7 @@ impl<
                 hit: UnsafeCell::new(Vec::new()),
                 clear: UnsafeCell::new(false),
                 above_watermark,
+                read_ops: UnsafeCell::new(0),
             }
         })
     }
@@ -1235,16 +1365,20 @@ impl<
         while let Ok(ce) = inner.stat_rx.try_recv() {
             let ReaderStatEvent {
                 t,
+                ops,
                 hits,
                 tlocal_hits,
                 tlocal_includes,
                 reader_includes,
+                reader_failed_includes,
             } = ce;
 
-            stats.reader_tlocal_hits += tlocal_hits;
-            stats.reader_tlocal_includes += tlocal_includes;
-            stats.reader_hits += hits;
-            stats.reader_includes += reader_includes;
+            stats.reader_ops += ops as u64;
+            stats.reader_tlocal_hits += tlocal_hits as u64;
+            stats.reader_tlocal_includes += tlocal_includes as u64;
+            stats.reader_hits += hits as u64;
+            stats.reader_includes += reader_includes as u64;
+            stats.reader_failed_includes += reader_failed_includes as u64;
 
             // Stop processing the queue, we are up to "now".
             if t >= commit_ts {
@@ -1265,7 +1399,7 @@ impl<
         debug_assert!(inner.p <= shared.max);
         // Convince the compiler copying is okay.
         let p = inner.p;
-        stats.p_weight = p;
+        stats.p_weight = p as u64;
 
         if inner.rec.len() + inner.freq.len() > shared.max {
             // println!("Checking cache evict");
@@ -1328,8 +1462,8 @@ impl<
             // println!("move to -> rec {:?}, freq {:?}", rec_to_len, freq_to_len);
             debug_assert!(freq_to_len + rec_to_len <= shared.max);
 
-            stats.freq_evicts += inner.freq.len() - freq_to_len;
-            stats.recent_evicts += inner.rec.len() - rec_to_len;
+            stats.freq_evicts += (inner.freq.len() - freq_to_len) as u64;
+            stats.recent_evicts += (inner.rec.len() - rec_to_len) as u64;
 
             evict_to_len!(
                 cache,
@@ -1379,6 +1513,7 @@ impl<
         hit: Vec<u64>,
         clear: bool,
         init_above_watermark: bool,
+        read_ops: u32,
     ) {
         // What is the time?
         let commit_ts = Instant::now();
@@ -1399,8 +1534,8 @@ impl<
             inner.min_txid = commit_txid;
 
             // Indicate that we evicted all to ghost/freq
-            stats.freq_evicts += inner.freq.len();
-            stats.recent_evicts += inner.rec.len();
+            stats.freq_evicts += inner.freq.len() as u64;
+            stats.recent_evicts += inner.rec.len() as u64;
 
             // Move everything active into ghost sets.
             drain_ll_to_ghost!(
@@ -1445,7 +1580,8 @@ impl<
         self.drain_hit_rx(&mut cache, inner.deref_mut(), commit_ts);
 
         // drain the tlocal hits into the main cache.
-        stats.write_hits += hit.len();
+        stats.write_hits += hit.len() as u64;
+        stats.write_read_ops += read_ops as u64;
         self.drain_tlocal_hits(&mut cache, inner.deref_mut(), commit_txid, hit);
 
         // now clean the space for each of the primary caches, evicting into the ghost sets.
@@ -1464,10 +1600,10 @@ impl<
 
         self.drain_stat_rx(inner.deref_mut(), stats, commit_ts);
 
-        stats.shared_max = shared.max;
-        stats.freq = inner.freq.len();
-        stats.recent = inner.rec.len();
-        stats.all_seen_keys = cache.len();
+        stats.shared_max = shared.max as u64;
+        stats.freq = inner.freq.len() as u64;
+        stats.recent = inner.rec.len() as u64;
+        stats.all_seen_keys = cache.len() as u64;
 
         // Indicate if we are at/above watermark, so that read/writers begin to indicate their
         // hit events so we can start to setup/order our arc sets correctly.
@@ -1509,6 +1645,7 @@ impl<
             self.hit.into_inner(),
             self.clear.into_inner(),
             self.above_watermark,
+            self.read_ops.into_inner(),
         )
     }
 
@@ -1526,6 +1663,14 @@ impl<
             let hit_ptr = self.hit.get();
             (*hit_ptr).clear();
         }
+
+        // Throw away any read ops we did on the old values since they'll
+        // mess up stat numbers.
+        unsafe {
+            let op_ptr = self.read_ops.get();
+            (*op_ptr) = 0;
+        }
+
         // Dump the thread local state.
         self.tlocal.clear();
         // From this point any get will miss on the main cache.
@@ -1542,6 +1687,12 @@ impl<
         Q: Hash + Eq + Ord,
     {
         let k_hash: u64 = self.cache.prehash(k);
+
+        // Track the attempted read op
+        unsafe {
+            let op_ptr = self.read_ops.get();
+            (*op_ptr) += 1;
+        }
 
         let r: Option<&V> = if let Some(tci) = self.tlocal.get(k) {
             match tci {
@@ -1570,6 +1721,7 @@ impl<
                 None
             }
         };
+
         // How do we track this was a hit?
         // Remember, we don't track misses - they are *implied* by the fact they'll trigger
         // an inclusion from the external system. Subsequent, any further re-hit on an
@@ -1801,6 +1953,8 @@ impl<
     {
         let k_hash: u64 = self.cache.prehash(k);
 
+        self.ops += 1;
+
         let r: Option<&V> = self
             .tlocal
             .as_ref()
@@ -1808,7 +1962,7 @@ impl<
                 cache.set.get(k).map(|v| unsafe {
                     // Indicate a hit on the tlocal cache.
                     #[allow(mutable_transmutes)]
-                    let tlocal_hits = std::mem::transmute::<&usize, &mut usize>(&self.tlocal_hits);
+                    let tlocal_hits = std::mem::transmute::<&u32, &mut u32>(&self.tlocal_hits);
                     *tlocal_hits += 1;
 
                     if self.above_watermark {
@@ -1827,7 +1981,7 @@ impl<
                     (*v).to_vref().map(|vin| unsafe {
                         // Indicate a hit on the main cache.
                         #[allow(mutable_transmutes)]
-                        let hits = std::mem::transmute::<&usize, &mut usize>(&self.hits);
+                        let hits = std::mem::transmute::<&u32, &mut u32>(&self.hits);
                         *hits += 1;
 
                         if self.above_watermark {
@@ -1860,14 +2014,21 @@ impl<
         let mut v = v;
         // Send a copy forward through time and space.
         // let _ = self.tx.try_send(
-        self.reader_includes += 1;
-        let _ = self.inc_queue.push(CacheIncludeEvent {
-            t: Instant::now(),
-            k: k.clone(),
-            v: v.clone(),
-            txid: self.cache.get_txid(),
-            size,
-        });
+        if self
+            .inc_queue
+            .push(CacheIncludeEvent {
+                t: Instant::now(),
+                k: k.clone(),
+                v: v.clone(),
+                txid: self.cache.get_txid(),
+                size,
+            })
+            .is_ok()
+        {
+            self.reader_includes += 1;
+        } else {
+            self.reader_failed_includes += 1;
+        }
 
         // We have a cache, so lets update it.
         if let Some(ref mut cache) = self.tlocal {
@@ -1921,12 +2082,129 @@ impl<
     fn drop(&mut self) {
         let _ = self.stat_tx.send(ReaderStatEvent {
             t: Instant::now(),
+            ops: self.ops,
             hits: self.hits,
             tlocal_hits: self.tlocal_hits,
             tlocal_includes: self.tlocal_includes,
             reader_includes: self.reader_includes,
+            reader_failed_includes: self.reader_failed_includes,
         });
-        self.caller.try_quiesce();
+        // We could make this check the queue sizes rather than blindly quiescing
+        if self.reader_quiesce {
+            self.caller.try_quiesce();
+        }
+    }
+}
+
+impl CacheStats {
+    /// Calculate the change since a previous point in time of the stats of this cache.
+    pub fn change_since(&self, previous: &CacheStats) -> CacheStatsDiff {
+        let reader_ops = self
+            .reader_ops
+            .checked_sub(previous.reader_ops)
+            .unwrap_or(0);
+        let reader_hits = self
+            .reader_hits
+            .checked_sub(previous.reader_hits)
+            .unwrap_or(0);
+
+        let reader_hit_pct = if reader_ops > 0 {
+            (reader_hits as f64) / (reader_ops as f64)
+        } else {
+            0.0
+        };
+
+        let reader_tlocal_hits = self
+            .reader_tlocal_hits
+            .checked_sub(previous.reader_tlocal_hits)
+            .unwrap_or(0);
+        let reader_tlocal_includes = self
+            .reader_tlocal_includes
+            .checked_sub(previous.reader_tlocal_includes)
+            .unwrap_or(0);
+
+        let reader_includes = self
+            .reader_includes
+            .checked_sub(previous.reader_includes)
+            .unwrap_or(0);
+        let reader_failed_includes = self
+            .reader_failed_includes
+            .checked_sub(previous.reader_failed_includes)
+            .unwrap_or(0);
+
+        let write_read_ops = self
+            .write_read_ops
+            .checked_sub(previous.write_read_ops)
+            .unwrap_or(0);
+        let write_hits = self
+            .write_hits
+            .checked_sub(previous.write_hits)
+            .unwrap_or(0);
+
+        let writer_read_hit_pct = if write_read_ops > 0 {
+            (write_hits as f64) / (write_read_ops as f64)
+        } else {
+            0.0
+        };
+
+        let write_includes = self
+            .write_includes
+            .checked_sub(previous.write_includes)
+            .unwrap_or(0);
+        let write_modifies = self
+            .write_modifies
+            .checked_sub(previous.write_modifies)
+            .unwrap_or(0);
+
+        let total_ops = reader_ops + write_read_ops;
+        let total_hits = reader_hits + reader_tlocal_hits + write_hits;
+
+        let total_hit_pct = if total_ops > 0 {
+            (total_hits as f64) / (total_ops as f64)
+        } else {
+            0.0
+        };
+
+        // let freq = (self.freq as i64) - (previous.freq as i64);
+        // let recent = (self.recent as i64) - (previous.recent as i64);
+
+        let freq_evicts = self
+            .freq_evicts
+            .checked_sub(previous.freq_evicts)
+            .unwrap_or(0);
+        let recent_evicts = self
+            .recent_evicts
+            .checked_sub(previous.recent_evicts)
+            .unwrap_or(0);
+
+        let p_weight = (self.p_weight as i64) - (previous.p_weight as i64);
+
+        let shared_max = self.shared_max;
+
+        CacheStatsDiff {
+            reader_ops,
+            reader_hits,
+            reader_hit_pct,
+            reader_tlocal_hits,
+            reader_tlocal_includes,
+            reader_includes,
+            reader_failed_includes,
+            write_read_ops,
+            write_hits,
+            writer_read_hit_pct,
+            write_includes,
+            write_modifies,
+            total_ops,
+            total_hits,
+            total_hit_pct,
+            // freq,
+            // recent,
+            freq_evicts,
+            recent_evicts,
+            p_weight,
+            p_ratio,
+            shared_max,
+        }
     }
 }
 
@@ -2680,6 +2958,9 @@ mod tests {
             .set_size(4, 0)
             .build()
             .expect("Invaled cache parameters!");
+
+        let init_stats = arc.view_stats();
+        println!("{:?}", *init_stats);
         let mut wr_txn = arc.write();
 
         assert!(
@@ -2777,6 +3058,7 @@ mod tests {
 
         let stats = arc.view_stats();
         println!("{:?}", *stats);
+        println!("{:?}", (*stats).change_since(&*init_stats));
     }
 
     #[test]
@@ -2803,5 +3085,19 @@ mod tests {
         println!("stats 2: {:?}", *stats2);
         assert!(stats.write_includes == stats2.write_includes);
         assert!(stats.write_modifies == stats2.write_modifies);
+
+        // Test we can clear them.
+        arc2.reset_stats();
+        let stats3 = arc2.view_stats();
+        println!("stats 3: {:?}", *stats3);
+        assert!(stats3.reader_hits == 0);
+        assert!(stats3.reader_tlocal_hits == 0);
+        assert!(stats3.reader_tlocal_includes == 0);
+        assert!(stats3.reader_includes == 0);
+        assert!(stats3.write_hits == 0);
+        assert!(stats3.write_includes == 0);
+        assert!(stats3.write_modifies == 0);
+        assert!(stats3.freq_evicts == 0);
+        assert!(stats3.recent_evicts == 0);
     }
 }

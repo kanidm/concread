@@ -22,7 +22,6 @@
 #[cfg(feature = "asynch")]
 pub mod asynch;
 
-use crate::internals::hashmap::cursor::Datum;
 use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
 
 include!("impl.rs");
@@ -67,10 +66,13 @@ impl<
         V: Clone + Sync + Send + 'static,
     > HashMapWriteTxn<'a, K, V>
 {
+    /*
     pub(crate) fn get_txid(&self) -> u64 {
         self.inner.as_ref().get_txid()
     }
+    */
 
+    /*
     pub(crate) fn prehash<'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
     where
         K: Borrow<Q>,
@@ -78,7 +80,9 @@ impl<
     {
         self.inner.as_ref().hash_key(k)
     }
+    */
 
+    /*
     /// This is *unsafe* because changing the key CAN and WILL break hashing, which can
     /// have serious consequences. This API only exists to allow arcache to access the inner
     /// content of the slot to simplify it's API. You should basically never touch this
@@ -86,6 +90,7 @@ impl<
     pub(crate) unsafe fn get_slot_mut(&mut self, k_hash: u64) -> Option<&mut [Datum<K, V>]> {
         self.inner.as_mut().get_slot_mut_ref(k_hash)
     }
+    */
 
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to percieve these changes.
@@ -96,6 +101,7 @@ impl<
     }
 }
 
+/*
 impl<
         'a,
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
@@ -114,6 +120,7 @@ impl<
         self.inner.as_ref().hash_key(k)
     }
 }
+*/
 
 #[cfg(test)]
 mod tests {
