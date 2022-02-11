@@ -2202,7 +2202,6 @@ impl CacheStats {
             freq_evicts,
             recent_evicts,
             p_weight,
-            p_ratio,
             shared_max,
         }
     }
