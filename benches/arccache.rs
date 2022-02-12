@@ -11,7 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 // use uuid::Uuid;
 
-use concread::arcache::ARCache;
+use concread::arcache::{ARCache, ARCacheBuilder};
 use concread::threadcache::ThreadLocal;
 use criterion::measurement::{Measurement, ValueFormatter};
 
@@ -309,7 +309,14 @@ where
         csize = 1;
     }
 
-    let arc: Arc<ARCache<K, V>> = Arc::new(ARCache::new_size_watermark(csize, 0, 0));
+    let arc: Arc<ARCache<K, V>> = Arc::new(
+        ARCacheBuilder::new()
+            .set_size(csize, 0)
+            .set_watermark(0)
+            .set_reader_quiesce(false)
+            .build()
+            .unwrap(),
+    );
 
     let backing_set = Arc::new(backing_set);
 
@@ -410,7 +417,12 @@ where
         csize = 1;
     }
 
-    let arc: ARCache<K, V> = ARCache::new_size_watermark(csize, 0, 0);
+    let arc: ARCache<K, V> = ARCacheBuilder::new()
+        .set_size(csize, 0)
+        .set_watermark(0)
+        .set_reader_quiesce(false)
+        .build()
+        .unwrap();
 
     let mut elapsed = Duration::from_secs(0);
     let mut hit_count = 0;

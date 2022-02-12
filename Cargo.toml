@@ -19,6 +19,7 @@ path = "src/lib.rs"
 [features]
 # simd_support = ["core_simd"]
 skinny = []
+hashtrie_chonk = []
 asynch = ["tokio"]
 default = ["asynch"]
 

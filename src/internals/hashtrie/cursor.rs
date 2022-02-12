@@ -21,23 +21,31 @@ use super::iter::*;
 
 // This defines the max height of our tree. Gives 16777216.0 entries
 // This only consumes 16KB if fully populated
+#[cfg(not(feature = "hashtrie_chonk"))]
 pub(crate) const MAX_HEIGHT: u64 = 8;
 // The true absolute max height
+#[cfg(not(feature = "hashtrie_chonk"))]
 const ABS_MAX_HEIGHT: u64 = 21;
+#[cfg(not(feature = "hashtrie_chonk"))]
 pub(crate) const HT_CAPACITY: usize = 8;
+#[cfg(not(feature = "hashtrie_chonk"))]
 const HASH_MASK: u64 =
     0b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0111;
+#[cfg(not(feature = "hashtrie_chonk"))]
 const SHIFT: u64 = 3;
 
-/*
 // This defines the max height of our tree. Gives 16777216.0 entries
+#[cfg(feature = "hashtrie_chonk")]
 pub(crate) const MAX_HEIGHT: u64 = 6;
+#[cfg(feature = "hashtrie_chonk")]
 const ABS_MAX_HEIGHT: u64 = 16;
+#[cfg(feature = "hashtrie_chonk")]
 pub(crate) const HT_CAPACITY: usize = 16;
+#[cfg(feature = "hashtrie_chonk")]
 const HASH_MASK: u64 =
     0b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_1111;
+#[cfg(feature = "hashtrie_chonk")]
 const SHIFT: u64 = 4;
-*/
 
 const TAG: usize = 0b0011;
 const UNTAG: usize = usize::MAX - TAG;
@@ -320,16 +328,22 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 Ptr::null_mut(),
                 Ptr::null_mut(),
                 Ptr::null_mut(),
-                /*
+                #[cfg(feature = "hashtrie_chonk")]
                 Ptr::null_mut(),
+                #[cfg(feature = "hashtrie_chonk")]
                 Ptr::null_mut(),
+                #[cfg(feature = "hashtrie_chonk")]
                 Ptr::null_mut(),
+                #[cfg(feature = "hashtrie_chonk")]
                 Ptr::null_mut(),
+                #[cfg(feature = "hashtrie_chonk")]
                 Ptr::null_mut(),
+                #[cfg(feature = "hashtrie_chonk")]
                 Ptr::null_mut(),
+                #[cfg(feature = "hashtrie_chonk")]
                 Ptr::null_mut(),
+                #[cfg(feature = "hashtrie_chonk")]
                 Ptr::null_mut(),
-                */
             ],
             k: PhantomData,
             v: PhantomData,
