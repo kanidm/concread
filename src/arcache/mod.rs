@@ -740,8 +740,10 @@ impl ARCacheBuilder {
             })
             .unwrap_or(CacheStats::default());
 
-        let watermark = watermark.unwrap_or(if max < 128 { 0 } else { (max / 20) * 16 });
+        let watermark = watermark.unwrap_or(if max < 128 { 0 } else { (max / 20) * 18 });
         let watermark = watermark.clamp(0, max);
+        // If the watermark is 0, always track from the start.
+        let init_watermark = watermark == 0;
 
         let (stat_tx, stat_rx) = unbounded();
 
@@ -787,7 +789,7 @@ impl ARCacheBuilder {
             shared,
             inner,
             stats: CowCell::new(stats),
-            above_watermark: AtomicBool::new(true),
+            above_watermark: AtomicBool::new(init_watermark),
         })
     }
 }
@@ -921,10 +923,14 @@ impl<
         })
     }
 
-    fn try_quiesce(&self) {
-        if let Some(wr_txn) = self.try_write() {
-            wr_txn.commit()
-        };
+    /// If the lock is available, attempt to quiesce the cache's async channel states. If the lock
+    /// is currently held, no action is taken.
+    pub fn try_quiesce(&self) {
+        if self.above_watermark.load(Ordering::Relaxed) {
+            if let Some(wr_txn) = self.try_write() {
+                wr_txn.commit()
+            };
+        }
     }
 
     fn calc_p_freq(ghost_rec_len: usize, ghost_freq_len: usize, p: &mut usize) {
