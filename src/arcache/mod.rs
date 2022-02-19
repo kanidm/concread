@@ -926,11 +926,13 @@ impl<
     /// If the lock is available, attempt to quiesce the cache's async channel states. If the lock
     /// is currently held, no action is taken.
     pub fn try_quiesce(&self) {
-        if self.above_watermark.load(Ordering::Relaxed) {
-            if let Some(wr_txn) = self.try_write() {
-                wr_txn.commit()
-            };
-        }
+        // It seems like a good idea to skip this when not at wmark, but
+        // that can cause low-pressure caches to no submit includes properly.
+        // if self.above_watermark.load(Ordering::Relaxed) {
+        if let Some(wr_txn) = self.try_write() {
+            wr_txn.commit()
+        };
+        // }
     }
 
     fn calc_p_freq(ghost_rec_len: usize, ghost_freq_len: usize, p: &mut usize) {
