@@ -143,6 +143,9 @@ where
     v: PhantomData<V>,
 }
 
+unsafe impl<K: Clone + Hash + Eq + Debug + Send + 'static, V: Clone + Send + 'static> Send for Node<K, V> {}
+unsafe impl<K: Clone + Hash + Eq + Debug + Send + 'static, V: Clone + Sync + Send + 'static> Sync for Node<K, V> {}
+
 impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
     pub(crate) fn new_leaf(txid: u64) -> *mut Leaf<K, V> {
         // println!("Req new hash leaf");
