@@ -28,8 +28,14 @@ where
     txid: u64,
 }
 
-unsafe impl<K: Clone + Ord + Debug + Send + 'static, V: Clone + Send + 'static> Send for SuperBlock<K, V> {}
-unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync for SuperBlock<K, V> {}
+unsafe impl<K: Clone + Ord + Debug + Send + 'static, V: Clone + Send + 'static> Send
+    for SuperBlock<K, V>
+{
+}
+unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync
+    for SuperBlock<K, V>
+{
+}
 
 impl<K: Clone + Ord + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, CursorWrite<K, V>>
     for SuperBlock<K, V>
@@ -133,8 +139,14 @@ where
     last_seen: Mutex<Vec<*mut Node<K, V>>>,
 }
 
-unsafe impl<K: Clone + Ord + Debug + Send + 'static, V: Clone + Send + 'static> Send for CursorRead<K, V> {}
-unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync for CursorRead<K, V> {}
+unsafe impl<K: Clone + Ord + Debug + Send + 'static, V: Clone + Send + 'static> Send
+    for CursorRead<K, V>
+{
+}
+unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync
+    for CursorRead<K, V>
+{
+}
 
 #[derive(Debug)]
 pub(crate) struct CursorWrite<K, V>
@@ -149,8 +161,14 @@ where
     first_seen: Vec<*mut Node<K, V>>,
 }
 
-unsafe impl<K: Clone + Ord + Debug + Send + 'static, V: Clone + Send + 'static> Send for CursorWrite<K, V> {}
-unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync for CursorWrite<K, V> {}
+unsafe impl<K: Clone + Ord + Debug + Send + 'static, V: Clone + Send + 'static> Send
+    for CursorWrite<K, V>
+{
+}
+unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync
+    for CursorWrite<K, V>
+{
+}
 
 pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
     fn get_root_ref(&self) -> &Node<K, V>;

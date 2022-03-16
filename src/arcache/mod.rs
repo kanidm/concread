@@ -439,6 +439,16 @@ impl<
         }
     }
 
+    fn to_kvsref(&self) -> Option<(&K, &V, usize)> {
+        match &self {
+            CacheItem::Freq(lln, v) | CacheItem::Rec(lln, v) => {
+                let cii = unsafe { &*((**lln).k.as_ptr()) };
+                Some((&cii.k, v, cii.size))
+            }
+            _ => None,
+        }
+    }
+
     #[cfg(test)]
     fn to_state(&self) -> CacheState {
         match &self {
@@ -1689,7 +1699,7 @@ impl<
     /// the thread local cache, a `Some` is returned, else you will recieve a `None`. On a
     /// `None`, you must then consult the external data source that this structure is acting
     /// as a cache for.
-    pub fn get<'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
+    pub fn get<'b, Q: ?Sized>(&'b self, k: &'b Q) -> Option<&'b V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord,
@@ -1741,6 +1751,54 @@ impl<
             }
         }
         r
+    }
+
+    /// If a value is in the thread local cache, retrieve it for mutation. If the value
+    /// is not in the thread local cache, it is retrieved and cloned from the main cache. If
+    /// the value had been marked for removal, it must first be re-inserted.
+    ///
+    /// # Safety
+    ///
+    /// Since you are mutating the state of the value, if you have sized insertions you MAY
+    /// break this since you can change the weight of the value to be inconsistent
+    pub fn get_mut<'b, Q: ?Sized>(&'b mut self, k: &'b Q, make_dirty: bool) -> Option<&'b mut V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + Ord,
+    {
+        // If we were requested to clear, we can not copy to the tlocal cache.
+        let is_cleared = unsafe {
+            let clear_ptr = self.clear.get();
+            *clear_ptr
+        };
+
+        // If the main cache has NOT been cleared (ie it has items) and our tlocal
+        // does NOT contain this key, then we prime it.
+        if !is_cleared && !self.tlocal.contains_key(k) {
+            // Copy from the core cache into the tlocal.
+            let k_hash: u64 = self.cache.prehash(k);
+            if let Some(v) = self.cache.get_prehashed(k, k_hash) {
+                if let Some((dk, dv, ds)) = v.to_kvsref() {
+                    self.tlocal.insert(
+                        dk.clone(),
+                        ThreadCacheItem::Present(dv.clone(), !make_dirty, ds),
+                    );
+                }
+            }
+        };
+
+        // Now return from the tlocal, if present, a mut pointer.
+
+        match self.tlocal.get_mut(k) {
+            Some(ThreadCacheItem::Present(v, clean, _size)) => {
+                if make_dirty && *clean {
+                    *clean = false;
+                }
+                let v = v as *mut _;
+                unsafe { Some(&mut (*v)) }
+            }
+            _ => None,
+        }
     }
 
     /// Determine if this cache contains the following key.
@@ -1935,11 +1993,6 @@ impl<
             p: inner.p,
         }
     }
-
-    // get_mut
-    //  If it's in tlocal, return that as get_mut
-    // if it's in the cache, clone to tlocal, then get_mut to tlock
-    // if not, return none.
 
     // to_snapshot
 }
@@ -3106,5 +3159,40 @@ mod tests {
         assert!(stats3.write_modifies == 0);
         assert!(stats3.freq_evicts == 0);
         assert!(stats3.recent_evicts == 0);
+    }
+
+    #[test]
+    fn test_cache_mut_inplace() {
+        // Make a cache
+        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+            .set_size(4, 0)
+            .build()
+            .expect("Invaled cache parameters!");
+        let mut wr_txn = arc.write();
+
+        assert!(wr_txn.get_mut(&1, false).is_none());
+        // It was inserted, can mutate. This is the tlocal present state.
+        wr_txn.insert(1, 1);
+        {
+            let mref = wr_txn.get_mut(&1, false).unwrap();
+            *mref = 2;
+        }
+        assert!(wr_txn.get_mut(&1, false) == Some(&mut 2));
+        wr_txn.commit();
+
+        // It's in the main cache, can mutate immediately and the tlocal is primed.
+        let mut wr_txn = arc.write();
+        {
+            let mref = wr_txn.get_mut(&1, false).unwrap();
+            *mref = 3;
+        }
+        assert!(wr_txn.get_mut(&1, false) == Some(&mut 3));
+        wr_txn.commit();
+
+        // Marked for remove, can not mut.
+        let mut wr_txn = arc.write();
+        wr_txn.remove(1);
+        assert!(wr_txn.get_mut(&1, false).is_none());
+        wr_txn.commit();
     }
 }

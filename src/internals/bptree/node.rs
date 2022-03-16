@@ -114,8 +114,14 @@ pub(crate) struct Node<K, V> {
     v: PhantomData<V>,
 }
 
-unsafe impl<K: Clone + Ord + Debug + Send + 'static, V: Clone + Send + 'static> Send for Node<K, V> {}
-unsafe impl<K: Clone + Ord + Debug + Send + 'static, V: Clone + Sync + Send + 'static> Sync for Node<K, V> {}
+unsafe impl<K: Clone + Ord + Debug + Send + 'static, V: Clone + Send + 'static> Send
+    for Node<K, V>
+{
+}
+unsafe impl<K: Clone + Ord + Debug + Send + 'static, V: Clone + Sync + Send + 'static> Sync
+    for Node<K, V>
+{
+}
 
 /*
 pub(crate) union NodeX<K, V>
