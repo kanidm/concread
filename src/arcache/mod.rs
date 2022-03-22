@@ -29,6 +29,7 @@ use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem;
+use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::time::Instant;
@@ -1819,9 +1820,9 @@ impl<
     }
 
     /// Insert an item to the cache, with an associated weight/size factor. See also [insert]
-    pub fn insert_sized(&mut self, k: K, v: V, size: usize) {
+    pub fn insert_sized(&mut self, k: K, v: V, size: NonZeroUsize) {
         self.tlocal
-            .insert(k, ThreadCacheItem::Present(v, true, size));
+            .insert(k, ThreadCacheItem::Present(v, true, size.get()));
     }
 
     /// Remove this value from the thread local cache IE mask from from being
@@ -1841,9 +1842,9 @@ impl<
     }
 
     /// Insert a dirty item to the cache, with an associated weight/size factor. See also [insert_dirty]
-    pub fn insert_dirty_sized(&mut self, k: K, v: V, size: usize) {
+    pub fn insert_dirty_sized(&mut self, k: K, v: V, size: NonZeroUsize) {
         self.tlocal
-            .insert(k, ThreadCacheItem::Present(v, false, size));
+            .insert(k, ThreadCacheItem::Present(v, false, size.get()));
     }
 
     /// Remove this value from the thread local cache IE mask from from being
@@ -2071,8 +2072,9 @@ impl<
     }
 
     /// Insert an item to the cache, with an associated weight/size factor. See also [insert]
-    pub fn insert_sized(&mut self, k: K, v: V, size: usize) {
+    pub fn insert_sized(&mut self, k: K, v: V, size: NonZeroUsize) {
         let mut v = v;
+        let size = size.get();
         // Send a copy forward through time and space.
         // let _ = self.tx.try_send(
         if self
@@ -2130,7 +2132,7 @@ impl<
     /// heed this warning, you may alter the fabric of time and space and have some interesting
     /// distortions in your data over time.
     pub fn insert(&mut self, k: K, v: V) {
-        self.insert_sized(k, v, 1)
+        self.insert_sized(k, v, unsafe { NonZeroUsize::new_unchecked(1) })
     }
 }
 
@@ -2274,6 +2276,7 @@ mod tests {
     use super::ARCacheBuilder;
     use super::CStat;
     use super::CacheState;
+    use std::num::NonZeroUsize;
 
     #[test]
     fn test_cache_arc_basic() {
@@ -3038,8 +3041,8 @@ mod tests {
         );
 
         // In the first txn we insert 2 weight 2 items.
-        wr_txn.insert_sized(1, Weighted { _i: 1 }, 2);
-        wr_txn.insert_sized(2, Weighted { _i: 2 }, 2);
+        wr_txn.insert_sized(1, Weighted { _i: 1 }, NonZeroUsize::new(2).unwrap());
+        wr_txn.insert_sized(2, Weighted { _i: 2 }, NonZeroUsize::new(2).unwrap());
 
         assert!(
             CStat {
@@ -3095,8 +3098,8 @@ mod tests {
             } == wr_txn.peek_stat()
         );
 
-        wr_txn.insert_sized(3, Weighted { _i: 3 }, 2);
-        wr_txn.insert_sized(4, Weighted { _i: 4 }, 2);
+        wr_txn.insert_sized(3, Weighted { _i: 3 }, NonZeroUsize::new(2).unwrap());
+        wr_txn.insert_sized(4, Weighted { _i: 4 }, NonZeroUsize::new(2).unwrap());
         wr_txn.commit();
 
         // Check the evicts
