@@ -1,6 +1,6 @@
 //! HashTrie - A concurrently readable HashTrie
 //!
-//! A HashTrie is similar to the Tree based [`HashMap`], however instead of
+//! A HashTrie is similar to the Tree based `HashMap`, however instead of
 //! storing hashes in a tree arrangement, we use Trie behaviours to slice a hash
 //! into array indexes for accessing the elements. This reduces memory consumed
 //! as we do not need to store hashes of values in branches, but it can cause
@@ -12,7 +12,7 @@
 //! large sizes such as ~16,000,000 entries, this will only consume ~16KB for
 //! branches. The majority of your space will be taken by your keys and values.
 //!
-//! If in doubt, use [`HashMap`] 😁
+//! If in doubt, use `HashMap` 😁
 //!
 //! This structure is very different to the `im` crate. The `im` crate is
 //! sync + send over individual operations. This means that multiple writes can

@@ -674,7 +674,7 @@ impl ARCacheBuilder {
         }
     }
 
-    /// See [new_size] for more information. This allows manual configuration of the data
+    /// See `new_size` for more information. This allows manual configuration of the data
     /// tracking watermark. To disable this, set to 0. If watermark is greater than
     /// max, it will be clamped to max.
     #[must_use]
@@ -1819,7 +1819,7 @@ impl<
         self.tlocal.insert(k, ThreadCacheItem::Present(v, true, 1));
     }
 
-    /// Insert an item to the cache, with an associated weight/size factor. See also [insert]
+    /// Insert an item to the cache, with an associated weight/size factor. See also `insert`
     pub fn insert_sized(&mut self, k: K, v: V, size: NonZeroUsize) {
         self.tlocal
             .insert(k, ThreadCacheItem::Present(v, true, size.get()));
@@ -1841,7 +1841,7 @@ impl<
         self.tlocal.insert(k, ThreadCacheItem::Present(v, false, 1));
     }
 
-    /// Insert a dirty item to the cache, with an associated weight/size factor. See also [insert_dirty]
+    /// Insert a dirty item to the cache, with an associated weight/size factor. See also `insert_dirty`
     pub fn insert_dirty_sized(&mut self, k: K, v: V, size: NonZeroUsize) {
         self.tlocal
             .insert(k, ThreadCacheItem::Present(v, false, size.get()));
@@ -2071,7 +2071,7 @@ impl<
         self.get(k).is_some()
     }
 
-    /// Insert an item to the cache, with an associated weight/size factor. See also [insert]
+    /// Insert an item to the cache, with an associated weight/size factor. See also `insert`
     pub fn insert_sized(&mut self, k: K, v: V, size: NonZeroUsize) {
         let mut v = v;
         let size = size.get();

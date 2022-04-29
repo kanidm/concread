@@ -54,6 +54,15 @@ where
     inner: LinCowCellReadTxn<'a, SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
 }
 
+unsafe impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Send
+    for BptreeMapReadTxn<'a, K, V>
+{
+}
+unsafe impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync
+    for BptreeMapReadTxn<'a, K, V>
+{
+}
+
 /// An active write transaction for a `BptreeMap`. The data in this tree
 /// may be modified exclusively through this transaction without affecting
 /// readers. The write may be rolledback/aborted by dropping this guard
