@@ -1926,6 +1926,21 @@ impl<
             })
     }
 
+    /// Yield an iterator over all currently live and valid cache items.
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.cache.values().filter_map(|ci| match &ci {
+            CacheItem::Rec(lln, v) => unsafe {
+                let cii = &*((**lln).k.as_ptr());
+                Some((&cii.k, v))
+            },
+            CacheItem::Freq(lln, v) => unsafe {
+                let cii = &*((**lln).k.as_ptr());
+                Some((&cii.k, v))
+            },
+            _ => None,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn iter_rec(&self) -> impl Iterator<Item = &K> {
         self.cache.values().filter_map(|ci| match &ci {
