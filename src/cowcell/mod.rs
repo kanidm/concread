@@ -12,9 +12,9 @@
 #[cfg(feature = "asynch")]
 pub mod asynch;
 
-use parking_lot::{Mutex, MutexGuard};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use std::sync::{Mutex, MutexGuard};
 
 /// A conncurrently readable cell.
 ///
@@ -111,7 +111,7 @@ where
     /// the read guard is guaranteed to be consistent for the life time of the
     /// read - even if writers commit during.
     pub fn read(&self) -> CowCellReadTxn<T> {
-        let rwguard = self.active.lock();
+        let rwguard = self.active.lock().unwrap();
         CowCellReadTxn(rwguard.clone())
         // rwguard ends here
     }
@@ -121,10 +121,10 @@ where
     /// until `commit()` is called.
     pub fn write(&self) -> CowCellWriteTxn<T> {
         /* Take the exclusive write lock first */
-        let mguard = self.write.lock();
+        let mguard = self.write.lock().unwrap();
         // We delay copying until the first get_mut.
         let read = {
-            let rwguard = self.active.lock();
+            let rwguard = self.active.lock().unwrap();
             rwguard.clone()
         };
         /* Now build the write struct */
@@ -141,10 +141,10 @@ where
     /// `write(&self)`
     pub fn try_write(&self) -> Option<CowCellWriteTxn<T>> {
         /* Take the exclusive write lock first */
-        self.write.try_lock().map(|mguard| {
+        self.write.try_lock().ok().map(|mguard| {
             // We delay copying until the first get_mut.
             let read = {
-                let rwguard = self.active.lock();
+                let rwguard = self.active.lock().unwrap();
                 rwguard.clone()
             };
             /* Now build the write struct */
@@ -159,7 +159,7 @@ where
 
     fn commit(&self, newdata: Option<T>) {
         if let Some(nd) = newdata {
-            let mut rwguard = self.active.lock();
+            let mut rwguard = self.active.lock().unwrap();
             let new_inner = Arc::new(nd);
             // now over-write the last value in the mutex.
             *rwguard = new_inner;

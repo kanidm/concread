@@ -19,10 +19,10 @@ use crossbeam_epoch as epoch;
 use crossbeam_epoch::{Atomic, Guard, Owned};
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
-use parking_lot::{Mutex, MutexGuard};
 use std::marker::Send;
 use std::mem;
 use std::ops::{Deref, DerefMut};
+use std::sync::{Mutex, MutexGuard};
 
 /// An `EbrCell` Write Transaction handle.
 ///
@@ -150,7 +150,7 @@ where
     /// Begin a write transaction, returning a write guard.
     pub fn write(&self) -> EbrCellWriteTxn<T> {
         /* Take the exclusive write lock first */
-        let mguard = self.write.lock();
+        let mguard = self.write.lock().unwrap();
         /* Do an atomic load of the current value */
         let guard = epoch::pin();
         let cur_shared = self.active.load(Acquire, &guard);
@@ -166,7 +166,7 @@ where
     /// Attempt to begin a write transaction. If it's already held,
     /// `None` is returned.
     pub fn try_write(&self) -> Option<EbrCellWriteTxn<T>> {
-        self.write.try_lock().map(|mguard| {
+        self.write.try_lock().ok().map(|mguard| {
             let guard = epoch::pin();
             let cur_shared = self.active.load(Acquire, &guard);
             /* Now build the write struct, we'll discard the pin shortly! */

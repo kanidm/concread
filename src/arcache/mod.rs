@@ -18,10 +18,10 @@ use crate::cowcell::{CowCell, CowCellReadTxn};
 use crate::hashtrie::*;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use crossbeam::queue::ArrayQueue;
-use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap as Map;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::{Mutex, RwLock};
 
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -848,7 +848,7 @@ impl<
     /// that are localled included via `insert`, and can communicate back to the main cache
     /// to safely include items.
     pub fn read(&self) -> ARCacheReadTxn<K, V> {
-        let rshared = self.shared.read();
+        let rshared = self.shared.read().unwrap();
         let tlocal = if rshared.read_max > 0 {
             Some(ReadCache {
                 set: Map::new(),
@@ -1538,8 +1538,8 @@ impl<
         let commit_ts = Instant::now();
         let commit_txid = cache.get_txid();
         // Copy p + init cache sizes for adjustment.
-        let mut inner = self.inner.lock();
-        let shared = self.shared.read();
+        let mut inner = self.inner.lock().unwrap();
+        let shared = self.shared.read().unwrap();
         let mut stat_guard = self.stats.write();
         let stats = stat_guard.get_mut();
 
@@ -1995,8 +1995,8 @@ impl<
 
     #[cfg(test)]
     pub(crate) fn peek_stat(&self) -> CStat {
-        let inner = self.caller.inner.lock();
-        let shared = self.caller.shared.read();
+        let inner = self.caller.inner.lock().unwrap();
+        let shared = self.caller.shared.read().unwrap();
         CStat {
             max: shared.max,
             cache: self.cache.len(),

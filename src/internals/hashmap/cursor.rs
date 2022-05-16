@@ -15,7 +15,7 @@ use std::hash::{Hash, Hasher};
 
 use super::iter::{Iter, KeyIter, ValueIter};
 use super::states::*;
-use parking_lot::Mutex;
+use std::sync::Mutex;
 
 use crate::internals::lincowcell::LinCowCellCapable;
 
@@ -71,7 +71,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>,
         mut new: CursorWrite<K, V>,
         prev: &CursorRead<K, V>,
     ) -> CursorRead<K, V> {
-        let mut prev_last_seen = prev.last_seen.lock();
+        let mut prev_last_seen = prev.last_seen.lock().unwrap();
         debug_assert!((*prev_last_seen).is_empty());
 
         let new_last_seen = &mut new.last_seen;

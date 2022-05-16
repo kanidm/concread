@@ -27,7 +27,6 @@ default = ["asynch"]
 crossbeam-epoch = "0.9"
 crossbeam-utils = "0.8"
 crossbeam = "0.8"
-parking_lot = "0.11"
 smallvec = "1.4"
 ahash = "0.7"
 rand = "0.8"

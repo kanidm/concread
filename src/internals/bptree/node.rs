@@ -9,12 +9,12 @@ use std::mem::MaybeUninit;
 use std::ptr;
 use std::slice;
 
-#[cfg(all(test, not(miri)))]
-use parking_lot::Mutex;
 #[cfg(test)]
 use std::collections::BTreeSet;
 #[cfg(all(test, not(miri)))]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(all(test, not(miri)))]
+use std::sync::Mutex;
 
 pub(crate) const TXID_MASK: u64 = 0x0fff_ffff_ffff_fff0;
 const FLAG_MASK: u64 = 0xf000_0000_0000_0000;
@@ -51,7 +51,7 @@ fn alloc_nid() -> usize {
     let nid: usize = NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel));
     #[cfg(all(test, not(miri)))]
     {
-        ALLOC_LIST.with(|llist| llist.lock().insert(nid));
+        ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(nid));
     }
     // eprintln!("Allocate -> {:?}", nid);
     nid
@@ -61,7 +61,7 @@ fn alloc_nid() -> usize {
 fn release_nid(nid: usize) {
     // println!("Release -> {:?}", nid);
     // debug_assert!(nid != 3);
-    let r = ALLOC_LIST.with(|llist| llist.lock().remove(&nid));
+    let r = ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
     assert!(r == true);
 }
 
@@ -70,7 +70,7 @@ pub(crate) fn assert_released() {
     #[cfg(not(miri))]
     {
         let is_empt = ALLOC_LIST.with(|llist| {
-            let x = llist.lock();
+            let x = llist.lock().unwrap();
             eprintln!("Remaining -> {:?}", x);
             x.is_empty()
         });

@@ -14,7 +14,7 @@ use super::iter::{Iter, KeyIter, ValueIter};
 use super::states::*;
 use std::iter::Extend;
 
-use parking_lot::Mutex;
+use std::sync::Mutex;
 
 /// The internal root of the tree, with associated garbage lists etc.
 #[derive(Debug)]
@@ -55,7 +55,7 @@ impl<K: Clone + Ord + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, Curso
         mut new: CursorWrite<K, V>,
         prev: &CursorRead<K, V>,
     ) -> CursorRead<K, V> {
-        let mut prev_last_seen = prev.last_seen.lock();
+        let mut prev_last_seen = prev.last_seen.lock().unwrap();
         debug_assert!((*prev_last_seen).is_empty());
 
         let new_last_seen = &mut new.last_seen;

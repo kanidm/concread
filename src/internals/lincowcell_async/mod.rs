@@ -55,11 +55,11 @@
  *
  */
 
-use parking_lot::Mutex as SyncMutex;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
+use std::sync::Mutex as SyncMutex;
 use tokio::sync::{Mutex, MutexGuard};
 
 use crate::internals::lincowcell::LinCowCellCapable;
@@ -180,7 +180,7 @@ where
         let new_inner = Arc::new(LinCowCellInner::new(newdata));
         {
             // This modifies the next pointer of the existing read txns
-            let mut rwguard_inner = rwguard.pin.lock();
+            let mut rwguard_inner = rwguard.pin.lock().unwrap();
             // Create the arc pointer to our new data
             // add it to the last value
             *rwguard_inner = Some(new_inner.clone());

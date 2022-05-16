@@ -6,7 +6,6 @@
 
 use crate::internals::lincowcell::LinCowCellCapable;
 
-use parking_lot::Mutex;
 use rand::Rng;
 use std::borrow::Borrow;
 use std::collections::{BTreeSet, VecDeque};
@@ -14,6 +13,7 @@ use std::fmt::{self, Debug};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::ptr;
+use std::sync::Mutex;
 
 use smallvec::SmallVec;
 
@@ -77,7 +77,7 @@ fn assert_released() {
     #[cfg(not(miri))]
     {
         let is_empty = ALLOC_LIST.with(|llist| {
-            let x = llist.lock();
+            let x = llist.lock().unwrap();
             println!("Remaining -> {:?}", x);
             x.is_empty()
         });
@@ -139,14 +139,14 @@ impl Ptr {
     #[inline(always)]
     fn mark_dirty(&mut self) {
         #[cfg(all(test, not(miri)))]
-        WRITE_LIST.with(|llist| assert!(llist.lock().insert(self.untagged())));
+        WRITE_LIST.with(|llist| assert!(llist.lock().unwrap().insert(self.untagged())));
         self.p |= FLAG_DIRTY
     }
 
     #[inline(always)]
     fn mark_clean(&mut self) {
         #[cfg(all(test, not(miri)))]
-        WRITE_LIST.with(|llist| assert!(llist.lock().remove(&(self.untagged()))));
+        WRITE_LIST.with(|llist| assert!(llist.lock().unwrap().remove(&(self.untagged()))));
         self.p &= MARK_CLEAN
     }
 
@@ -154,7 +154,7 @@ impl Ptr {
     pub(crate) fn as_bucket<K: Hash + Eq + Clone + Debug, V: Clone>(&self) -> &Bucket<K, V> {
         debug_assert!(self.is_bucket());
         #[cfg(all(test, not(miri)))]
-        ALLOC_LIST.with(|llist| assert!(llist.lock().contains(&self.untagged())));
+        ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
         unsafe { &*((self.p & UNTAG) as *const Bucket<K, V>) }
     }
 
@@ -162,7 +162,7 @@ impl Ptr {
     fn as_bucket_raw<K: Hash + Eq + Clone + Debug, V: Clone>(&self) -> *mut Bucket<K, V> {
         debug_assert!(self.is_bucket());
         #[cfg(all(test, not(miri)))]
-        ALLOC_LIST.with(|llist| assert!(llist.lock().contains(&self.untagged())));
+        ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
         (self.p & UNTAG) as *mut Bucket<K, V>
     }
 
@@ -174,7 +174,7 @@ impl Ptr {
         debug_assert!(self.is_dirty());
         #[cfg(all(test, not(miri)))]
         WRITE_LIST.with(|llist| {
-            let wlist_guard = llist.lock();
+            let wlist_guard = llist.lock().unwrap();
             assert!(wlist_guard.contains(&self.untagged()))
         });
         unsafe { &mut *((self.p & UNTAG) as *mut Bucket<K, V>) }
@@ -184,7 +184,7 @@ impl Ptr {
     pub(crate) fn as_branch<K: Hash + Eq + Clone + Debug, V: Clone>(&self) -> &Branch<K, V> {
         debug_assert!(self.is_branch());
         #[cfg(all(test, not(miri)))]
-        ALLOC_LIST.with(|llist| assert!(llist.lock().contains(&self.untagged())));
+        ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
         unsafe { &*((self.p & UNTAG) as *const Branch<K, V>) }
     }
 
@@ -192,7 +192,7 @@ impl Ptr {
     fn as_branch_raw<K: Hash + Eq + Clone + Debug, V: Clone>(&self) -> *mut Branch<K, V> {
         debug_assert!(self.is_branch());
         #[cfg(all(test, not(miri)))]
-        ALLOC_LIST.with(|llist| assert!(llist.lock().contains(&self.untagged())));
+        ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
         (self.p & UNTAG) as *mut Branch<K, V>
     }
 
@@ -204,7 +204,7 @@ impl Ptr {
         debug_assert!(self.is_dirty());
         #[cfg(all(test, not(miri)))]
         WRITE_LIST.with(|llist| {
-            let wlist_guard = llist.lock();
+            let wlist_guard = llist.lock().unwrap();
             assert!(wlist_guard.contains(&self.untagged()))
         });
         unsafe { &mut *((self.p & UNTAG) as *mut Branch<K, V>) }
@@ -223,7 +223,7 @@ impl Ptr {
     fn free<K: Hash + Eq + Clone + Debug, V: Clone>(&self) {
         // We MUST have allocated this, else it's a double free
         #[cfg(all(test, not(miri)))]
-        ALLOC_LIST.with(|llist| assert!(llist.lock().contains(&self.untagged())));
+        ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
 
         // It's getting freeeeeedddd
         unsafe {
@@ -236,11 +236,11 @@ impl Ptr {
 
         #[cfg(all(test, not(miri)))]
         if self.is_dirty() {
-            WRITE_LIST.with(|llist| assert!(llist.lock().remove(&(self.untagged()))))
+            WRITE_LIST.with(|llist| assert!(llist.lock().unwrap().remove(&(self.untagged()))))
         };
 
         #[cfg(all(test, not(miri)))]
-        ALLOC_LIST.with(|llist| assert!(llist.lock().remove(&self.untagged())));
+        ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().remove(&self.untagged())));
     }
 }
 
@@ -251,7 +251,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> From<Box<Branch<K, V>>> for Ptr {
             p: (ptr as usize) | FLAG_BRANCH,
         };
         #[cfg(all(test, not(miri)))]
-        ALLOC_LIST.with(|llist| llist.lock().insert(r.untagged()));
+        ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(r.untagged()));
         r
     }
 }
@@ -263,7 +263,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> From<Box<Bucket<K, V>>> for Ptr {
             p: (ptr as usize) | FLAG_BUCKET,
         };
         #[cfg(all(test, not(miri)))]
-        ALLOC_LIST.with(|llist| llist.lock().insert(r.untagged()));
+        ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(r.untagged()));
         r
     }
 }
@@ -412,7 +412,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>,
         mut new: CursorWrite<K, V>,
         prev: &CursorRead<K, V>,
     ) -> CursorRead<K, V> {
-        let mut prev_last_seen = prev.last_seen.lock();
+        let mut prev_last_seen = prev.last_seen.lock().unwrap();
         debug_assert!((*prev_last_seen).is_empty());
 
         let new_last_seen = &mut new.last_seen;

@@ -13,11 +13,11 @@
 //! Generally you should prefer to use `ARCache` over this module unless you really require
 //! the properties of this module.
 
-use parking_lot::{Mutex, MutexGuard};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
+use std::sync::{Mutex, MutexGuard};
 
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -127,7 +127,7 @@ where
         // is fine.
         let parent: &mut Self = unsafe { &mut *(self as *mut _) };
         // We are the only writer!
-        let guard = self.wrlock.lock();
+        let guard = self.wrlock.lock().unwrap();
         let txid = parent.inv_up_to_txid.load(Ordering::Acquire);
         let txid = txid + 1;
         parent.invalidate(txid);

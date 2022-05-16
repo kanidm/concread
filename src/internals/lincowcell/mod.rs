@@ -55,11 +55,11 @@
  *
  */
 
-use parking_lot::{Mutex, MutexGuard};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
+use std::sync::{Mutex, MutexGuard};
 
 /// Do not implement this. You don't need this negativity in your life.
 pub trait LinCowCellCapable<R, U> {
@@ -133,7 +133,7 @@ where
 
     /// Begin a read txn
     pub fn read(&self) -> LinCowCellReadTxn<T, R, U> {
-        let rwguard = self.active.lock();
+        let rwguard = self.active.lock().unwrap();
         LinCowCellReadTxn {
             _caller: self,
             // inc the arc.
@@ -144,7 +144,7 @@ where
     /// Begin a write txn
     pub fn write(&self) -> LinCowCellWriteTxn<T, R, U> {
         /* Take the exclusive write lock first */
-        let write_guard = self.write.lock();
+        let write_guard = self.write.lock().unwrap();
         /* Now take a ro-txn to get the data copied */
         // let active_guard = self.active.lock();
         /* This copies the data */
@@ -159,7 +159,7 @@ where
 
     /// Attempt a write txn
     pub fn try_write(&self) -> Option<LinCowCellWriteTxn<T, R, U>> {
-        self.write.try_lock().map(|write_guard| {
+        self.write.try_lock().ok().map(|write_guard| {
             /* This copies the data */
             let work: U = (*write_guard).create_writer();
             /* Now build the write struct */
@@ -181,14 +181,14 @@ where
         } = write;
 
         // Get the previous generation.
-        let mut rwguard = self.active.lock();
+        let mut rwguard = self.active.lock().unwrap();
         // Start to setup for the commit.
         let newdata = guard.pre_commit(work, &rwguard.data);
 
         let new_inner = Arc::new(LinCowCellInner::new(newdata));
         {
             // This modifies the next pointer of the existing read txns
-            let mut rwguard_inner = rwguard.pin.lock();
+            let mut rwguard_inner = rwguard.pin.lock().unwrap();
             // Create the arc pointer to our new data
             // add it to the last value
             *rwguard_inner = Some(new_inner.clone());
