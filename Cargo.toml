@@ -8,7 +8,7 @@ documentation = "https://docs.rs/concread/latest/concread/"
 homepage = "https://github.com/kanidm/concread/"
 repostiory = "https://github.com/kanidm/concread/"
 readme = "README.md"
-keywords = ["concurrency", "lru", "arc", "hashmap", "hashtrie", "btree", "stm", "software-transactional-memory", "copy-on-write", "mvcc", "cow"]
+keywords = ["concurrency", "lru", "multi-value-concurrency-control", "copy-on-write", "software-transactional-memory"]
 categories = ["data-structures", "memory-management", "caching", "concurrency"]
 license = "MPL-2.0"
 
