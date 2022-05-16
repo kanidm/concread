@@ -27,7 +27,9 @@
 #[cfg(feature = "asynch")]
 pub mod asynch;
 
+#[cfg(feature = "arcache")]
 use crate::internals::hashtrie::cursor::Datum;
+
 use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
 
 include!("impl.rs");
@@ -72,10 +74,12 @@ impl<
         V: Clone + Sync + Send + 'static,
     > HashTrieWriteTxn<'a, K, V>
 {
+    #[cfg(feature = "arcache")]
     pub(crate) fn get_txid(&self) -> u64 {
         self.inner.as_ref().get_txid()
     }
 
+    #[cfg(feature = "arcache")]
     pub(crate) fn prehash<'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
     where
         K: Borrow<Q>,
@@ -88,6 +92,7 @@ impl<
     /// have serious consequences. This API only exists to allow arcache to access the inner
     /// content of the slot to simplify it's API. You should basically never touch this
     /// function as it's the HashTrie equivalent of a the demon sphere.
+    #[cfg(feature = "arcache")]
     pub(crate) unsafe fn get_slot_mut(&mut self, k_hash: u64) -> Option<&mut [Datum<K, V>]> {
         self.inner.as_mut().get_slot_mut_ref(k_hash)
     }
@@ -107,10 +112,12 @@ impl<
         V: Clone + Sync + Send + 'static,
     > HashTrieReadTxn<'a, K, V>
 {
+    #[cfg(feature = "arcache")]
     pub(crate) fn get_txid(&self) -> u64 {
         self.inner.as_ref().get_txid()
     }
 
+    #[cfg(feature = "arcache")]
     pub(crate) fn prehash<'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
     where
         K: Borrow<Q>,

@@ -1,6 +1,6 @@
 macro_rules! hash_key {
     ($self:expr, $k:expr) => {{
-        let mut hasher = AHasher::new_with_keys($self.key1, $self.key2);
+        let mut hasher = $self.build_hasher.build_hasher();
         $k.hash(&mut hasher);
         hasher.finish()
     }};

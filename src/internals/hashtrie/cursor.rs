@@ -6,11 +6,9 @@
 
 use crate::internals::lincowcell::LinCowCellCapable;
 
-use rand::Rng;
 use std::borrow::Borrow;
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt::{self, Debug};
-use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::ptr;
 use std::sync::Mutex;
@@ -18,6 +16,13 @@ use std::sync::Mutex;
 use smallvec::SmallVec;
 
 use super::iter::*;
+
+#[cfg(feature = "ahash")]
+use ahash::RandomState;
+#[cfg(not(feature = "ahash"))]
+use std::collections::hash_map::RandomState;
+
+use std::hash::{Hash, Hasher, BuildHasher};
 
 // This defines the max height of our tree. Gives 16777216.0 entries
 // This only consumes 16KB if fully populated
@@ -60,7 +65,7 @@ const DEFAULT_BUCKET_ALLOC: usize = 1;
 
 macro_rules! hash_key {
     ($self:expr, $k:expr) => {{
-        let mut hasher = ahash::AHasher::new_with_keys($self.key1, $self.key2);
+        let mut hasher = $self.build_hasher.build_hasher();
         $k.hash(&mut hasher);
         hasher.finish()
     }};
@@ -371,8 +376,7 @@ where
     root: Ptr,
     length: usize,
     txid: u64,
-    key1: u128,
-    key2: u128,
+    build_hasher: RandomState,
     k: PhantomData<K>,
     v: PhantomData<V>,
 }
@@ -388,8 +392,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
             root,
             length: 0,
             txid: 1,
-            key1: rand::thread_rng().gen::<u128>(),
-            key2: rand::thread_rng().gen::<u128>(),
+            build_hasher: RandomState::new(),
             k: PhantomData,
             v: PhantomData,
         }
@@ -569,10 +572,9 @@ where
     txid: u64,
     length: usize,
     root: Ptr,
-    key1: u128,
-    key2: u128,
     last_seen: Vec<Ptr>,
     first_seen: Vec<Ptr>,
+    build_hasher: RandomState,
     k: PhantomData<K>,
     v: PhantomData<V>,
 }
@@ -585,14 +587,15 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
         let last_seen = Vec::with_capacity(16);
         let first_seen = Vec::with_capacity(16);
 
+        let build_hasher = sblock.build_hasher.clone();
+
         CursorWrite {
             txid,
             length,
             root,
             last_seen,
             first_seen,
-            key1: sblock.key1,
-            key2: sblock.key2,
+            build_hasher,
             k: PhantomData,
             v: PhantomData,
         }
@@ -996,25 +999,24 @@ where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
-    key1: u128,
-    key2: u128,
     txid: u64,
     length: usize,
     root: Ptr,
     last_seen: Mutex<Vec<Ptr>>,
+    build_hasher: RandomState,
     k: PhantomData<K>,
     v: PhantomData<V>,
 }
 
 impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorRead<K, V> {
     pub(crate) fn new(sblock: &SuperBlock<K, V>) -> Self {
+        let build_hasher = sblock.build_hasher.clone();
         CursorRead {
             txid: sblock.txid,
             length: sblock.length,
             root: sblock.root,
             last_seen: Mutex::new(Vec::with_capacity(0)),
-            key1: sblock.key1,
-            key2: sblock.key2,
+            build_hasher,
             k: PhantomData,
             v: PhantomData,
         }

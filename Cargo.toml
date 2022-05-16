@@ -8,7 +8,7 @@ documentation = "https://docs.rs/concread/latest/concread/"
 homepage = "https://github.com/kanidm/concread/"
 repostiory = "https://github.com/kanidm/concread/"
 readme = "README.md"
-keywords = ["concurrency", "lru", "arc", "hashmap", "btree"]
+keywords = ["concurrency", "lru", "arc", "hashmap", "btree", "stm", "software transactional memory", "copy on write", "mvcc"]
 categories = ["data-structures", "memory-management", "caching", "concurrency"]
 license = "MPL-2.0"
 
@@ -17,22 +17,28 @@ name = "concread"
 path = "src/lib.rs"
 
 [features]
+# Features to add/remove contents.
+asynch = ["tokio"]
+ebr = ["crossbeam-epoch"]
+maps = ["crossbeam", "smallvec"]
+arcache = ["maps", "lru"]
+# ahash is another feature here
+
+# Internal features for tweaking some alighn/perf behaviours.
 # simd_support = ["core_simd"]
 skinny = []
 hashtrie_chonk = []
-asynch = ["tokio"]
-default = ["asynch"]
+
+default = ["asynch", "ahash", "ebr", "maps", "arcache"]
 
 [dependencies]
-crossbeam-epoch = "0.9"
-crossbeam-utils = "0.8"
-crossbeam = "0.8"
-smallvec = "1.4"
-ahash = "0.7"
-rand = "0.8"
+crossbeam-epoch = { version = "0.9", optional = true }
+crossbeam = { version = "0.8", optional = true }
+smallvec = { version = "1.4", optional = true }
+ahash = { version = "0.7", optional = true }
 
 tokio = { version = "1", features = ["sync", "rt", "macros"], optional = true }
-lru = "0.7"
+lru = { version = "0.7", optional = true }
 
 # core_simd = { git = "https://github.com/rust-lang/portable-simd", optional = true }
 
@@ -41,6 +47,8 @@ time = "0.3"
 criterion = { version = "0.3", features = ["html_reports"] }
 function_name = "0.2"
 uuid = "0.8"
+crossbeam-utils = "0.8"
+rand = "0.8"
 
 [[bench]]
 name = "hashmap_benchmark"

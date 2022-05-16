@@ -5,13 +5,16 @@
 //! throughout the structure and how to handle that effectively
 
 use super::node::*;
-use rand::Rng;
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::mem;
 
-use ahash::AHasher;
-use std::hash::{Hash, Hasher};
+#[cfg(feature = "ahash")]
+use ahash::RandomState;
+#[cfg(not(feature = "ahash"))]
+use std::collections::hash_map::RandomState;
+
+use std::hash::{Hash, Hasher, BuildHasher};
 
 use super::iter::{Iter, KeyIter, ValueIter};
 use super::states::*;
@@ -42,8 +45,7 @@ where
     root: *mut Node<K, V>,
     size: usize,
     txid: u64,
-    key1: u128,
-    key2: u128,
+    build_hasher: RandomState,
 }
 
 unsafe impl<K: Clone + Hash + Eq + Debug + Send + 'static, V: Clone + Send + 'static> Send
@@ -99,8 +101,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
             root: leaf as *mut Node<K, V>,
             size: 0,
             txid: 1,
-            key1: rand::thread_rng().gen::<u128>(),
-            key2: rand::thread_rng().gen::<u128>(),
+            build_hasher: RandomState::new(),
         }
     }
 
@@ -122,16 +123,12 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
         */
         // Determine our count internally.
         let (size, _, _) = unsafe { (*root).tree_density() };
-        // Gen keys.
-        let key1 = rand::thread_rng().gen::<u128>();
-        let key2 = rand::thread_rng().gen::<u128>();
         // Good to go!
         SuperBlock {
             txid,
             size,
             root,
-            key1,
-            key2,
+            build_hasher: RandomState::new(),
         }
     }
 }
@@ -142,12 +139,11 @@ where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
-    key1: u128,
-    key2: u128,
     txid: u64,
     length: usize,
     root: *mut Node<K, V>,
     last_seen: Mutex<Vec<*mut Node<K, V>>>,
+    build_hasher: RandomState,
 }
 
 unsafe impl<K: Clone + Hash + Eq + Debug + Send + 'static, V: Clone + Send + 'static> Send
@@ -169,10 +165,9 @@ where
     txid: u64,
     length: usize,
     root: *mut Node<K, V>,
-    key1: u128,
-    key2: u128,
     last_seen: Vec<*mut Node<K, V>>,
     first_seen: Vec<*mut Node<K, V>>,
+    build_hasher: RandomState,
 }
 
 unsafe impl<K: Clone + Hash + Eq + Debug + Send + 'static, V: Clone + Send + 'static> Send
@@ -273,14 +268,15 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
         let last_seen = Vec::with_capacity(16);
         let first_seen = Vec::with_capacity(16);
 
+        let build_hasher = sblock.build_hasher.clone();
+
         CursorWrite {
             txid,
             length,
             root,
             last_seen,
             first_seen,
-            key1: sblock.key1,
-            key2: sblock.key2,
+            build_hasher,
         }
     }
 
@@ -532,13 +528,13 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for SuperBlock<K, V> {
 impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorRead<K, V> {
     pub(crate) fn new(sblock: &SuperBlock<K, V>) -> Self {
         // println!("starting rd txid -> {:?}", sblock.txid);
+        let build_hasher = sblock.build_hasher.clone();
         CursorRead {
             txid: sblock.txid,
             length: sblock.size,
             root: sblock.root,
             last_seen: Mutex::new(Vec::with_capacity(0)),
-            key1: sblock.key1,
-            key2: sblock.key2,
+            build_hasher,
         }
     }
 }

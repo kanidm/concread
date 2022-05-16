@@ -1,14 +1,16 @@
 //! Concread - Concurrently Readable Datastructures
 //!
-//! Concurrently readable is often referred to as Copy-On-Write, Multi-Version-Concurrency-Control.
+//! Concurrently readable is often referred to as Copy-On-Write, Multi-Version-Concurrency-Control
+//! or Software Transaction Memory.
 //!
 //! These structures allow multiple readers with transactions
 //! to proceed while single writers can operate. A reader is guaranteed the content
-//! will remain the same for the duration of the read, and readers do not block writers.
+//! of their transaction will remain the same for the duration of the read, and readers do not block
+//! writers from proceeding.
 //! Writers are serialised, just like a mutex.
 //!
 //! You can use these in place of a RwLock, and will likely see improvements in
-//! parallel throughput.
+//! parallel throughput of your application.
 //!
 //! The best use is in place of mutex/rwlock, where the reader exists for a
 //! non-trivial amount of time.
@@ -20,8 +22,18 @@
 //! writers will begin to stall - or inversely, the writer will cause readers to block
 //! and wait as the writer proceeds.
 //!
-//! In the future, a concurrent BTree and HashTree will be added, that can be used inplace
-//! of a `RwLock<BTreeMap>` or `RwLock<HashMap>`. Stay tuned!
+//! # Features
+//! This library provides multiple structures for you to use. You may enable or disable these based
+//! on our features.
+//!
+//! * `ebr` - epoch based reclaim cell
+//! * `maps` - concurrently readable b+tree and hashmaps
+//! * `arcache` - concurrently readable ARC cache
+//! * `ahash` - use the cpu accelerated ahash crate
+//!
+//! By default all of these features are enabled. If you are planning to use this crate in a wasm
+//! context we recommend you use only `maps` as a feature.
+
 
 #![deny(warnings)]
 #![warn(unused_extern_crates)]
@@ -29,26 +41,36 @@
 #![allow(clippy::needless_lifetimes)]
 #![cfg_attr(feature = "simd_support", feature(portable_simd))]
 
+#[cfg(feature = "maps")]
 #[macro_use]
 extern crate smallvec;
 
-// This is where the gud rust lives.
-mod utils;
-
-// This is where the scary rust lives.
-pub mod internals;
-
-// pub mod hpcell;
 pub mod cowcell;
+pub use cowcell::CowCell;
+
+#[cfg(feature = "ebr")]
 pub mod ebrcell;
+#[cfg(feature = "ebr")]
+pub use ebrcell::EbrCell;
 
+#[cfg(feature = "arcache")]
 pub mod arcache;
-
+#[cfg(feature = "arcache")]
 pub mod threadcache;
 
+// This is where the scary rust lives.
+#[cfg(feature = "maps")]
+pub mod internals;
+// This is where the gud rust lives.
+#[cfg(feature = "maps")]
+mod utils;
+
+#[cfg(feature = "maps")]
 pub mod bptree;
+#[cfg(feature = "maps")]
 pub mod hashmap;
+#[cfg(feature = "maps")]
 pub mod hashtrie;
 
-pub use cowcell::CowCell;
-pub use ebrcell::EbrCell;
+
+
