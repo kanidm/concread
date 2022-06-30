@@ -22,7 +22,7 @@ use ahash::RandomState;
 #[cfg(not(feature = "ahash"))]
 use std::collections::hash_map::RandomState;
 
-use std::hash::{Hash, Hasher, BuildHasher};
+use std::hash::{BuildHasher, Hash, Hasher};
 
 // This defines the max height of our tree. Gives 16777216.0 entries
 // This only consumes 16KB if fully populated

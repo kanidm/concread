@@ -10,9 +10,10 @@ use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::mem;
 
-use super::iter::{Iter, KeyIter, ValueIter};
+use super::iter::{Iter, KeyIter, RangeIter, ValueIter};
 use super::states::*;
 use std::iter::Extend;
+use std::ops::RangeBounds;
 
 use std::sync::Mutex;
 
@@ -219,6 +220,15 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         Q: Ord,
     {
         self.search(k).is_some()
+    }
+
+    fn range<'a, R, T>(&'a self, range: R) -> RangeIter<'a, K, V>
+    where
+        K: Borrow<T>,
+        T: Ord,
+        R: RangeBounds<T>,
+    {
+        RangeIter::new(self.get_root(), range, self.len())
     }
 
     fn kv_iter(&self) -> Iter<K, V> {
