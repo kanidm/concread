@@ -1,10 +1,11 @@
 use crate::internals::bptree::cursor::CursorReadOps;
 use crate::internals::bptree::cursor::{CursorRead, CursorWrite, SuperBlock};
-use crate::internals::bptree::iter::{Iter, KeyIter, ValueIter};
+use crate::internals::bptree::iter::{Iter, RangeIter, KeyIter, ValueIter};
 use crate::internals::lincowcell::LinCowCellCapable;
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::iter::FromIterator;
+use std::ops::RangeBounds;
 
 /// A concurrently readable map based on a modified B+Tree structure.
 ///
@@ -189,7 +190,15 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
         self.inner.as_ref().len() == 0
     }
 
-    // (adv) range
+    /// Iterate over a range of values
+    pub fn range<'b, R, T>(&'b self, range: R) -> RangeIter<'b, K, V>
+    where
+        K: Borrow<T>,
+        T: Ord,
+        R: RangeBounds<T>,
+    {
+        self.inner.as_ref().range(range)
+    }
 
     /// Iterator over `(&K, &V)` of the set
     pub fn iter(&self) -> Iter<K, V> {
@@ -315,10 +324,19 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
         self.inner.as_ref().len() == 0
     }
 
-    // (adv) range
     #[allow(unused)]
     pub(crate) fn get_txid(&self) -> u64 {
         self.inner.as_ref().get_txid()
+    }
+
+    /// Iterate over a range of values
+    pub fn range<'b, R, T>(&'b self, range: R) -> RangeIter<'b, K, V>
+    where
+        K: Borrow<T>,
+        T: Ord,
+        R: RangeBounds<T>,
+    {
+        self.inner.as_ref().range(range)
     }
 
     /// Iterator over `(&K, &V)` of the set
@@ -392,7 +410,18 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
         self.len() == 0
     }
 
-    // (adv) range
+    /// Iterate over a range of values
+    pub fn range<'b, R, T>(&'b self, range: R) -> RangeIter<'b, K, V>
+    where
+        K: Borrow<T>,
+        T: Ord,
+        R: RangeBounds<T>,
+    {
+        match self.inner {
+            SnapshotType::R(inner) => inner.range(range),
+            SnapshotType::W(inner) => inner.range(range),
+        }
+    }
 
     /// Iterator over `(&K, &V)` of the set
     pub fn iter(&self) -> Iter<K, V> {

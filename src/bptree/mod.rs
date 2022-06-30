@@ -281,6 +281,24 @@ mod tests {
         bptree_map_basic_concurrency(10_000, 20_000)
     }
 
+    #[test]
+    fn test_bptree2_map_rangeiter_1() {
+        let ins: Vec<usize> = (0..100).collect();
+
+        let map = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
+
+        {
+            let w = map.write();
+            assert!(w.range(0..100).count() == 100);
+            assert!(w.range(25..100).count() == 75);
+            assert!(w.range(0..75).count() == 75);
+            assert!(w.range(25..75).count() == 50);
+        }
+        // assert!(w.tree_density() == ((L_CAPACITY << 4), (L_CAPACITY << 4)));
+        std::mem::drop(map);
+        assert_released();
+    }
+
     /*
     #[test]
     fn test_bptree2_map_write_compact() {

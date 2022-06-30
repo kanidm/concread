@@ -14,7 +14,7 @@ use ahash::RandomState;
 #[cfg(not(feature = "ahash"))]
 use std::collections::hash_map::RandomState;
 
-use std::hash::{Hash, Hasher, BuildHasher};
+use std::hash::{BuildHasher, Hash, Hasher};
 
 use super::iter::{Iter, KeyIter, ValueIter};
 use super::states::*;

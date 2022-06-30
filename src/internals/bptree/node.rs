@@ -30,14 +30,14 @@ const FLAG_DROPPED: u64 = 0xaaaa_bbbb_cccc_dddd;
 #[cfg(feature = "skinny")]
 pub(crate) const L_CAPACITY: usize = 3;
 #[cfg(feature = "skinny")]
-const L_CAPACITY_N1: usize = L_CAPACITY - 1;
+pub(crate) const L_CAPACITY_N1: usize = L_CAPACITY - 1;
 #[cfg(feature = "skinny")]
 pub(crate) const BV_CAPACITY: usize = L_CAPACITY + 1;
 
 #[cfg(not(feature = "skinny"))]
 pub(crate) const L_CAPACITY: usize = 7;
 #[cfg(not(feature = "skinny"))]
-const L_CAPACITY_N1: usize = L_CAPACITY - 1;
+pub(crate) const L_CAPACITY_N1: usize = L_CAPACITY - 1;
 #[cfg(not(feature = "skinny"))]
 pub(crate) const BV_CAPACITY: usize = L_CAPACITY + 1;
 
@@ -71,7 +71,7 @@ pub(crate) fn assert_released() {
     {
         let is_empt = ALLOC_LIST.with(|llist| {
             let x = llist.lock().unwrap();
-            eprintln!("Remaining -> {:?}", x);
+            eprintln!("Assert Released - Remaining -> {:?}", x);
             x.is_empty()
         });
         assert!(is_empt);
@@ -300,6 +300,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
+    /*
     pub(crate) fn leaf_count(&self) -> usize {
         match self.meta.0 & FLAG_MASK {
             FLAG_LEAF => 1,
@@ -315,6 +316,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
             _ => unreachable!(),
         }
     }
+    */
 
     #[cfg(test)]
     #[inline(always)]
@@ -527,6 +529,15 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
     pub(crate) fn get_txid(&self) -> u64 {
         debug_assert_leaf!(self);
         self.meta.get_txid()
+    }
+
+    pub(crate) fn locate<Q: ?Sized>(&self, k: &Q) -> Result<usize, usize>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
+        debug_assert_leaf!(self);
+        key_search!(self, k)
     }
 
     pub(crate) fn get_ref<Q: ?Sized>(&self, k: &Q) -> Option<&V>
