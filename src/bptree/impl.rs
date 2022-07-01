@@ -1,6 +1,6 @@
 use crate::internals::bptree::cursor::CursorReadOps;
 use crate::internals::bptree::cursor::{CursorRead, CursorWrite, SuperBlock};
-use crate::internals::bptree::iter::{Iter, RangeIter, KeyIter, ValueIter};
+use crate::internals::bptree::iter::{Iter, IterMut, RangeIter, RangeIterMut, KeyIter, ValueIter};
 use crate::internals::lincowcell::LinCowCellCapable;
 use std::borrow::Borrow;
 use std::fmt::Debug;
@@ -215,9 +215,20 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
         self.inner.as_ref().k_iter()
     }
 
-    // (adv) keys
+    /// Iterate over a range of values with mutable values
+    pub fn range_mut<'b, R, T>(&'b mut self, range: R) -> RangeIterMut<'b, K, V>
+    where
+        K: Borrow<T>,
+        T: Ord,
+        R: RangeBounds<T>,
+    {
+        self.inner.as_mut().range_mut(range)
+    }
 
-    // (adv) values
+    /// Iterator over `(&K, &mut V)` of the set
+    pub fn iter_mut(&mut self) -> IterMut<K, V> {
+        self.inner.as_mut().iter_mut()
+    }
 
     #[allow(unused)]
     pub(crate) fn get_txid(&self) -> u64 {
@@ -265,12 +276,6 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
         self.inner.as_mut().get_mut_ref(key)
     }
-
-    // range_mut
-
-    // entry
-
-    // iter_mut
 
     #[cfg(test)]
     pub(crate) fn tree_density(&self) -> (usize, usize) {
