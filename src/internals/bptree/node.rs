@@ -563,19 +563,6 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
     }
 
     #[inline(always)]
-    pub(crate) fn get_kv_mut_idx_checked(&mut self, idx: usize) -> Option<(&K, &mut V)> {
-        debug_assert_leaf!(self);
-        if idx < self.count() {
-            Some((unsafe { &*self.key[idx].as_ptr() }, unsafe {
-                &mut *self.values[idx].as_mut_ptr()
-            }))
-        } else {
-            None
-        }
-    }
-
-    /*
-    #[inline(always)]
     pub(crate) fn get_kv_idx_checked(&self, idx: usize) -> Option<(&K, &V)> {
         debug_assert_leaf!(self);
         if idx < self.count() {
@@ -586,7 +573,6 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
             None
         }
     }
-    */
 
     pub(crate) fn min(&self) -> &K {
         debug_assert!(self.count() > 0);
