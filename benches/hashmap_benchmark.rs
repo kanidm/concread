@@ -196,6 +196,7 @@ fn search_vec<V: Clone + Sync + Send + 'static>(map: &HashMap<u32, V>, list: &Ve
 }
 
 #[derive(Default, Clone)]
+#[allow(dead_code)]
 struct Struct {
     var1: i64,
     var2: i64,

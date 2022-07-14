@@ -749,7 +749,7 @@ impl ARCacheBuilder {
                 // stats.p_weight = stats.p_weight.clamp(0, max);
                 stats
             })
-            .unwrap_or(CacheStats::default());
+            .unwrap_or_default();
 
         let watermark = watermark.unwrap_or(if max < 128 { 0 } else { (max / 20) * 18 });
         let watermark = watermark.clamp(0, max);
@@ -873,7 +873,7 @@ impl<
             tlocal_includes: 0,
             reader_includes: 0,
             reader_failed_includes: 0,
-            reader_quiesce: rshared.reader_quiesce.clone(),
+            reader_quiesce: rshared.reader_quiesce,
         }
     }
 
@@ -2177,14 +2177,8 @@ impl<
 impl CacheStats {
     /// Calculate the change since a previous point in time of the stats of this cache.
     pub fn change_since(&self, previous: &CacheStats) -> CacheStatsDiff {
-        let reader_ops = self
-            .reader_ops
-            .checked_sub(previous.reader_ops)
-            .unwrap_or(0);
-        let reader_hits = self
-            .reader_hits
-            .checked_sub(previous.reader_hits)
-            .unwrap_or(0);
+        let reader_ops = self.reader_ops.saturating_sub(previous.reader_ops);
+        let reader_hits = self.reader_hits.saturating_sub(previous.reader_hits);
 
         let reader_hit_pct = if reader_ops > 0 {
             (reader_hits as f64) / (reader_ops as f64)
@@ -2194,30 +2188,20 @@ impl CacheStats {
 
         let reader_tlocal_hits = self
             .reader_tlocal_hits
-            .checked_sub(previous.reader_tlocal_hits)
-            .unwrap_or(0);
+            .saturating_sub(previous.reader_tlocal_hits);
         let reader_tlocal_includes = self
             .reader_tlocal_includes
-            .checked_sub(previous.reader_tlocal_includes)
-            .unwrap_or(0);
+            .saturating_sub(previous.reader_tlocal_includes);
 
         let reader_includes = self
             .reader_includes
-            .checked_sub(previous.reader_includes)
-            .unwrap_or(0);
+            .saturating_sub(previous.reader_includes);
         let reader_failed_includes = self
             .reader_failed_includes
-            .checked_sub(previous.reader_failed_includes)
-            .unwrap_or(0);
+            .saturating_sub(previous.reader_failed_includes);
 
-        let write_read_ops = self
-            .write_read_ops
-            .checked_sub(previous.write_read_ops)
-            .unwrap_or(0);
-        let write_hits = self
-            .write_hits
-            .checked_sub(previous.write_hits)
-            .unwrap_or(0);
+        let write_read_ops = self.write_read_ops.saturating_sub(previous.write_read_ops);
+        let write_hits = self.write_hits.saturating_sub(previous.write_hits);
 
         let writer_read_hit_pct = if write_read_ops > 0 {
             (write_hits as f64) / (write_read_ops as f64)
@@ -2225,14 +2209,8 @@ impl CacheStats {
             0.0
         };
 
-        let write_includes = self
-            .write_includes
-            .checked_sub(previous.write_includes)
-            .unwrap_or(0);
-        let write_modifies = self
-            .write_modifies
-            .checked_sub(previous.write_modifies)
-            .unwrap_or(0);
+        let write_includes = self.write_includes.saturating_sub(previous.write_includes);
+        let write_modifies = self.write_modifies.saturating_sub(previous.write_modifies);
 
         let total_ops = reader_ops + write_read_ops;
         let total_hits = reader_hits + reader_tlocal_hits + write_hits;
@@ -2246,14 +2224,8 @@ impl CacheStats {
         // let freq = (self.freq as i64) - (previous.freq as i64);
         // let recent = (self.recent as i64) - (previous.recent as i64);
 
-        let freq_evicts = self
-            .freq_evicts
-            .checked_sub(previous.freq_evicts)
-            .unwrap_or(0);
-        let recent_evicts = self
-            .recent_evicts
-            .checked_sub(previous.recent_evicts)
-            .unwrap_or(0);
+        let freq_evicts = self.freq_evicts.saturating_sub(previous.freq_evicts);
+        let recent_evicts = self.recent_evicts.saturating_sub(previous.recent_evicts);
 
         let p_weight = (self.p_weight as i64) - (previous.p_weight as i64);
 

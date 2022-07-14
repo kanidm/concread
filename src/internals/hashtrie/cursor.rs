@@ -30,6 +30,7 @@ use std::hash::{BuildHasher, Hash, Hasher};
 pub(crate) const MAX_HEIGHT: u64 = 8;
 // The true absolute max height
 #[cfg(not(feature = "hashtrie_chonk"))]
+#[cfg(test)]
 const ABS_MAX_HEIGHT: u64 = 21;
 #[cfg(not(feature = "hashtrie_chonk"))]
 pub(crate) const HT_CAPACITY: usize = 8;
@@ -252,6 +253,7 @@ impl Ptr {
 impl<K: Hash + Eq + Clone + Debug, V: Clone> From<Box<Branch<K, V>>> for Ptr {
     fn from(b: Box<Branch<K, V>>) -> Self {
         let ptr: *mut Branch<K, V> = Box::into_raw(b);
+        #[allow(clippy::let_and_return)]
         let r = Self {
             p: (ptr as usize) | FLAG_BRANCH,
         };
@@ -264,6 +266,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> From<Box<Branch<K, V>>> for Ptr {
 impl<K: Hash + Eq + Clone + Debug, V: Clone> From<Box<Bucket<K, V>>> for Ptr {
     fn from(b: Box<Bucket<K, V>>) -> Self {
         let ptr: *mut Bucket<K, V> = Box::into_raw(b);
+        #[allow(clippy::let_and_return)]
         let r = Self {
             p: (ptr as usize) | FLAG_BUCKET,
         };
@@ -357,7 +360,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
 
     fn clone_dirty(&self) -> Ptr {
         let bc: Box<Branch<K, V>> = Box::new(Branch {
-            nodes: self.nodes.clone(),
+            nodes: self.nodes,
             k: PhantomData,
             v: PhantomData,
         });
@@ -384,6 +387,7 @@ where
 impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
     /// 🔥 🔥 🔥
     pub unsafe fn new() -> Self {
+        #[cfg(debug)]
         assert!(MAX_HEIGHT <= ABS_MAX_HEIGHT);
 
         let b: Box<Branch<K, V>> = Branch::new();
@@ -627,13 +631,11 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
         while let Some(tgt_ptr) = stack.pop_front() {
             // For all nodes
             for n in unsafe { tgt_ptr.as_branch_mut_nock::<K, V>().nodes.iter_mut() } {
-                if !n.is_null() {
-                    if n.is_dirty() {
-                        if n.is_branch() {
-                            stack.push_back(*n);
-                        }
-                        n.mark_clean();
+                if !n.is_null() && n.is_dirty() {
+                    if n.is_branch() {
+                        stack.push_back(*n);
                     }
+                    n.mark_clean();
                 }
             }
 
@@ -793,7 +795,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
             } else {
                 // if bucket
                 // Fast path - if the tgt is len 1, we can just remove it.
-                debug_assert!(tgt_ptr.as_bucket::<K, V>().len() > 0);
+                debug_assert!(!tgt_ptr.as_bucket::<K, V>().is_empty());
                 if tgt_ptr.as_bucket::<K, V>().len() == 1 {
                     let tgt_bkt = tgt_ptr.as_bucket::<K, V>();
                     let datum = &tgt_bkt[0];
@@ -884,7 +886,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
                     node = nbrch_ptr;
                 }
             } else {
-                debug_assert!(tgt_ptr.as_bucket::<K, V>().len() > 0);
+                debug_assert!(!tgt_ptr.as_bucket::<K, V>().is_empty());
                 let bkt_ptr = if tgt_ptr.is_dirty() {
                     // If the bkt is dirty, we can just manipulate it.
                     tgt_ptr
@@ -921,7 +923,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
                         None
                     }
                 })
-                .nth(0)
+                .next()
         })
     }
 
