@@ -1,4 +1,4 @@
-name: "Rust Test"
+name: "Rust Miri"
 
 # Trigger the workflow on push to master or pull request
 "on":
@@ -6,7 +6,7 @@ name: "Rust Test"
   pull_request:
 
 jobs:
-  rust_test:
+  miri_test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
@@ -14,9 +14,15 @@ jobs:
     - name: Install Rust
       uses: actions-rs/toolchain@v1.0.6
       with:
-        toolchain: stable
+        toolchain: nightly
 
-    - name: Cargo test
-      run: cargo test
+    - name: Install miri
+      run: rustup +nightly component add miri
+
+    - name: Cargo clean
+      run: cargo clean
+
+    - name: Miri test
+      run: cargo +nightly miri test
 
 
