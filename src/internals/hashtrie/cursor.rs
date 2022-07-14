@@ -173,6 +173,7 @@ impl Ptr {
     }
 
     #[inline(always)]
+    #[allow(clippy::mut_from_ref)]
     pub(crate) fn as_bucket_mut<K: Hash + Eq + Clone + Debug, V: Clone>(
         &self,
     ) -> &mut Bucket<K, V> {
@@ -203,6 +204,7 @@ impl Ptr {
     }
 
     #[inline(always)]
+    #[allow(clippy::mut_from_ref)]
     pub(crate) fn as_branch_mut<K: Hash + Eq + Clone + Debug, V: Clone>(
         &self,
     ) -> &mut Branch<K, V> {
@@ -217,6 +219,7 @@ impl Ptr {
     }
 
     #[inline(always)]
+    #[allow(clippy::mut_from_ref)]
     unsafe fn as_branch_mut_nock<K: Hash + Eq + Clone + Debug, V: Clone>(
         &self,
     ) -> &mut Branch<K, V> {
