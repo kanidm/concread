@@ -31,9 +31,11 @@ pub static RUNNING: AtomicBool = AtomicBool::new(false);
 #[derive(Debug)]
 struct DataPoint {
     elapsed: Duration,
+    #[allow(dead_code)]
     csize: usize,
     hit_count: u32,
     attempt: u32,
+    #[allow(dead_code)]
     hit_pct: f64,
 }
 
