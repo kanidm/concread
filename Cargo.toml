@@ -40,6 +40,8 @@ ahash = { version = "0.7", optional = true }
 tokio = { version = "1", features = ["sync", "rt", "macros"], optional = true }
 lru = { version = "0.7", optional = true }
 
+sptr = "0.3"
+
 # core_simd = { git = "https://github.com/rust-lang/portable-simd", optional = true }
 
 [dev-dependencies]
