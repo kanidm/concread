@@ -23,6 +23,6 @@ jobs:
       run: cargo clean
 
     - name: Miri test
-      run: cargo +nightly miri test
+      run: MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-disable-stacked-borrows" cargo +nightly miri test
 
 
