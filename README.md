@@ -85,7 +85,7 @@ fix it!
 To check with miri OR asan on nightly:
 
     # Follow the miri readme setup steps
-    cargo clean && MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-tag-raw-pointers" cargo miri test
+    cargo clean && MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-disable-stacked-borrows" cargo miri test
     RUSTC_FLAGS="-Z sanitizer=address" cargo test
 
 Note: Miri requires isolation to be disabled so that clock monotonic can be used in ARC for cache channels.

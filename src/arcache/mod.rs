@@ -2032,15 +2032,16 @@ impl<
 
         self.ops += 1;
 
+        let mut hits = 0;
+        let mut tlocal_hits = 0;
+
         let r: Option<&V> = self
             .tlocal
             .as_ref()
             .and_then(|cache| {
                 cache.set.get(k).map(|v| unsafe {
                     // Indicate a hit on the tlocal cache.
-                    #[allow(mutable_transmutes)]
-                    let tlocal_hits = std::mem::transmute::<&u32, &mut u32>(&self.tlocal_hits);
-                    *tlocal_hits += 1;
+                    tlocal_hits += 1;
 
                     if self.above_watermark {
                         let _ = self.hit_queue.push(CacheHitEvent {
@@ -2057,9 +2058,7 @@ impl<
                 self.cache.get_prehashed(k, k_hash).and_then(|v| {
                     (*v).to_vref().map(|vin| unsafe {
                         // Indicate a hit on the main cache.
-                        #[allow(mutable_transmutes)]
-                        let hits = std::mem::transmute::<&u32, &mut u32>(&self.hits);
-                        *hits += 1;
+                        hits += 1;
 
                         if self.above_watermark {
                             let _ = self.hit_queue.push(CacheHitEvent {
@@ -2073,6 +2072,9 @@ impl<
                     })
                 })
             });
+
+        self.tlocal_hits += tlocal_hits;
+        self.hits += hits;
 
         r
     }

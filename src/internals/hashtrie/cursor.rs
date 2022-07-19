@@ -4,6 +4,9 @@
 //! Additionally, the cursor also is responsible for general movement
 //! throughout the structure and how to handle that effectively
 
+#![allow(unstable_name_collisions)]
+use sptr::Strict;
+
 use crate::internals::lincowcell::LinCowCellCapable;
 
 use std::borrow::Borrow;
@@ -93,7 +96,8 @@ fn assert_released() {
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Ptr {
-    p: usize,
+    // We essential are using this as a void pointer for provenance reasons.
+    p: *mut i32,
 }
 
 impl Debug for Ptr {
@@ -110,50 +114,48 @@ impl Debug for Ptr {
 impl Ptr {
     fn null_mut() -> Self {
         debug_assert!(std::mem::size_of::<Ptr>() == std::mem::size_of::<*mut Branch<u64, u64>>());
-        let pr: *mut Branch<u64, u64> = ptr::null_mut();
-        Ptr { p: pr as usize }
+        debug_assert!(std::mem::size_of::<Ptr>() == std::mem::size_of::<*mut Bucket<u64, u64>>());
+        Ptr { p: ptr::null_mut() }
     }
 
     #[inline(always)]
     pub(crate) fn is_null(&self) -> bool {
-        let pr: *mut Branch<u64, u64> = ptr::null_mut();
-        self.p == pr as usize
+        self.p.is_null()
     }
 
     #[inline(always)]
     pub(crate) fn is_bucket(&self) -> bool {
-        self.p & FLAG_BUCKET == FLAG_BUCKET
+        self.p.addr() & FLAG_BUCKET == FLAG_BUCKET
     }
 
     #[inline(always)]
     pub(crate) fn is_branch(&self) -> bool {
-        self.p & FLAG_BUCKET != FLAG_BUCKET
+        self.p.addr() & FLAG_BUCKET != FLAG_BUCKET
     }
 
     #[inline(always)]
     fn is_dirty(&self) -> bool {
-        self.p & FLAG_DIRTY == FLAG_DIRTY
+        self.p.addr() & FLAG_DIRTY == FLAG_DIRTY
     }
 
     #[cfg(all(test, not(miri)))]
     fn untagged(&self) -> Self {
-        let mut cp = self.clone();
-        cp.p &= UNTAG;
-        cp
+        let p = self.p.map_addr(|a| a & UNTAG);
+        Ptr { p }
     }
 
     #[inline(always)]
     fn mark_dirty(&mut self) {
         #[cfg(all(test, not(miri)))]
         WRITE_LIST.with(|llist| assert!(llist.lock().unwrap().insert(self.untagged())));
-        self.p |= FLAG_DIRTY
+        self.p = self.p.map_addr(|a| a | FLAG_DIRTY)
     }
 
     #[inline(always)]
     fn mark_clean(&mut self) {
         #[cfg(all(test, not(miri)))]
         WRITE_LIST.with(|llist| assert!(llist.lock().unwrap().remove(&(self.untagged()))));
-        self.p &= MARK_CLEAN
+        self.p = self.p.map_addr(|a| a & MARK_CLEAN)
     }
 
     #[inline(always)]
@@ -161,7 +163,7 @@ impl Ptr {
         debug_assert!(self.is_bucket());
         #[cfg(all(test, not(miri)))]
         ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
-        unsafe { &*((self.p & UNTAG) as *const Bucket<K, V>) }
+        unsafe { &*(self.p.map_addr(|a| a & UNTAG) as *const Bucket<K, V>) }
     }
 
     #[inline(always)]
@@ -169,7 +171,7 @@ impl Ptr {
         debug_assert!(self.is_bucket());
         #[cfg(all(test, not(miri)))]
         ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
-        (self.p & UNTAG) as *mut Bucket<K, V>
+        self.p.map_addr(|a| a & UNTAG) as *mut Bucket<K, V>
     }
 
     #[inline(always)]
@@ -184,7 +186,7 @@ impl Ptr {
             let wlist_guard = llist.lock().unwrap();
             assert!(wlist_guard.contains(&self.untagged()))
         });
-        unsafe { &mut *((self.p & UNTAG) as *mut Bucket<K, V>) }
+        unsafe { &mut *(self.p.map_addr(|a| a & UNTAG) as *mut Bucket<K, V>) }
     }
 
     #[inline(always)]
@@ -192,7 +194,7 @@ impl Ptr {
         debug_assert!(self.is_branch());
         #[cfg(all(test, not(miri)))]
         ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
-        unsafe { &*((self.p & UNTAG) as *const Branch<K, V>) }
+        unsafe { &*(self.p.map_addr(|a| a & UNTAG) as *const Branch<K, V>) }
     }
 
     #[inline(always)]
@@ -200,7 +202,7 @@ impl Ptr {
         debug_assert!(self.is_branch());
         #[cfg(all(test, not(miri)))]
         ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
-        (self.p & UNTAG) as *mut Branch<K, V>
+        self.p.map_addr(|a| a & UNTAG) as *mut Branch<K, V>
     }
 
     #[inline(always)]
@@ -215,7 +217,7 @@ impl Ptr {
             let wlist_guard = llist.lock().unwrap();
             assert!(wlist_guard.contains(&self.untagged()))
         });
-        unsafe { &mut *((self.p & UNTAG) as *mut Branch<K, V>) }
+        unsafe { &mut *(self.p.map_addr(|a| a & UNTAG) as *mut Branch<K, V>) }
     }
 
     #[inline(always)]
@@ -226,7 +228,7 @@ impl Ptr {
         debug_assert!(self.is_branch());
         debug_assert!(self.is_dirty());
         // This is the same as above, but bypasses the wlist check.
-        &mut *((self.p & UNTAG) as *mut Branch<K, V>)
+        &mut *(self.p.map_addr(|a| a & UNTAG) as *mut Branch<K, V>)
     }
 
     fn free<K: Hash + Eq + Clone + Debug, V: Clone>(&self) {
@@ -255,10 +257,10 @@ impl Ptr {
 
 impl<K: Hash + Eq + Clone + Debug, V: Clone> From<Box<Branch<K, V>>> for Ptr {
     fn from(b: Box<Branch<K, V>>) -> Self {
-        let ptr: *mut Branch<K, V> = Box::into_raw(b);
+        let rptr: *mut Branch<K, V> = Box::into_raw(b);
         #[allow(clippy::let_and_return)]
         let r = Self {
-            p: (ptr as usize) | FLAG_BRANCH,
+            p: rptr.map_addr(|a| a | FLAG_BRANCH) as *mut i32,
         };
         #[cfg(all(test, not(miri)))]
         ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(r.untagged()));
@@ -268,10 +270,10 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> From<Box<Branch<K, V>>> for Ptr {
 
 impl<K: Hash + Eq + Clone + Debug, V: Clone> From<Box<Bucket<K, V>>> for Ptr {
     fn from(b: Box<Bucket<K, V>>) -> Self {
-        let ptr: *mut Bucket<K, V> = Box::into_raw(b);
+        let rptr: *mut Bucket<K, V> = Box::into_raw(b);
         #[allow(clippy::let_and_return)]
         let r = Self {
-            p: (ptr as usize) | FLAG_BUCKET,
+            p: rptr.map_addr(|a| a | FLAG_BUCKET) as *mut i32,
         };
         #[cfg(all(test, not(miri)))]
         ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(r.untagged()));

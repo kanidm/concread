@@ -24,17 +24,24 @@ use std::hash::Hash;
 
 use lru::LruCache;
 
+struct Inner<K, V>
+where
+    K: Hash + Eq + Debug + Clone,
+{
+    tid: usize,
+    last_inv: Option<Invalidate<K>>,
+    cache: LruCache<K, V>,
+}
+
 /// An instance of a threads local cache store.
 pub struct ThreadLocal<K, V>
 where
     K: Hash + Eq + Debug + Clone,
 {
-    tid: usize,
     rx: Receiver<Invalidate<K>>,
     wrlock: Arc<Mutex<Writer<K>>>,
     inv_up_to_txid: Arc<AtomicU64>,
-    last_inv: Option<Invalidate<K>>,
-    cache: LruCache<K, V>,
+    inner: Mutex<Inner<K, V>>,
 }
 
 struct Writer<K>
@@ -52,9 +59,11 @@ where
     K: Hash + Eq + Debug + Clone,
 {
     txid: u64,
-    parent: &'a mut ThreadLocal<K, V>,
+    // parent: &'a mut ThreadLocal<K, V>,
+    parent: MutexGuard<'a, Inner<K, V>>,
     guard: MutexGuard<'a, Writer<K>>,
     rollback: HashSet<K>,
+    inv_up_to_txid: Arc<AtomicU64>,
 }
 
 /// A read transaction of this cache. During a read, it is guaranteed that the content
@@ -64,7 +73,8 @@ where
     K: Hash + Eq + Debug + Clone,
 {
     // txid: u64,
-    parent: &'a mut ThreadLocal<K, V>,
+    // parent: &'a mut ThreadLocal<K, V>,
+    parent: MutexGuard<'a, Inner<K, V>>,
 }
 
 #[derive(Clone)]
@@ -100,12 +110,14 @@ where
         rxs.into_iter()
             .enumerate()
             .map(|(tid, rx)| ThreadLocal {
-                tid,
                 rx,
                 wrlock: wrlock.clone(),
                 inv_up_to_txid: inv_up_to_txid.clone(),
-                last_inv: None,
-                cache: LruCache::new(capacity),
+                inner: Mutex::new(Inner {
+                    tid,
+                    last_inv: None,
+                    cache: LruCache::new(capacity),
+                }),
             })
             .collect()
     }
@@ -114,8 +126,9 @@ where
     /// invalidation requests will be acknowledged.
     pub fn read<'a>(&'a mut self) -> ThreadLocalReadTxn<'a, K, V> {
         let txid = self.inv_up_to_txid.load(Ordering::Acquire);
-        self.invalidate(txid);
-        ThreadLocalReadTxn { parent: self }
+
+        let parent = self.invalidate(txid);
+        ThreadLocalReadTxn { parent }
     }
 
     /// Begin a write transaction of this thread local cache. Once granted, only this
@@ -125,47 +138,51 @@ where
         // SAFETY this is safe, because while we are duplicating the mutable reference
         // which conflicts with the mutex, we aren't change the wrlock value so the mutex
         // is fine.
-        let parent: &mut Self = unsafe { &mut *(self as *mut _) };
+        // let parent: &mut Self = unsafe { &mut *(self as *mut _) };
         // We are the only writer!
         let guard = self.wrlock.lock().unwrap();
-        let txid = parent.inv_up_to_txid.load(Ordering::Acquire);
+        let inv_up_to_txid = self.inv_up_to_txid.clone();
+        let txid = self.inv_up_to_txid.load(Ordering::Acquire);
         let txid = txid + 1;
-        parent.invalidate(txid);
+        let parent = self.invalidate(txid);
         ThreadLocalWriteTxn {
             txid,
             parent,
             guard,
             rollback: HashSet::new(),
+            inv_up_to_txid,
         }
     }
 
-    /*
-    pub fn try_write<'a>(&'a mut self) -> Option<ThreadLocalWriteTxn<'a, K, V>> {
-        unimplemented!();
-    }
-    */
+    fn invalidate(&self, up_to: u64) -> MutexGuard<'_, Inner<K, V>> {
+        let mut inner = self.inner.lock().unwrap();
 
-    fn invalidate(&mut self, up_to: u64) {
-        if let Some(inv) = self.last_inv.as_ref() {
-            if inv.txid > up_to {
-                return;
+        if let Some(inv_txid) = inner.last_inv.as_ref().map(|inv| inv.txid) {
+            if inv_txid > up_to {
+                // We've already invalidated past this point.
+                return inner;
             } else {
-                self.cache.pop(&inv.k);
+                let mut inv = None;
+                std::mem::swap(&mut inv, &mut inner.last_inv);
+                // Must be valid due to being in a SOME loop!
+                let inv = inv.unwrap();
+                inner.cache.pop(&inv.k);
             }
         }
 
-        // We got here, so we must have acted on last_inv.
-        self.last_inv = None;
+        // We acted on the stashed invalidation, so lets see if anything else needs work.
 
         while let Ok(inv) = self.rx.try_recv() {
             if inv.txid > up_to {
                 // Stash this for next loop.
-                self.last_inv = Some(inv);
-                return;
+                inner.last_inv = Some(inv);
+                return inner;
             } else {
-                self.cache.pop(&inv.k);
+                inner.cache.pop(&inv.k);
             }
         }
+
+        inner
     }
 }
 
@@ -215,9 +232,7 @@ where
             }
         });
         // Now we have issued our invalidations, we can tell people to invalidate up to this txid
-        self.parent
-            .inv_up_to_txid
-            .store(self.txid, Ordering::Release);
+        self.inv_up_to_txid.store(self.txid, Ordering::Release);
         // Ensure our rollback set is empty now to avoid the drop handler.
         self.rollback.clear();
         // We're done!
@@ -260,7 +275,9 @@ where
 mod tests {
     use super::ThreadLocal;
 
+    // Temporarily ignored due to a bug in lru.
     #[test]
+    // #[cfg_attr(miri, ignore)]
     fn test_basic() {
         let mut cache: Vec<ThreadLocal<u32, u32>> = ThreadLocal::new(2, 8);
         let mut cache_a = cache.pop().unwrap();

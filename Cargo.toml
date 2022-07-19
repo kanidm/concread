@@ -40,13 +40,15 @@ ahash = { version = "0.7", optional = true }
 tokio = { version = "1", features = ["sync", "rt", "macros"], optional = true }
 lru = { version = "0.7", optional = true }
 
+sptr = "0.3"
+
 # core_simd = { git = "https://github.com/rust-lang/portable-simd", optional = true }
 
 [dev-dependencies]
 time = "0.3"
 criterion = { version = "0.3", features = ["html_reports"] }
-function_name = "0.2"
-uuid = "0.8"
+# function_name = "0.2"
+uuid = "1.0"
 crossbeam-utils = "0.8"
 rand = "0.8"
 
