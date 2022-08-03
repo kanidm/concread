@@ -239,9 +239,9 @@ impl Ptr {
         // It's getting freeeeeedddd
         unsafe {
             if self.is_bucket() {
-                Box::from_raw(self.as_bucket_raw::<K, V>());
+                let _ = Box::from_raw(self.as_bucket_raw::<K, V>());
             } else {
-                Box::from_raw(self.as_branch_raw::<K, V>());
+                let _ = Box::from_raw(self.as_branch_raw::<K, V>());
             }
         }
 
