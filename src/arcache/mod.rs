@@ -742,7 +742,9 @@ impl<
     /// Begin a read operation on the cache. This reader has a thread-local cache for items
     /// that are localled included via `insert`, and can communicate back to the main cache
     /// to safely include items.
-    pub fn read(&self) -> ARCacheReadTxn<K, V, ()> {
+    pub fn read_stats<S>(&self, stats: S) -> ARCacheReadTxn<K, V, S>
+        where S: ARCacheReadStat
+    {
         let rshared = self.shared.read().unwrap();
         let tlocal = if rshared.read_max > 0 {
             Some(ReadCache {
@@ -763,16 +765,15 @@ impl<
             inc_queue: rshared.inc_queue.clone(),
             above_watermark,
             reader_quiesce: rshared.reader_quiesce,
-            stats: (),
-            /*
-            hits: 0,
-            ops: 0,
-            tlocal_hits: 0,
-            tlocal_includes: 0,
-            reader_includes: 0,
-            reader_failed_includes: 0,
-            */
+            stats,
         }
+    }
+
+    /// Begin a read operation on the cache. This reader has a thread-local cache for items
+    /// that are localled included via `insert`, and can communicate back to the main cache
+    /// to safely include items.
+    pub fn read(&self) -> ARCacheReadTxn<K, V, ()> {
+        self.read_stats(())
     }
 
     /// Begin a write operation on the cache. This writer has a thread-local store
@@ -858,6 +859,8 @@ impl<
         }
     }
 
+    /// If the lock is available, attempt to quiesce the cache's async channel states. If the lock
+    /// is currently held, no action is taken.
     pub fn try_quiesce_stats<S>(&self, stats: S) -> S
     where
         S: ARCacheWriteStat<K>,
@@ -2171,7 +2174,7 @@ impl<
 
 #[cfg(test)]
 mod tests {
-    use super::stats::{CountStat, TraceStat};
+    use super::stats::{WriteCountStat, TraceStat};
     use super::ARCache as Arc;
     use super::ARCacheBuilder;
     use super::CStat;
@@ -3037,7 +3040,7 @@ mod tests {
             .build()
             .expect("Invaled cache parameters!");
 
-        let stats = CountStat::default();
+        let stats = WriteCountStat::default();
 
         let mut wr_txn = arc.write_stats(stats);
         wr_txn.insert(1, 1);
