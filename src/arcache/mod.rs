@@ -743,7 +743,7 @@ impl<
     /// that are localled included via `insert`, and can communicate back to the main cache
     /// to safely include items.
     pub fn read_stats<S>(&self, stats: S) -> ARCacheReadTxn<K, V, S>
-        where S: ARCacheReadStat
+        where S: ARCacheReadStat + Clone
     {
         let rshared = self.shared.read().unwrap();
         let tlocal = if rshared.read_max > 0 {
