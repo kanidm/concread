@@ -881,30 +881,40 @@ impl<
         self.try_quiesce_stats(())
     }
 
-    fn calc_p_freq(ghost_rec_len: usize, ghost_freq_len: usize, p: &mut usize) {
+    fn calc_p_freq(ghost_rec_len: usize, ghost_freq_len: usize, p: &mut usize, size: usize) {
         let delta = if ghost_rec_len > ghost_freq_len {
             ghost_rec_len / ghost_freq_len
         } else {
             1
-        };
+        } * size;
+        let p_was = *p;
         if delta < *p {
             *p -= delta
         } else {
             *p = 0
         }
+        tracing::trace!("f {} >>> {}", p_was, *p);
     }
 
-    fn calc_p_rec(cap: usize, ghost_rec_len: usize, ghost_freq_len: usize, p: &mut usize) {
+    fn calc_p_rec(
+        cap: usize,
+        ghost_rec_len: usize,
+        ghost_freq_len: usize,
+        p: &mut usize,
+        size: usize,
+    ) {
         let delta = if ghost_freq_len > ghost_rec_len {
             ghost_freq_len / ghost_rec_len
         } else {
             1
-        };
+        } * size;
+        let p_was = *p;
         if delta <= cap - *p {
             *p += delta
         } else {
             *p = cap
         }
+        tracing::trace!("r {} >>> {}", p_was, *p);
     }
 
     fn drain_tlocal_inc<'a, S>(
@@ -1020,6 +1030,7 @@ impl<
                                 inner.ghost_rec.len(),
                                 inner.ghost_freq.len(),
                                 &mut inner.p,
+                                size,
                             );
                             inner.ghost_freq.extract(*llp);
                             unsafe { (**llp).as_mut().txid = commit_txid };
@@ -1036,6 +1047,7 @@ impl<
                                 inner.ghost_rec.len(),
                                 inner.ghost_freq.len(),
                                 &mut inner.p,
+                                size,
                             );
                             inner.ghost_rec.extract(*llp);
                             unsafe { (**llp).as_mut().txid = commit_txid };
@@ -1173,19 +1185,27 @@ impl<
                         }
                         CacheItem::GhostFreq(llp) => {
                             // Adjust p
-                            Self::calc_p_freq(
-                                inner.ghost_rec.len(),
-                                inner.ghost_freq.len(),
-                                &mut inner.p,
-                            );
                             if unsafe { (**llp).as_ref().txid > txid } || inner.min_txid > txid {
                                 // println!("rxinc {:?} GhostFreq -> GhostFreq", k);
                                 // The cache version is newer, this is just a hit.
+                                let size = unsafe { (**llp).as_mut().size };
+                                Self::calc_p_freq(
+                                    inner.ghost_rec.len(),
+                                    inner.ghost_freq.len(),
+                                    &mut inner.p,
+                                    size,
+                                );
                                 inner.ghost_freq.touch(*llp);
                                 None
                             } else {
                                 // This item is newer, so we can include it.
                                 // println!("rxinc {:?} GhostFreq -> Rec", k);
+                                Self::calc_p_freq(
+                                    inner.ghost_rec.len(),
+                                    inner.ghost_freq.len(),
+                                    &mut inner.p,
+                                    size,
+                                );
                                 inner.ghost_freq.extract(*llp);
                                 unsafe { (**llp).as_mut().txid = txid };
                                 unsafe { (**llp).as_mut().size = size };
@@ -1196,18 +1216,27 @@ impl<
                         }
                         CacheItem::GhostRec(llp) => {
                             // Adjust p
-                            Self::calc_p_rec(
-                                shared.max,
-                                inner.ghost_rec.len(),
-                                inner.ghost_freq.len(),
-                                &mut inner.p,
-                            );
                             if unsafe { (**llp).as_ref().txid > txid } || inner.min_txid > txid {
                                 // println!("rxinc {:?} GhostRec -> GhostRec", k);
+                                let size = unsafe { (**llp).as_mut().size };
+                                Self::calc_p_rec(
+                                    shared.max,
+                                    inner.ghost_rec.len(),
+                                    inner.ghost_freq.len(),
+                                    &mut inner.p,
+                                    size,
+                                );
                                 inner.ghost_rec.touch(*llp);
                                 None
                             } else {
                                 // println!("rxinc {:?} GhostRec -> Rec", k);
+                                Self::calc_p_rec(
+                                    shared.max,
+                                    inner.ghost_rec.len(),
+                                    inner.ghost_freq.len(),
+                                    &mut inner.p,
+                                    size,
+                                );
                                 inner.ghost_rec.extract(*llp);
                                 unsafe { (**llp).as_mut().txid = txid };
                                 unsafe { (**llp).as_mut().size = size };
