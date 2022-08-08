@@ -995,9 +995,9 @@ impl<
                     // Now change the state.
                     mem::swap(*ci, &mut next_state);
                 }
-                // TODO: https://github.com/rust-lang/rust/issues/68354 will stabilise
+                // Done! https://github.com/rust-lang/rust/issues/68354 will stabilise
                 // in 1.44 so we can prevent a need for a clone.
-                (Some(ref mut ci), ThreadCacheItem::Present(ref tci, clean, size)) => {
+                (Some(ref mut ci), ThreadCacheItem::Present(tci, clean, size)) => {
                     assert!(clean);
                     //   * as we include each item, what state was it in before?
                     // It's in the cache - what action must we take?
@@ -1011,7 +1011,7 @@ impl<
                             inner.freq.append_n(*llp);
                             stats.modify(unsafe { &(**llp).as_mut().k });
                             // Update v.
-                            CacheItem::Freq(*llp, (*tci).clone())
+                            CacheItem::Freq(*llp, tci)
                         }
                         CacheItem::Rec(llp, _v) => {
                             // println!("tlocal {:?} Rec -> Freq", k);
@@ -1021,7 +1021,7 @@ impl<
                             unsafe { (**llp).as_mut().size = size };
                             inner.freq.append_n(*llp);
                             stats.modify(unsafe { &(**llp).as_mut().k });
-                            CacheItem::Freq(*llp, (*tci).clone())
+                            CacheItem::Freq(*llp, tci)
                         }
                         CacheItem::GhostFreq(llp) => {
                             // println!("tlocal {:?} GhostFreq -> Freq", k);
@@ -1037,7 +1037,7 @@ impl<
                             unsafe { (**llp).as_mut().size = size };
                             inner.freq.append_n(*llp);
                             stats.ghost_frequent_revive(unsafe { &(**llp).as_mut().k });
-                            CacheItem::Freq(*llp, (*tci).clone())
+                            CacheItem::Freq(*llp, tci)
                         }
                         CacheItem::GhostRec(llp) => {
                             // println!("tlocal {:?} GhostRec -> Rec", k);
@@ -1054,7 +1054,7 @@ impl<
                             unsafe { (**llp).as_mut().size = size };
                             inner.rec.append_n(*llp);
                             stats.ghost_recent_revive(unsafe { &(**llp).as_mut().k });
-                            CacheItem::Rec(*llp, (*tci).clone())
+                            CacheItem::Rec(*llp, tci)
                         }
                         CacheItem::Haunted(llp) => {
                             // stats.write_includes += 1;
@@ -1064,7 +1064,7 @@ impl<
                             unsafe { (**llp).as_mut().size = size };
                             inner.rec.append_n(*llp);
                             stats.include_haunted(unsafe { &(**llp).as_mut().k });
-                            CacheItem::Rec(*llp, (*tci).clone())
+                            CacheItem::Rec(*llp, tci)
                         }
                     };
                     // Now change the state.
@@ -1082,6 +1082,7 @@ impl<
     ) {
         // * for each item
         // while let Ok(ce) = inner.rx.try_recv() {
+        // TODO: Find a way to remove these clones here!
         while let Some(ce) = inner.hit_queue.pop() {
             let CacheHitEvent { t, k_hash } = ce;
             if let Some(ref mut ci_slots) = unsafe { cache.get_slot_mut(k_hash) } {
@@ -1313,6 +1314,8 @@ impl<
                         // This differs from above - we skip if we don't touch anything
                         // that was added in this txn. This is to prevent double touching
                         // anything that was included in a write.
+
+                        // TODO: find a way to remove these clones
                         let mut next_state = match &ci.v {
                             CacheItem::Freq(llp, v) => {
                                 if unsafe { (**llp).as_ref().txid != commit_txid } {
