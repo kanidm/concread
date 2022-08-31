@@ -332,7 +332,8 @@ where
         let v = backing_set.get(&k).cloned().unwrap();
 
         // hit/miss process.
-        if !wr_txn.contains_key(&k) {
+        let cont = wr_txn.contains_key(&k);
+        if !cont {
             wr_txn.insert(k, v);
         }
     }
@@ -450,7 +451,8 @@ where
         let start = Instant::now();
         let mut wr_txn = arc.write();
         // hit/miss process.
-        if wr_txn.contains_key(&k) {
+        let cont = wr_txn.contains_key(&k);
+        if cont {
             hit_count += 1;
         } else {
             if let Some(delay) = backing_set_delay {

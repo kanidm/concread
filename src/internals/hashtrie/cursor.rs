@@ -47,6 +47,7 @@ const SHIFT: u64 = 3;
 #[cfg(feature = "hashtrie_chonk")]
 pub(crate) const MAX_HEIGHT: u64 = 6;
 #[cfg(feature = "hashtrie_chonk")]
+#[cfg(test)]
 const ABS_MAX_HEIGHT: u64 = 16;
 #[cfg(feature = "hashtrie_chonk")]
 pub(crate) const HT_CAPACITY: usize = 16;
