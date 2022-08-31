@@ -1814,7 +1814,7 @@ impl<
     }
 
     /// Determine if this cache contains the following key.
-    pub fn contains_key<'b, Q: ?Sized>(&'a mut self, k: &'b Q) -> bool
+    pub fn contains_key<Q: ?Sized>(&mut self, k: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord,

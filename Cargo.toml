@@ -29,7 +29,7 @@ arcache = ["maps", "lru"]
 skinny = []
 hashtrie_chonk = []
 
-default = ["asynch", "ahash", "ebr", "maps", "arcache"]
+default = ["asynch", "ahash", "ebr", "maps", "arcache", "hashtrie_chonk"]
 
 [dependencies]
 ahash = { version = "0.7", optional = true }
@@ -48,6 +48,7 @@ rand = "0.8"
 time = "0.3"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "std", "fmt"] }
 uuid = "1.0"
+function_name = "0.3"
 
 [[bench]]
 name = "hashmap_benchmark"
