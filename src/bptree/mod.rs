@@ -1,4 +1,4 @@
-//! See the documentation for `BptreeMap`
+//! See the documentation for [BptreeMap](crate::bptree::BptreeMap)
 
 #[cfg(feature = "asynch")]
 pub mod asynch;

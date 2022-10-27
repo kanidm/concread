@@ -1,8 +1,6 @@
-//! Doc
-
 use std::fmt::Debug;
 
-/// Trait!
+/// Write statistics for ARCache
 pub trait ARCacheWriteStat<K> {
     // RW phase trackers
     /// _
@@ -57,7 +55,7 @@ pub trait ARCacheWriteStat<K> {
     fn all_seen_keys(&mut self, _i: u64) {}
 }
 
-/// _
+/// Read statistics for ARCache
 pub trait ARCacheReadStat {
     /// _
     fn cache_read(&mut self) {}

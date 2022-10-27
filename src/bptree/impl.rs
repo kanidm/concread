@@ -12,18 +12,19 @@ use std::ops::RangeBounds;
 /// This structure can be used in locations where you would otherwise us
 /// `RwLock<BTreeMap>` or `Mutex<BTreeMap>`.
 ///
-/// Generally, the concurrent HashMap is a better choice unless you require
-/// ordered key storage.
+/// Generally, the concurrent [HashMap](crate::hashmap::HashMap) is a better
+/// choice unless you require ordered key storage.
 ///
 /// This is a concurrently readable structure, meaning it has transactional
 /// properties. Writers are serialised (one after the other), and readers
 /// can exist in parallel with stable views of the structure at a point
 /// in time.
 ///
-/// This is achieved through the use of COW or MVCC. As a write occurs
-/// subsets of the tree are cloned into the writer thread and then commited
-/// later. This may cause memory usage to increase in exchange for a gain
-/// in concurrent behaviour.
+/// This is achieved through the use of [COW](https://en.wikipedia.org/wiki/Copy-on-write)
+/// or [MVCC](https://en.wikipedia.org/wiki/Multiversion_concurrency_control).
+/// As a write occurs, subsets of the tree are cloned into the writer thread
+/// and then commited later. This may cause memory usage to increase in exchange
+/// for a gain in concurrent behaviour.
 ///
 /// Transactions can be rolled-back (aborted) without penalty by dropping
 /// the `BptreeMapWriteTxn` without calling `commit()`.
@@ -44,7 +45,7 @@ unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Se
 {
 }
 
-/// An active read transaction over a `BptreeMap`. The data in this tree
+/// An active read transaction over a [BptreeMap]. The data in this tree
 /// is guaranteed to not change and will remain consistent for the life
 /// of this transaction.
 pub struct BptreeMapReadTxn<'a, K, V>
@@ -64,7 +65,7 @@ unsafe impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync 
 {
 }
 
-/// An active write transaction for a `BptreeMap`. The data in this tree
+/// An active write transaction for a [BptreeMap]. The data in this tree
 /// may be modified exclusively through this transaction without affecting
 /// readers. The write may be rolledback/aborted by dropping this guard
 /// without calling `commit()`. Once `commit()` is called, readers will be

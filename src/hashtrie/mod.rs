@@ -90,8 +90,8 @@ impl<
 
     /// This is *unsafe* because changing the key CAN and WILL break hashing, which can
     /// have serious consequences. This API only exists to allow arcache to access the inner
-    /// content of the slot to simplify it's API. You should basically never touch this
-    /// function as it's the HashTrie equivalent of a the demon sphere.
+    /// content of the slot to simplify its API. You should basically never touch this
+    /// function as its the HashTrie equivalent of a the demon sphere.
     #[cfg(feature = "arcache")]
     pub(crate) unsafe fn get_slot_mut(&mut self, k_hash: u64) -> Option<&mut [Datum<K, V>]> {
         self.inner.as_mut().get_slot_mut_ref(k_hash)
