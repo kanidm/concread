@@ -1,7 +1,7 @@
 //! Concread - Concurrently Readable Datastructures
 //!
-//! Concurrently readable is often referred to as Copy-On-Write, Multi-Version-Concurrency-Control
-//! or Software Transaction Memory.
+//! Concurrently readable is often referred to as [Copy-On-Write](https://en.wikipedia.org/wiki/Copy-on-write), [Multi-Version-Concurrency-Control](https://en.wikipedia.org/wiki/Multiversion_concurrency_control)
+//! or [Software Transactional Memory](https://en.wikipedia.org/wiki/Software_transactional_memory).
 //!
 //! These structures allow multiple readers with transactions
 //! to proceed while single writers can operate. A reader is guaranteed the content

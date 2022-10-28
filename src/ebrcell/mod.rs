@@ -1,6 +1,6 @@
 //! EbrCell - A concurrently readable cell with Ebr
 //!
-//! An `EbrCell` can be used in place of a `RwLock`. Readers are guaranteed that
+//! An [EbrCell] can be used in place of a `RwLock`. Readers are guaranteed that
 //! the data will not change during the lifetime of the read. Readers do
 //! not block writers, and writers do not block readers. Writers are serialised
 //! same as the write in a `RwLock`.

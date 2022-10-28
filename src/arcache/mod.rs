@@ -11,6 +11,7 @@
 //! compliant Cache.
 
 mod ll;
+/// Stats collection for [ARCache]
 pub mod stats;
 
 use self::ll::{LLNode, LLWeight, LL};
@@ -501,7 +502,7 @@ impl ARCacheBuilder {
         Self::default()
     }
 
-    /// Configure a new ARCache, that derives it's size based on your expected workload.
+    /// Configure a new ARCache, that derives its size based on your expected workload.
     ///
     /// The values are total number of items you want to have in memory, the number
     /// of read threads you expect concurrently, the expected average number of cache
@@ -565,7 +566,8 @@ impl ARCacheBuilder {
         }
     }
 
-    /// See `new_size` for more information. This allows manual configuration of the data
+    // TODO: new_size is deprecated and has no information to refer to?
+    /// See [ARCache::new_size] for more information. This allows manual configuration of the data
     /// tracking watermark. To disable this, set to 0. If watermark is greater than
     /// max, it will be clamped to max.
     #[must_use]
@@ -717,7 +719,7 @@ impl<
         ARCacheBuilder::default()
             .set_expected_workload(total, threads, ex_ro_miss, ex_rw_miss, read_cache)
             .build()
-            .expect("Invaled cache parameters!")
+            .expect("Invalid cache parameters!")
     }
 
     /// Use ARCacheBuilder instead
@@ -726,7 +728,7 @@ impl<
         ARCacheBuilder::default()
             .set_size(max, read_max)
             .build()
-            .expect("Invaled cache parameters!")
+            .expect("Invalid cache parameters!")
     }
 
     /// Use ARCacheBuilder instead
@@ -736,7 +738,7 @@ impl<
             .set_size(max, read_max)
             .set_watermark(watermark)
             .build()
-            .expect("Invaled cache parameters!")
+            .expect("Invalid cache parameters!")
     }
 
     /// Begin a read operation on the cache. This reader has a thread-local cache for items
@@ -2219,7 +2221,7 @@ mod tests {
         let arc: Arc<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
-            .expect("Invaled cache parameters!");
+            .expect("Invalid cache parameters!");
         let mut wr_txn = arc.write();
 
         assert!(wr_txn.get(&1) == None);
@@ -2249,7 +2251,7 @@ mod tests {
         let arc: Arc<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
-            .expect("Invaled cache parameters!");
+            .expect("Invalid cache parameters!");
         let stats = TraceStat {};
 
         let mut wr_txn = arc.write_stats(stats);
@@ -2524,7 +2526,7 @@ mod tests {
         let arc: Arc<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
-            .expect("Invaled cache parameters!");
+            .expect("Invalid cache parameters!");
         // start a rd
         {
             let mut rd_txn = arc.read();
@@ -2651,7 +2653,7 @@ mod tests {
         let arc: Arc<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
-            .expect("Invaled cache parameters!");
+            .expect("Invalid cache parameters!");
 
         // Start a wr
         let mut wr_txn = arc.write();
@@ -2706,7 +2708,7 @@ mod tests {
         let arc: Arc<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
-            .expect("Invaled cache parameters!");
+            .expect("Invalid cache parameters!");
 
         // Start a wr
         let mut wr_txn = arc.write();
@@ -2779,7 +2781,7 @@ mod tests {
         let arc: Arc<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
-            .expect("Invaled cache parameters!");
+            .expect("Invalid cache parameters!");
 
         // Start a wr
         let mut wr_txn = arc.write();
@@ -2848,7 +2850,7 @@ mod tests {
         let arc: Arc<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
-            .expect("Invaled cache parameters!");
+            .expect("Invalid cache parameters!");
         // Setup for the test
         // --
         let mut wr_txn = arc.write();
@@ -2891,7 +2893,7 @@ mod tests {
         let arc: Arc<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
-            .expect("Invaled cache parameters!");
+            .expect("Invalid cache parameters!");
         let mut wr_txn = arc.write();
         wr_txn.insert_dirty(10, 1);
         wr_txn.iter_mut_mark_clean().for_each(|(_k, _v)| {});
@@ -2905,7 +2907,7 @@ mod tests {
         let arc: Arc<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 0)
             .build()
-            .expect("Invaled cache parameters!");
+            .expect("Invalid cache parameters!");
         // start a rd
         {
             let mut rd_txn = arc.read();
@@ -2959,7 +2961,7 @@ mod tests {
         let arc: Arc<usize, Weighted> = ARCacheBuilder::default()
             .set_size(4, 0)
             .build()
-            .expect("Invaled cache parameters!");
+            .expect("Invalid cache parameters!");
 
         // let init_stats = arc.view_stats();
         // println!("{:?}", *init_stats);
@@ -3071,7 +3073,7 @@ mod tests {
         let arc: Arc<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 0)
             .build()
-            .expect("Invaled cache parameters!");
+            .expect("Invalid cache parameters!");
 
         let stats = WriteCountStat::default();
 
@@ -3088,7 +3090,7 @@ mod tests {
         let arc: Arc<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 0)
             .build()
-            .expect("Invaled cache parameters!");
+            .expect("Invalid cache parameters!");
         let mut wr_txn = arc.write();
 
         assert!(wr_txn.get_mut(&1, false).is_none());

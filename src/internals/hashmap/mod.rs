@@ -7,7 +7,7 @@
 //! the operations in the tree to seek the bucket is much faster than the use of
 //! the same key in the `BptreeMap`.
 //!
-//! For more details. see the `BptreeMap`
+//! For more details. see the [BptreeMap](crate::bptree::BptreeMap)
 //!
 //! This structure is very different to the `im` crate. The `im` crate is
 //! sync + send over individual operations. This means that multiple writes can
