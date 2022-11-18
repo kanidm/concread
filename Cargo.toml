@@ -20,12 +20,11 @@ path = "src/lib.rs"
 # Features to add/remove contents.
 asynch = ["tokio"]
 ebr = ["crossbeam-epoch"]
-maps = ["crossbeam", "smallvec"]
-arcache = ["maps", "lru"]
+maps = ["crossbeam-utils", "smallvec"]
+arcache = ["maps", "lru", "crossbeam-queue"]
 # ahash is another feature here
 
 # Internal features for tweaking some alighn/perf behaviours.
-# simd_support = ["core_simd"]
 skinny = []
 hashtrie_chonk = []
 
@@ -33,22 +32,23 @@ default = ["asynch", "ahash", "ebr", "maps", "arcache", "hashtrie_chonk"]
 
 [dependencies]
 ahash = { version = "0.7", optional = true }
-crossbeam = { version = "0.8", optional = true }
-crossbeam-epoch = { version = "0.9", optional = true }
+crossbeam-utils = { version = "0.8.12", optional = true }
+crossbeam-epoch = { version = "0.9.11", optional = true }
+crossbeam-queue = { version = "0.3.6", optional = true }
 lru = { version = "0.7", optional = true }
 smallvec = { version = "1.4", optional = true }
 sptr = "0.3"
-tokio = { version = "1", features = ["sync", "rt", "macros"], optional = true }
+tokio = { version = "1", features = ["sync"], optional = true }
 tracing = "0.1"
 
 [dev-dependencies]
 criterion = { version = "0.3", features = ["html_reports"] }
-crossbeam-utils = "0.8"
 rand = "0.8"
 time = "0.3"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "std", "fmt"] }
 uuid = "1.0"
 function_name = "0.3"
+tokio = { version = "1", features = ["rt", "macros"] }
 
 [[bench]]
 name = "hashmap_benchmark"

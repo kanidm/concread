@@ -1,7 +1,7 @@
 use super::states::*;
 use crate::utils::*;
 // use libc::{c_void, mprotect, PROT_READ, PROT_WRITE};
-use crossbeam::utils::CachePadded;
+use crossbeam_utils::CachePadded;
 use std::borrow::Borrow;
 use std::fmt::{self, Debug, Error};
 use std::marker::PhantomData;
