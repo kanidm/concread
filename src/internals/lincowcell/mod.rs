@@ -265,8 +265,8 @@ impl<'a, T, R, U> AsMut<U> for LinCowCellWriteTxn<'a, T, R, U> {
 mod tests {
     use super::LinCowCell;
     use super::LinCowCellCapable;
-    use crossbeam_utils::thread::scope;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread::scope;
 
     #[derive(Debug)]
     struct TestData {
@@ -394,23 +394,31 @@ mod tests {
         assert!(scope(|scope| {
             let cc_ref = &cc;
 
-            let _readers: Vec<_> = (0..7)
+            let readers: Vec<_> = (0..7)
                 .map(|_| {
-                    scope.spawn(move |_| {
+                    scope.spawn(move || {
                         rt_writer(cc_ref);
                     })
                 })
                 .collect();
 
-            let _writers: Vec<_> = (0..3)
+            let writers: Vec<_> = (0..3)
                 .map(|_| {
-                    scope.spawn(move |_| {
+                    scope.spawn(move || {
                         mt_writer(cc_ref);
                     })
                 })
                 .collect();
-        })
-        .is_ok());
+
+            for h in readers.into_iter() {
+                h.join().unwrap();
+            }
+            for h in writers.into_iter() {
+                h.join().unwrap();
+            }
+
+            true
+        }));
 
         let end = time::Instant::now();
         print!("Arc MT create :{:?} ", end - start);
@@ -494,15 +502,19 @@ mod tests {
 
         assert!(scope(|scope| {
             let cc_ref = &cc;
-            let _writers: Vec<_> = (0..3)
+            let writers: Vec<_> = (0..3)
                 .map(|_| {
-                    scope.spawn(move |_| {
+                    scope.spawn(move || {
                         test_gc_operation_thread(cc_ref);
                     })
                 })
                 .collect();
-        })
-        .is_ok());
+
+            for h in writers.into_iter() {
+                h.join().unwrap();
+            }
+            true
+        }));
 
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
     }

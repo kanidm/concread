@@ -2,7 +2,7 @@ use super::cursor::Datum;
 use super::simd::*;
 use super::states::*;
 use crate::utils::*;
-use crossbeam::utils::CachePadded;
+use crossbeam_utils::CachePadded;
 use std::borrow::Borrow;
 use std::fmt::{self, Debug, Error};
 use std::hash::Hash;

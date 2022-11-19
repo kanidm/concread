@@ -260,7 +260,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::EbrCell;
-    use crossbeam_utils::thread::scope;
+    use std::thread::scope;
 
     #[test]
     fn test_deref_mut() {
@@ -334,9 +334,9 @@ mod tests {
         assert!(scope(|scope| {
             let cc_ref = &cc;
 
-            let _readers: Vec<_> = (0..7)
+            let readers: Vec<_> = (0..7)
                 .map(|_| {
-                    scope.spawn(move |_| {
+                    scope.spawn(move || {
                         let mut last_value: i64 = 0;
                         while last_value < MAX_TARGET {
                             let cc_rotxn = cc_ref.read();
@@ -349,9 +349,9 @@ mod tests {
                 })
                 .collect();
 
-            let _writers: Vec<_> = (0..3)
+            let writers: Vec<_> = (0..3)
                 .map(|_| {
-                    scope.spawn(move |_| {
+                    scope.spawn(move || {
                         let mut last_value: i64 = 0;
                         while last_value < MAX_TARGET {
                             let mut cc_wrtxn = cc_ref.write();
@@ -366,8 +366,15 @@ mod tests {
                     })
                 })
                 .collect();
-        })
-        .is_ok());
+
+            for h in readers.into_iter() {
+                h.join().unwrap();
+            }
+            for h in writers.into_iter() {
+                h.join().unwrap();
+            }
+            true
+        }));
 
         let end = time::Instant::now();
         print!("Ebr MT create :{:?} ", end - start);
@@ -410,15 +417,19 @@ mod tests {
 
         assert!(scope(|scope| {
             let cc_ref = &cc;
-            let _writers: Vec<_> = (0..3)
+            let writers: Vec<_> = (0..3)
                 .map(|_| {
-                    scope.spawn(move |_| {
+                    scope.spawn(move || {
                         test_gc_operation_thread(cc_ref);
                     })
                 })
                 .collect();
-        })
-        .is_ok());
+
+            for h in writers.into_iter() {
+                h.join().unwrap();
+            }
+            true
+        }));
 
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
     }
