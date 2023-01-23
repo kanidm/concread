@@ -54,7 +54,7 @@ pub use ebrcell::EbrCell;
 
 #[cfg(feature = "arcache")]
 pub mod arcache;
-#[cfg(feature = "arcache")]
+#[cfg(feature = "tcache")]
 pub mod threadcache;
 
 // This is where the scary rust lives.

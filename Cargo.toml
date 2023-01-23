@@ -21,14 +21,15 @@ path = "src/lib.rs"
 asynch = ["tokio"]
 ebr = ["crossbeam-epoch"]
 maps = ["crossbeam-utils", "smallvec"]
+tcache = []
 arcache = ["maps", "lru", "crossbeam-queue"]
 # ahash is another feature here
 
 # Internal features for tweaking some alighn/perf behaviours.
 skinny = []
-hashtrie_chonk = []
+hashtrie_skinny = []
 
-default = ["asynch", "ahash", "ebr", "maps", "arcache", "hashtrie_chonk"]
+default = ["asynch", "ahash", "ebr", "maps", "arcache"]
 
 [dependencies]
 ahash = { version = "0.7", optional = true }
