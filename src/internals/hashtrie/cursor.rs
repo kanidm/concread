@@ -29,32 +29,32 @@ use std::hash::{BuildHasher, Hash, Hasher};
 
 // This defines the max height of our tree. Gives 16777216.0 entries
 // This only consumes 16KB if fully populated
-#[cfg(not(feature = "hashtrie_chonk"))]
+#[cfg(feature = "hashtrie_skinny")]
 pub(crate) const MAX_HEIGHT: u64 = 8;
 // The true absolute max height
-#[cfg(not(feature = "hashtrie_chonk"))]
+#[cfg(feature = "hashtrie_skinny")]
 #[cfg(test)]
 const ABS_MAX_HEIGHT: u64 = 21;
-#[cfg(not(feature = "hashtrie_chonk"))]
+#[cfg(feature = "hashtrie_skinny")]
 pub(crate) const HT_CAPACITY: usize = 8;
-#[cfg(not(feature = "hashtrie_chonk"))]
+#[cfg(feature = "hashtrie_skinny")]
 const HASH_MASK: u64 =
     0b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0111;
-#[cfg(not(feature = "hashtrie_chonk"))]
+#[cfg(feature = "hashtrie_skinny")]
 const SHIFT: u64 = 3;
 
 // This defines the max height of our tree. Gives 16777216.0 entries
-#[cfg(feature = "hashtrie_chonk")]
+#[cfg(not(feature = "hashtrie_skinny"))]
 pub(crate) const MAX_HEIGHT: u64 = 6;
-#[cfg(feature = "hashtrie_chonk")]
+#[cfg(not(feature = "hashtrie_skinny"))]
 #[cfg(test)]
 const ABS_MAX_HEIGHT: u64 = 16;
-#[cfg(feature = "hashtrie_chonk")]
+#[cfg(not(feature = "hashtrie_skinny"))]
 pub(crate) const HT_CAPACITY: usize = 16;
-#[cfg(feature = "hashtrie_chonk")]
+#[cfg(not(feature = "hashtrie_skinny"))]
 const HASH_MASK: u64 =
     0b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_1111;
-#[cfg(feature = "hashtrie_chonk")]
+#[cfg(not(feature = "hashtrie_skinny"))]
 const SHIFT: u64 = 4;
 
 const TAG: usize = 0b0011;
@@ -342,21 +342,21 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
                 Ptr::null_mut(),
                 Ptr::null_mut(),
                 Ptr::null_mut(),
-                #[cfg(feature = "hashtrie_chonk")]
+                #[cfg(not(feature = "hashtrie_skinny"))]
                 Ptr::null_mut(),
-                #[cfg(feature = "hashtrie_chonk")]
+                #[cfg(not(feature = "hashtrie_skinny"))]
                 Ptr::null_mut(),
-                #[cfg(feature = "hashtrie_chonk")]
+                #[cfg(not(feature = "hashtrie_skinny"))]
                 Ptr::null_mut(),
-                #[cfg(feature = "hashtrie_chonk")]
+                #[cfg(not(feature = "hashtrie_skinny"))]
                 Ptr::null_mut(),
-                #[cfg(feature = "hashtrie_chonk")]
+                #[cfg(not(feature = "hashtrie_skinny"))]
                 Ptr::null_mut(),
-                #[cfg(feature = "hashtrie_chonk")]
+                #[cfg(not(feature = "hashtrie_skinny"))]
                 Ptr::null_mut(),
-                #[cfg(feature = "hashtrie_chonk")]
+                #[cfg(not(feature = "hashtrie_skinny"))]
                 Ptr::null_mut(),
-                #[cfg(feature = "hashtrie_chonk")]
+                #[cfg(not(feature = "hashtrie_skinny"))]
                 Ptr::null_mut(),
             ],
             k: PhantomData,
