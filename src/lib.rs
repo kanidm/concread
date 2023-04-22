@@ -34,7 +34,8 @@
 //! By default all of these features are enabled. If you are planning to use this crate in a wasm
 //! context we recommend you use only `maps` as a feature.
 
-#![deny(warnings)]
+// #![deny(warnings)]
+
 #![warn(unused_extern_crates)]
 #![warn(missing_docs)]
 #![allow(clippy::needless_lifetimes)]
@@ -70,3 +71,8 @@ pub mod bptree;
 pub mod hashmap;
 #[cfg(feature = "maps")]
 pub mod hashtrie;
+
+#[cfg(test)]
+mod lc_tests;
+
+
