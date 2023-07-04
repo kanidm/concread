@@ -70,3 +70,6 @@ pub mod bptree;
 pub mod hashmap;
 #[cfg(feature = "maps")]
 pub mod hashtrie;
+
+#[cfg(test)]
+mod lc_tests;

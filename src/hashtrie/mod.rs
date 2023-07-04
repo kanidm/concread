@@ -222,4 +222,14 @@ mod tests {
         assert!(hmap_r2.contains_key(&15));
         assert!(hmap_r2.contains_key(&20));
     }
+
+    #[test]
+    fn test_hashtrie_double_free() {
+        let hmap: HashTrie<usize, usize> = HashTrie::new();
+        let mut tx = hmap.write();
+        for _i in 0..2 {
+            tx.insert(13, 34);
+            tx.remove(&13);
+        }
+    }
 }
