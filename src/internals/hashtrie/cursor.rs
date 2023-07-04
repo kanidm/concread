@@ -10,6 +10,7 @@ use sptr::Strict;
 use crate::internals::lincowcell::LinCowCellCapable;
 
 use std::borrow::Borrow;
+use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
@@ -95,10 +96,34 @@ fn assert_released() {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy)]
 pub(crate) struct Ptr {
     // We essential are using this as a void pointer for provenance reasons.
     p: *mut i32,
+}
+
+impl PartialEq for Ptr {
+    fn eq(&self, other: &Self) -> bool {
+        let s = self.p.map_addr(|a| a & UNTAG);
+        let o = other.p.map_addr(|a| a & UNTAG);
+        s == o
+    }
+}
+
+impl Eq for Ptr {}
+
+impl PartialOrd for Ptr {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Ptr {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let s = self.p.map_addr(|a| a & UNTAG);
+        let o = other.p.map_addr(|a| a & UNTAG);
+        s.cmp(&o)
+    }
 }
 
 impl Debug for Ptr {
@@ -807,10 +832,24 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
                     let datum = &tgt_bkt[0];
                     if datum.h == h && k.eq(datum.k.borrow()) {
                         bref.nodes[idx] = Ptr::null_mut();
-                        // Regardless of the state, we can defer the free
+
+                        // There is a bit of a difficult case here. If a pointer
+                        // is dirty, then it must also have been allocated in
+                        // this txn. It's possible we risk leaking the memory
+                        // here since the node will be in first_seen, and if we
+                        // commit after a insert + remove + insert then the node
+                        // risks orphaning. However, this also leads to a possible
+                        // double free since if we free here AND a rollback occurs
+                        // then we haven't dropped the node.
+                        //
+                        // So this is a sticky situation - As a result we have to
+                        // walk the first_seen and remove this element before we
+                        // do this out-of-band free.
                         let v = if tgt_ptr.is_dirty() {
                             let tgt_bkt_mut = tgt_ptr.as_bucket_mut::<K, V>();
                             let Datum { v, .. } = tgt_bkt_mut.remove(0);
+                            // Keep any pointer that ISNT the one we are oob freeing.
+                            self.first_seen.retain(|e| *e != tgt_ptr);
                             tgt_ptr.free::<K, V>();
                             v
                         } else {

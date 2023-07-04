@@ -1,5 +1,5 @@
-use crate::internals::lincowcell::{LinCowCell, LinCowCellCapable};
 use crate::internals::bptree::cursor::{CursorRead, CursorWrite, SuperBlock};
+use crate::internals::lincowcell::{LinCowCell, LinCowCellCapable};
 
 struct TestStruct {
     bptree_map_a: SuperBlock<u32, u32>,
@@ -33,39 +33,30 @@ impl LinCowCellCapable<TestStructRead, TestStructWrite> for TestStruct {
         }
     }
 
-    fn pre_commit(
-        &mut self,
-        new: TestStructWrite,
-        prev: &TestStructRead,
-    ) -> TestStructRead {
+    fn pre_commit(&mut self, new: TestStructWrite, prev: &TestStructRead) -> TestStructRead {
         let TestStructWrite {
             bptree_map_a,
-            bptree_map_b
+            bptree_map_b,
         } = new;
 
+        let bptree_map_a = self
+            .bptree_map_a
+            .pre_commit(bptree_map_a, &prev.bptree_map_a);
 
-        let bptree_map_a = self.bptree_map_a.pre_commit(
-            bptree_map_a,
-            &prev.bptree_map_a,
-        );
-
-        let bptree_map_b = self.bptree_map_b.pre_commit(
-            bptree_map_b,
-            &prev.bptree_map_b,
-        );
+        let bptree_map_b = self
+            .bptree_map_b
+            .pre_commit(bptree_map_b, &prev.bptree_map_b);
 
         TestStructRead {
             bptree_map_a,
-            bptree_map_b
+            bptree_map_b,
         }
     }
 }
 
-
 #[test]
 fn test_lc_basic() {
-
-    let lcc = LinCowCell::new( TestStruct {
+    let lcc = LinCowCell::new(TestStruct {
         bptree_map_a: unsafe { SuperBlock::new() },
         bptree_map_b: unsafe { SuperBlock::new() },
     });
