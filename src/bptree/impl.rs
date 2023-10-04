@@ -216,6 +216,16 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
         self.inner.as_ref().k_iter()
     }
 
+    /// Retrieve the first (minimum) key-value pair from the map if it exists.
+    pub fn first_key_value(&self) -> Option<(&K, &V)> {
+        self.inner.as_ref().first_key_value()
+    }
+
+    /// Retrieve the last (maximum) key-value pair from the map if it exists.
+    pub fn last_key_value(&self) -> Option<(&K, &V)> {
+        self.inner.as_ref().last_key_value()
+    }
+
     // (adv) keys
 
     // (adv) values
@@ -353,6 +363,16 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     /// Iterator over &V
     pub fn keys(&self) -> KeyIter<K, V> {
         self.inner.as_ref().k_iter()
+    }
+
+    /// Retrieve the first (minimum) key-value pair from the map if it exists.
+    pub fn first_key_value(&self) -> Option<(&K, &V)> {
+        self.inner.as_ref().first_key_value()
+    }
+
+    /// Retrieve the last (maximum) key-value pair from the map if it exists.
+    pub fn last_key_value(&self) -> Option<(&K, &V)> {
+        self.inner.as_ref().last_key_value()
     }
 
     /// Create a read-snapshot of the current tree.
