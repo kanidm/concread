@@ -584,6 +584,22 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
         unsafe { &*self.key[self.count() - 1].as_ptr() }
     }
 
+    pub(crate) fn min_value(&self) -> Option<(&K, &V)> {
+        if self.count() > 0 {
+            self.get_kv_idx_checked(0)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn max_value(&self) -> Option<(&K, &V)> {
+        if self.count() > 0 {
+            self.get_kv_idx_checked(self.count() - 1)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn req_clone(&self, txid: u64) -> Option<*mut Node<K, V>> {
         debug_assert_leaf!(self);
         debug_assert!(txid < (TXID_MASK >> TXID_SHF));
@@ -904,6 +920,14 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         // Remember, self.count() is + 1 offset, so this gets
         // the max node
         unsafe { (*self.nodes[self.count()]).max() }
+    }
+
+    pub(crate) fn min_node(&self) -> *mut Node<K, V> {
+        self.nodes[0]
+    }
+
+    pub(crate) fn max_node(&self) -> *mut Node<K, V> {
+        self.nodes[self.count()]
     }
 
     pub(crate) fn req_clone(&self, txid: u64) -> Option<*mut Node<K, V>> {

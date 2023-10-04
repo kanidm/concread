@@ -222,6 +222,34 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         self.search(k).is_some()
     }
 
+    fn first_key_value(&self) -> Option<(&K, &V)> {
+        let mut node = self.get_root();
+        for _i in 0..65536 {
+            if unsafe { (*node).is_leaf() } {
+                let lref = leaf_ref!(node, K, V);
+                return lref.min_value();
+            } else {
+                let bref = branch_ref!(node, K, V);
+                node = bref.min_node();
+            }
+        }
+        panic!("Tree depth exceeded max limit (65536). This may indicate memory corruption.");
+    }
+
+    fn last_key_value(&self) -> Option<(&K, &V)> {
+        let mut node = self.get_root();
+        for _i in 0..65536 {
+            if unsafe { (*node).is_leaf() } {
+                let lref = leaf_ref!(node, K, V);
+                return lref.max_value();
+            } else {
+                let bref = branch_ref!(node, K, V);
+                node = bref.max_node();
+            }
+        }
+        panic!("Tree depth exceeded max limit (65536). This may indicate memory corruption.");
+    }
+
     fn range<'a, R, T>(&'a self, range: R) -> RangeIter<'a, K, V>
     where
         K: Borrow<T>,
