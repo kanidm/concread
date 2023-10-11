@@ -2694,6 +2694,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_bptree_cursor_double_extend() {
+        let node: *mut Leaf<isize, isize> = Node::new_leaf(0) as *mut _;
+        let sb = SuperBlock::new_test(1, node as *mut Node<isize, isize>);
+        let mut wcurs = sb.create_writer();
+
+        wcurs.extend([(0, 0), (1, 1), (2, 2), (3, 3)].into_iter());
+        assert!(wcurs.len() == 4);
+        assert!(wcurs.verify());
+
+        wcurs.extend([(2, 2), (3, 3), (4, 4), (5, 5)].into_iter());
+        assert!(wcurs.len() == 6);
+        assert!(wcurs.verify());
+
+        mem::drop(wcurs);
+        mem::drop(sb);
+        assert_released();
+    }
+
     /*
     #[test]
     fn test_bptree_cursor_get_mut_ref_1() {
