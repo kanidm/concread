@@ -25,7 +25,7 @@ where
 {
     pub(crate) fn new<T>(root: *mut Node<K, V>, bound: Bound<&T>) -> Self
     where
-        T: Ord,
+        T: Ord + ?Sized,
         K: Borrow<T>,
     {
         // We need to position the VecDeque here.
@@ -165,7 +165,7 @@ where
 {
     pub(crate) fn new<T>(root: *mut Node<K, V>, bound: Bound<&T>) -> Self
     where
-        T: Ord,
+        T: Ord + ?Sized,
         K: Borrow<T>,
     {
         // We need to position the VecDeque here.
@@ -443,7 +443,7 @@ where
 {
     pub(crate) fn new<R, T>(root: *mut Node<K, V>, range: R, length: usize) -> Self
     where
-        T: Ord,
+        T: Ord + ?Sized,
         K: Borrow<T>,
         R: RangeBounds<T>,
     {

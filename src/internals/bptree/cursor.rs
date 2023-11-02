@@ -253,7 +253,7 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
     fn range<'a, R, T>(&'a self, range: R) -> RangeIter<'a, K, V>
     where
         K: Borrow<T>,
-        T: Ord,
+        T: Ord + ?Sized,
         R: RangeBounds<T>,
     {
         RangeIter::new(self.get_root(), range, self.len())
