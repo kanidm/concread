@@ -195,7 +195,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     pub fn range<'b, R, T>(&'b self, range: R) -> RangeIter<'b, K, V>
     where
         K: Borrow<T>,
-        T: Ord,
+        T: Ord + ?Sized,
         R: RangeBounds<T>,
     {
         self.inner.as_ref().range(range)
@@ -344,7 +344,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     pub fn range<'b, R, T>(&'b self, range: R) -> RangeIter<'b, K, V>
     where
         K: Borrow<T>,
-        T: Ord,
+        T: Ord + ?Sized,
         R: RangeBounds<T>,
     {
         self.inner.as_ref().range(range)
@@ -435,7 +435,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     pub fn range<'b, R, T>(&'b self, range: R) -> RangeIter<'b, K, V>
     where
         K: Borrow<T>,
-        T: Ord,
+        T: Ord + ?Sized,
         R: RangeBounds<T>,
     {
         match self.inner {
