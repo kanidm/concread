@@ -308,7 +308,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
 {
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
-    pub fn get<Q: ?Sized>(&'a self, k: &'a Q) -> Option<&'a V>
+    pub fn get<'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
     where
         K: Borrow<Q>,
         Q: Ord,
@@ -395,7 +395,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
 {
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
-    pub fn get<Q: ?Sized>(&'a self, k: &'a Q) -> Option<&'a V>
+    pub fn get<'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
     where
         K: Borrow<Q>,
         Q: Ord,
