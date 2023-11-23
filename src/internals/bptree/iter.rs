@@ -18,7 +18,7 @@ where
     phantom_v: PhantomData<&'a V>,
 }
 
-impl<'a, K, V> LeafIter<'a, K, V>
+impl<K, V> LeafIter<'_, K, V>
 where
     K: Clone + Ord + Debug,
     V: Clone,
@@ -158,7 +158,7 @@ where
     phantom_v: PhantomData<&'a V>,
 }
 
-impl<'a, K, V> RevLeafIter<'a, K, V>
+impl<K, V> RevLeafIter<'_, K, V>
 where
     K: Clone + Ord + Debug,
     V: Clone,
@@ -316,7 +316,7 @@ where
     iter: RangeIter<'a, K, V>,
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> Iter<'a, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> Iter<'_, K, V> {
     pub(crate) fn new(root: *mut Node<K, V>, length: usize) -> Self {
         let bounds: (Bound<K>, Bound<K>) = (Bound::Unbounded, Bound::Unbounded);
         let iter = RangeIter::new(root, bounds, length);
@@ -342,7 +342,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for Iter<'a, K, V> {
     }
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for Iter<'a, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for Iter<'_, K, V> {
     /// Yield the next key value reference, or `None` if exhausted.
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back()
@@ -358,7 +358,7 @@ where
     iter: Iter<'a, K, V>,
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> KeyIter<'a, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> KeyIter<'_, K, V> {
     pub(crate) fn new(root: *mut Node<K, V>, length: usize) -> Self {
         KeyIter {
             iter: Iter::new(root, length),
@@ -379,7 +379,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for KeyIter<'a, K, V> {
     }
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for KeyIter<'a, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for KeyIter<'_, K, V> {
     /// Yield the next key value reference, or `None` if exhausted.
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|(k, _)| k)
@@ -395,7 +395,7 @@ where
     iter: Iter<'a, K, V>,
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> ValueIter<'a, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> ValueIter<'_, K, V> {
     pub(crate) fn new(root: *mut Node<K, V>, length: usize) -> Self {
         ValueIter {
             iter: Iter::new(root, length),
@@ -416,7 +416,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for ValueIter<'a, K, V> {
     }
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for ValueIter<'a, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for ValueIter<'_, K, V> {
     /// Yield the next key value reference, or `None` if exhausted.
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|(_, v)| v)
@@ -436,7 +436,7 @@ where
     phantom_v: PhantomData<&'a V>,
 }
 
-impl<'a, K, V> RangeIter<'a, K, V>
+impl<K, V> RangeIter<'_, K, V>
 where
     K: Clone + Ord + Debug,
     V: Clone,
@@ -628,7 +628,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for RangeIter<'a, K, V> {
     }
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for RangeIter<'a, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for RangeIter<'_, K, V> {
     /// Yield the next key value reference, or `None` if exhausted.
     fn next_back(&mut self) -> Option<Self::Item> {
         loop {
@@ -1514,7 +1514,7 @@ mod tests {
             Node::new_branch(0, b1node as *mut _, b2node as *mut _);
 
         let bounds: (Bound<usize>, Bound<usize>) = (Unbounded, Unbounded);
-        let test_iter: RangeIter<'_, usize, usize> =
+        let test_iter: RangeIter<usize, usize> =
             RangeIter::new(root as *mut _, bounds, L_CAPACITY * 4);
         assert!(test_iter.count() == (L_CAPACITY * 4));
 
@@ -1522,7 +1522,7 @@ mod tests {
             for i in 0..L_CAPACITY {
                 let l_bound = (j * 10) + i;
                 let bounds: (Bound<usize>, Bound<usize>) = (Included(l_bound), Unbounded);
-                let test_iter: RangeIter<'_, usize, usize> =
+                let test_iter: RangeIter<usize, usize> =
                     RangeIter::new(root as *mut _, bounds, L_CAPACITY * 4);
                 let i_count = test_iter.count();
                 let x_count = ((5 - j) * L_CAPACITY) - i;
@@ -1535,7 +1535,7 @@ mod tests {
             for i in 0..L_CAPACITY {
                 let l_bound = (j * 10) + i;
                 let bounds: (Bound<usize>, Bound<usize>) = (Excluded(l_bound), Unbounded);
-                let test_iter: RangeIter<'_, usize, usize> =
+                let test_iter: RangeIter<usize, usize> =
                     RangeIter::new(root as *mut _, bounds, L_CAPACITY * 4);
                 let i_count = test_iter.count();
                 let x_count = ((5 - j) * L_CAPACITY) - (i + 1);
@@ -1560,7 +1560,7 @@ mod tests {
             Node::new_branch(0, b1node as *mut _, b2node as *mut _);
 
         let bounds: (Bound<usize>, Bound<usize>) = (Unbounded, Unbounded);
-        let test_iter: RangeIter<'_, usize, usize> =
+        let test_iter: RangeIter<usize, usize> =
             RangeIter::new(root as *mut _, bounds, L_CAPACITY * 4);
 
         assert!(test_iter.count() == (L_CAPACITY * 4));
@@ -1569,7 +1569,7 @@ mod tests {
             for i in 0..L_CAPACITY {
                 let r_bound = (j * 10) + i;
                 let bounds: (Bound<usize>, Bound<usize>) = (Unbounded, Included(r_bound));
-                let test_iter: RangeIter<'_, usize, usize> =
+                let test_iter: RangeIter<usize, usize> =
                     RangeIter::new(root as *mut _, bounds, L_CAPACITY * 4);
                 let i_count = test_iter.count();
                 let x_count = ((L_CAPACITY * 4) - (((4 - j) * L_CAPACITY) + (L_CAPACITY - i))) + 1;
@@ -1582,7 +1582,7 @@ mod tests {
             for i in 0..L_CAPACITY {
                 let r_bound = (j * 10) + i;
                 let bounds: (Bound<usize>, Bound<usize>) = (Unbounded, Excluded(r_bound));
-                let test_iter: RangeIter<'_, usize, usize> =
+                let test_iter: RangeIter<usize, usize> =
                     RangeIter::new(root as *mut _, bounds, L_CAPACITY * 4);
                 let i_count = test_iter.count();
                 let x_count = (L_CAPACITY * 4) - (((4 - j) * L_CAPACITY) + (L_CAPACITY - i));
@@ -1607,7 +1607,7 @@ mod tests {
             Node::new_branch(0, b1node as *mut _, b2node as *mut _);
 
         let bounds: (Bound<usize>, Bound<usize>) = (Unbounded, Unbounded);
-        let test_iter: RangeIter<'_, usize, usize> =
+        let test_iter: RangeIter<usize, usize> =
             RangeIter::new(root as *mut _, bounds, L_CAPACITY * 4);
         assert!(test_iter.rev().count() == (L_CAPACITY * 4));
 
@@ -1615,7 +1615,7 @@ mod tests {
             for i in 0..L_CAPACITY {
                 let l_bound = (j * 10) + i;
                 let bounds: (Bound<usize>, Bound<usize>) = (Included(l_bound), Unbounded);
-                let test_iter: RangeIter<'_, usize, usize> =
+                let test_iter: RangeIter<usize, usize> =
                     RangeIter::new(root as *mut _, bounds, L_CAPACITY * 4);
                 let i_count = test_iter.rev().count();
                 let x_count = ((5 - j) * L_CAPACITY) - i;
@@ -1628,7 +1628,7 @@ mod tests {
             for i in 0..L_CAPACITY {
                 let l_bound = (j * 10) + i;
                 let bounds: (Bound<usize>, Bound<usize>) = (Excluded(l_bound), Unbounded);
-                let test_iter: RangeIter<'_, usize, usize> =
+                let test_iter: RangeIter<usize, usize> =
                     RangeIter::new(root as *mut _, bounds, L_CAPACITY * 4);
                 let i_count = test_iter.rev().count();
                 let x_count = ((5 - j) * L_CAPACITY) - (i + 1);
@@ -1653,7 +1653,7 @@ mod tests {
             Node::new_branch(0, b1node as *mut _, b2node as *mut _);
 
         let bounds: (Bound<usize>, Bound<usize>) = (Unbounded, Unbounded);
-        let test_iter: RangeIter<'_, usize, usize> =
+        let test_iter: RangeIter<usize, usize> =
             RangeIter::new(root as *mut _, bounds, L_CAPACITY * 4);
 
         assert!(test_iter.rev().count() == (L_CAPACITY * 4));
@@ -1662,7 +1662,7 @@ mod tests {
             for i in 0..L_CAPACITY {
                 let r_bound = (j * 10) + i;
                 let bounds: (Bound<usize>, Bound<usize>) = (Unbounded, Included(r_bound));
-                let test_iter: RangeIter<'_, usize, usize> =
+                let test_iter: RangeIter<usize, usize> =
                     RangeIter::new(root as *mut _, bounds, L_CAPACITY * 4);
                 let i_count = test_iter.rev().count();
                 let x_count = ((L_CAPACITY * 4) - (((4 - j) * L_CAPACITY) + (L_CAPACITY - i))) + 1;
@@ -1675,7 +1675,7 @@ mod tests {
             for i in 0..L_CAPACITY {
                 let r_bound = (j * 10) + i;
                 let bounds: (Bound<usize>, Bound<usize>) = (Unbounded, Excluded(r_bound));
-                let test_iter: RangeIter<'_, usize, usize> =
+                let test_iter: RangeIter<usize, usize> =
                     RangeIter::new(root as *mut _, bounds, L_CAPACITY * 4);
                 let i_count = test_iter.rev().count();
                 let x_count = (L_CAPACITY * 4) - (((4 - j) * L_CAPACITY) + (L_CAPACITY - i));

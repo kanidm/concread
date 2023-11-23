@@ -188,7 +188,7 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
 
     fn get_txid(&self) -> u64;
 
-    fn hash_key<'a, 'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    fn hash_key<Q: ?Sized>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
         Q: Hash + Eq;
@@ -200,7 +200,7 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
         rref.tree_density()
     }
 
-    fn search<'a, 'b, Q: ?Sized>(&'a self, h: u64, k: &'b Q) -> Option<&'a V>
+    fn search<Q: ?Sized>(&self, h: u64, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -210,7 +210,7 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
             if unsafe { (*node).is_leaf() } {
                 let lref = leaf_ref!(node, K, V);
                 return lref.get_ref(h, k).map(|v| unsafe {
-                    // Strip the lifetime and rebind to the 'a self.
+                    // Strip the lifetime and rebind to the lifetime of `self`.
                     // This is safe because we know that these nodes will NOT
                     // be altered during the lifetime of this txn, so the references
                     // will remain stable.
@@ -227,7 +227,7 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
     }
 
     #[allow(clippy::needless_lifetimes)]
-    fn contains_key<'a, 'b, Q: ?Sized>(&'a self, h: u64, k: &'b Q) -> bool
+    fn contains_key<Q: ?Sized>(&self, h: u64, k: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -564,7 +564,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<
         self.txid
     }
 
-    fn hash_key<'a, 'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    fn hash_key<Q: ?Sized>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -590,7 +590,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite
         self.txid
     }
 
-    fn hash_key<'a, 'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    fn hash_key<Q: ?Sized>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
         Q: Hash + Eq,

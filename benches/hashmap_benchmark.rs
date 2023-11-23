@@ -165,10 +165,10 @@ criterion_main!(insert, remove, search);
 
 // Utility functions:
 
-fn insert_vec<'a, V: Clone + Sync + Send + 'static>(
-    map: &'a mut HashMap<u32, V>,
+fn insert_vec<V: Clone + Sync + Send + 'static>(
+    map: &mut HashMap<u32, V>,
     list: Vec<(u32, V)>,
-) -> HashMapWriteTxn<'a, u32, V> {
+) -> HashMapWriteTxn<u32, V> {
     let mut write_txn = map.write();
     for (key, val) in list.into_iter() {
         write_txn.insert(key, val);

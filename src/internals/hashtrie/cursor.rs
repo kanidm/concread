@@ -127,7 +127,7 @@ impl Ord for Ptr {
 }
 
 impl Debug for Ptr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Ptr")
             .field("p", &self.p)
             .field("bucket", &self.is_bucket())
@@ -508,12 +508,12 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
 
     fn get_txid(&self) -> u64;
 
-    fn hash_key<'a, 'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    fn hash_key<Q: ?Sized>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
         Q: Hash + Eq;
 
-    fn search<'a, 'b, Q: ?Sized>(&'a self, h: u64, k: &'b Q) -> Option<&'a V>
+    fn search<Q: ?Sized>(&self, h: u64, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -1027,7 +1027,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite
         self.txid
     }
 
-    fn hash_key<'a, 'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    fn hash_key<Q: ?Sized>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -1094,7 +1094,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<
         self.txid
     }
 
-    fn hash_key<'a, 'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    fn hash_key<Q: ?Sized>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
         Q: Hash + Eq,

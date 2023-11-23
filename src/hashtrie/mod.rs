@@ -69,10 +69,9 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 }
 
 impl<
-        'a,
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
-    > HashTrieWriteTxn<'a, K, V>
+    > HashTrieWriteTxn<'_, K, V>
 {
     #[cfg(feature = "arcache")]
     pub(crate) fn get_txid(&self) -> u64 {
@@ -80,7 +79,7 @@ impl<
     }
 
     #[cfg(feature = "arcache")]
-    pub(crate) fn prehash<'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    pub(crate) fn prehash<Q: ?Sized>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -107,10 +106,9 @@ impl<
 }
 
 impl<
-        'a,
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
-    > HashTrieReadTxn<'a, K, V>
+    > HashTrieReadTxn<'_, K, V>
 {
     #[cfg(feature = "arcache")]
     pub(crate) fn get_txid(&self) -> u64 {
@@ -118,7 +116,7 @@ impl<
     }
 
     #[cfg(feature = "arcache")]
-    pub(crate) fn prehash<'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    pub(crate) fn prehash<Q: ?Sized>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
         Q: Hash + Eq,

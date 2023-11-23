@@ -56,12 +56,12 @@ where
     inner: LinCowCellReadTxn<'a, SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
 }
 
-unsafe impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Send
-    for BptreeMapReadTxn<'a, K, V>
+unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Send
+    for BptreeMapReadTxn<'_, K, V>
 {
 }
-unsafe impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync
-    for BptreeMapReadTxn<'a, K, V>
+unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync
+    for BptreeMapReadTxn<'_, K, V>
 {
 }
 
@@ -149,22 +149,22 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 }
 
-impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    Extend<(K, V)> for BptreeMapWriteTxn<'a, K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    Extend<(K, V)> for BptreeMapWriteTxn<'_, K, V>
 {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         self.inner.as_mut().extend(iter);
     }
 }
 
-impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapWriteTxn<'a, K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    BptreeMapWriteTxn<'_, K, V>
 {
     // == RO methods
 
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
-    pub fn get<'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
+    pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Ord,
@@ -173,7 +173,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     }
 
     /// Assert if a key exists in the tree.
-    pub fn contains_key<'b, Q: ?Sized>(&'a self, k: &'b Q) -> bool
+    pub fn contains_key<Q: ?Sized>(&self, k: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Ord,
@@ -192,7 +192,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     }
 
     /// Iterate over a range of values
-    pub fn range<'b, R, T>(&'b self, range: R) -> RangeIter<'b, K, V>
+    pub fn range<R, T>(&self, range: R) -> RangeIter<K, V>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
@@ -296,19 +296,19 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     /// Create a read-snapshot of the current tree. This does NOT guarantee the tree may
     /// not be mutated during the read, so you MUST guarantee that no functions of the
     /// write txn are called while this snapshot is active.
-    pub fn to_snapshot(&'a self) -> BptreeMapReadSnapshot<K, V> {
+    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<K, V> {
         BptreeMapReadSnapshot {
             inner: SnapshotType::W(self.inner.as_ref()),
         }
     }
 }
 
-impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapReadTxn<'a, K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    BptreeMapReadTxn<'_, K, V>
 {
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
-    pub fn get<'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
+    pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Ord,
@@ -317,7 +317,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     }
 
     /// Assert if a key exists in the tree.
-    pub fn contains_key<'b, Q: ?Sized>(&'a self, k: &'b Q) -> bool
+    pub fn contains_key<Q: ?Sized>(&self, k: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Ord,
@@ -341,7 +341,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     }
 
     /// Iterate over a range of values
-    pub fn range<'b, R, T>(&'b self, range: R) -> RangeIter<'b, K, V>
+    pub fn range<R, T>(&self, range: R) -> RangeIter<K, V>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
@@ -377,7 +377,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
 
     /// Create a read-snapshot of the current tree.
     /// As this is the read variant, it IS safe, and guaranteed the tree will not change.
-    pub fn to_snapshot(&'a self) -> BptreeMapReadSnapshot<K, V> {
+    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<K, V> {
         BptreeMapReadSnapshot {
             inner: SnapshotType::R(self.inner.as_ref()),
         }
@@ -390,12 +390,12 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     }
 }
 
-impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapReadSnapshot<'a, K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    BptreeMapReadSnapshot<'_, K, V>
 {
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
-    pub fn get<'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
+    pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Ord,
@@ -407,7 +407,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     }
 
     /// Assert if a key exists in the tree.
-    pub fn contains_key<'b, Q: ?Sized>(&'a self, k: &'b Q) -> bool
+    pub fn contains_key<Q: ?Sized>(&self, k: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Ord,
@@ -432,7 +432,7 @@ impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send 
     }
 
     /// Iterate over a range of values
-    pub fn range<'b, R, T>(&'b self, range: R) -> RangeIter<'b, K, V>
+    pub fn range<R, T>(&self, range: R) -> RangeIter<K, V>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,

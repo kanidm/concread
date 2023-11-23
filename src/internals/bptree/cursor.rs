@@ -187,7 +187,7 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         rref.tree_density()
     }
 
-    fn search<'a, 'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
+    fn search<Q: ?Sized>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Ord,
@@ -197,7 +197,7 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
             if unsafe { (*node).is_leaf() } {
                 let lref = leaf_ref!(node, K, V);
                 return lref.get_ref(k).map(|v| unsafe {
-                    // Strip the lifetime and rebind to the 'a self.
+                    // Strip the lifetime and rebind to the lifetime of `self`.
                     // This is safe because we know that these nodes will NOT
                     // be altered during the lifetime of this txn, so the references
                     // will remain stable.
@@ -214,7 +214,7 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
     }
 
     #[allow(clippy::needless_lifetimes)]
-    fn contains_key<'a, 'b, Q: ?Sized>(&'a self, k: &'b Q) -> bool
+    fn contains_key<Q: ?Sized>(&self, k: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Ord,
@@ -250,7 +250,7 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         panic!("Tree depth exceeded max limit (65536). This may indicate memory corruption.");
     }
 
-    fn range<'a, R, T>(&'a self, range: R) -> RangeIter<'a, K, V>
+    fn range<R, T>(&self, range: R) -> RangeIter<K, V>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
@@ -1112,7 +1112,7 @@ where
 }
 
 /*
-fn clone_and_split_off_trim_lt<'a, K: Clone + Ord + Debug, V: Clone>(
+fn clone_and_split_off_trim_lt<K: Clone + Ord + Debug, V: Clone>(
     node: *mut Node<K, V>,
     txid: u64,
     k: &K,
@@ -1155,8 +1155,8 @@ fn clone_and_split_off_trim_lt<'a, K: Clone + Ord + Debug, V: Clone>(
 */
 
 /*
-fn clone_and_split_off_prune_lt<'a, K: Clone + Ord + Debug, V: Clone>(
-    node: &'a mut ABNode<K, V>,
+fn clone_and_split_off_prune_lt<K: Clone + Ord + Debug, V: Clone>(
+    node: &mut ABNode<K, V>,
     txid: usize,
     k: &K,
 ) -> CRPruneState<K, V> {
