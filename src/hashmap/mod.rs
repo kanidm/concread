@@ -61,10 +61,9 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 }
 
 impl<
-        'a,
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
-    > HashMapWriteTxn<'a, K, V>
+    > HashMapWriteTxn<'_, K, V>
 {
     /*
     pub(crate) fn get_txid(&self) -> u64 {
@@ -73,7 +72,7 @@ impl<
     */
 
     /*
-    pub(crate) fn prehash<'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    pub(crate) fn prehash<Q: ?Sized>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -103,16 +102,15 @@ impl<
 
 /*
 impl<
-        'a,
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
-    > HashMapReadTxn<'a, K, V>
+    > HashMapReadTxn<'_, K, V>
 {
     pub(crate) fn get_txid(&self) -> u64 {
         self.inner.as_ref().get_txid()
     }
 
-    pub(crate) fn prehash<'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    pub(crate) fn prehash<Q: ?Sized>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
         Q: Hash + Eq,

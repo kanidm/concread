@@ -124,7 +124,7 @@ where
 
     /// Begin a read transaction of this thread local cache. In the start of this read
     /// invalidation requests will be acknowledged.
-    pub fn read<'a>(&'a mut self) -> ThreadLocalReadTxn<'a, K, V> {
+    pub fn read(&mut self) -> ThreadLocalReadTxn<K, V> {
         let txid = self.inv_up_to_txid.load(Ordering::Acquire);
 
         let parent = self.invalidate(txid);
@@ -134,7 +134,7 @@ where
     /// Begin a write transaction of this thread local cache. Once granted, only this
     /// thread may be in the write state - all other threads will either block on
     /// acquiring the write, or they can proceed to read.
-    pub fn write<'a>(&'a mut self) -> ThreadLocalWriteTxn<'a, K, V> {
+    pub fn write(&mut self) -> ThreadLocalWriteTxn<K, V> {
         // SAFETY this is safe, because while we are duplicating the mutable reference
         // which conflicts with the mutex, we aren't change the wrlock value so the mutex
         // is fine.
@@ -154,7 +154,7 @@ where
         }
     }
 
-    fn invalidate(&self, up_to: u64) -> MutexGuard<'_, Inner<K, V>> {
+    fn invalidate(&self, up_to: u64) -> MutexGuard<Inner<K, V>> {
         let mut inner = self.inner.lock().unwrap();
 
         if let Some(inv_txid) = inner.last_inv.as_ref().map(|inv| inv.txid) {
@@ -186,7 +186,7 @@ where
     }
 }
 
-impl<'a, K, V> ThreadLocalWriteTxn<'a, K, V>
+impl<K, V> ThreadLocalWriteTxn<'_, K, V>
 where
     K: Hash + Eq + Debug + Clone,
 {
@@ -239,7 +239,7 @@ where
     }
 }
 
-impl<'a, K, V> Drop for ThreadLocalWriteTxn<'a, K, V>
+impl<K, V> Drop for ThreadLocalWriteTxn<'_, K, V>
 where
     K: Hash + Eq + Debug + Clone,
 {
@@ -251,7 +251,7 @@ where
     }
 }
 
-impl<'a, K, V> ThreadLocalReadTxn<'a, K, V>
+impl<K, V> ThreadLocalReadTxn<'_, K, V>
 where
     K: Hash + Eq + Debug + Clone,
 {

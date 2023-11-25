@@ -119,10 +119,9 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 }
 
 impl<
-        'a,
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
-    > Extend<(K, V)> for HashMapWriteTxn<'a, K, V>
+    > Extend<(K, V)> for HashMapWriteTxn<'_, K, V>
 {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         self.inner.as_mut().extend(iter);
@@ -130,13 +129,12 @@ impl<
 }
 
 impl<
-        'a,
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
-    > HashMapWriteTxn<'a, K, V>
+    > HashMapWriteTxn<'_, K, V>
 {
     /*
-    pub(crate) fn prehash<'b, Q: ?Sized>(&'a self, k: &'b Q) -> u64
+    pub(crate) fn prehash<Q: ?Sized>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -145,7 +143,7 @@ impl<
     }
     */
 
-    pub(crate) fn get_prehashed<'b, Q: ?Sized>(&'a self, k: &'b Q, k_hash: u64) -> Option<&'a V>
+    pub(crate) fn get_prehashed<Q: ?Sized>(&self, k: &Q, k_hash: u64) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -155,7 +153,7 @@ impl<
 
     /// Retrieve a value from the map. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
-    pub fn get<'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
+    pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -165,7 +163,7 @@ impl<
     }
 
     /// Assert if a key exists in the map.
-    pub fn contains_key<'b, Q: ?Sized>(&'a self, k: &'b Q) -> bool
+    pub fn contains_key<Q: ?Sized>(&self, k: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -231,7 +229,7 @@ impl<
     /// Create a read-snapshot of the current map. This does NOT guarantee the map may
     /// not be mutated during the read, so you MUST guarantee that no functions of the
     /// write txn are called while this snapshot is active.
-    pub fn to_snapshot(&'a self) -> HashMapReadSnapshot<K, V> {
+    pub fn to_snapshot(&self) -> HashMapReadSnapshot<K, V> {
         HashMapReadSnapshot {
             inner: SnapshotType::W(self.inner.as_ref()),
         }
@@ -239,12 +237,11 @@ impl<
 }
 
 impl<
-        'a,
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
-    > HashMapReadTxn<'a, K, V>
+    > HashMapReadTxn<'_, K, V>
 {
-    pub(crate) fn get_prehashed<'b, Q: ?Sized>(&'a self, k: &'b Q, k_hash: u64) -> Option<&'a V>
+    pub(crate) fn get_prehashed<Q: ?Sized>(&self, k: &Q, k_hash: u64) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -254,7 +251,7 @@ impl<
 
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
-    pub fn get<'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
+    pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -264,7 +261,7 @@ impl<
     }
 
     /// Assert if a key exists in the tree.
-    pub fn contains_key<'b, Q: ?Sized>(&'a self, k: &'b Q) -> bool
+    pub fn contains_key<Q: ?Sized>(&self, k: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -299,7 +296,7 @@ impl<
 
     /// Create a read-snapshot of the current tree.
     /// As this is the read variant, it IS safe, and guaranteed the tree will not change.
-    pub fn to_snapshot(&'a self) -> HashMapReadSnapshot<'a, K, V> {
+    pub fn to_snapshot(&self) -> HashMapReadSnapshot<K, V> {
         HashMapReadSnapshot {
             inner: SnapshotType::R(self.inner.as_ref()),
         }
@@ -307,14 +304,13 @@ impl<
 }
 
 impl<
-        'a,
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
-    > HashMapReadSnapshot<'a, K, V>
+    > HashMapReadSnapshot<'_, K, V>
 {
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
-    pub fn get<'b, Q: ?Sized>(&'a self, k: &'b Q) -> Option<&'a V>
+    pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -332,7 +328,7 @@ impl<
     }
 
     /// Assert if a key exists in the tree.
-    pub fn contains_key<'b, Q: ?Sized>(&'a self, k: &'b Q) -> bool
+    pub fn contains_key<Q: ?Sized>(&self, k: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Hash + Eq,

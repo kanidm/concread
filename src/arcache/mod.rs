@@ -918,9 +918,9 @@ impl<
         tracing::trace!("r {} >>> {}", p_was, *p);
     }
 
-    fn drain_tlocal_inc<'a, S>(
-        &'a self,
-        cache: &mut HashTrieWriteTxn<'a, K, CacheItem<K, V>>,
+    fn drain_tlocal_inc<S>(
+        &self,
+        cache: &mut HashTrieWriteTxn<K, CacheItem<K, V>>,
         inner: &mut ArcInner<K, V>,
         shared: &ArcShared<K, V>,
         tlocal: Map<K, ThreadCacheItem<V>>,
@@ -1075,9 +1075,9 @@ impl<
         });
     }
 
-    fn drain_hit_rx<'a>(
-        &'a self,
-        cache: &mut HashTrieWriteTxn<'a, K, CacheItem<K, V>>,
+    fn drain_hit_rx(
+        &self,
+        cache: &mut HashTrieWriteTxn<K, CacheItem<K, V>>,
         inner: &mut ArcInner<K, V>,
         commit_ts: Instant,
     ) {
@@ -1130,9 +1130,9 @@ impl<
         }
     }
 
-    fn drain_inc_rx<'a, S>(
-        &'a self,
-        cache: &mut HashTrieWriteTxn<'a, K, CacheItem<K, V>>,
+    fn drain_inc_rx<S>(
+        &self,
+        cache: &mut HashTrieWriteTxn<K, CacheItem<K, V>>,
         inner: &mut ArcInner<K, V>,
         shared: &ArcShared<K, V>,
         commit_ts: Instant,
@@ -1288,9 +1288,9 @@ impl<
         }
     }
 
-    fn drain_tlocal_hits<'a>(
-        &'a self,
-        cache: &mut HashTrieWriteTxn<'a, K, CacheItem<K, V>>,
+    fn drain_tlocal_hits(
+        &self,
+        cache: &mut HashTrieWriteTxn<K, CacheItem<K, V>>,
         inner: &mut ArcInner<K, V>,
         // shared: &ArcShared<K, V>,
         commit_txid: u64,
@@ -1357,8 +1357,8 @@ impl<
     }
 
     /*
-    fn drain_stat_rx<'a>(
-        &'a self,
+    fn drain_stat_rx(
+        &self,
         inner: &mut ArcInner<K, V>,
         stats: &mut CacheStats,
         commit_ts: Instant,
@@ -1390,9 +1390,9 @@ impl<
     */
 
     #[allow(clippy::cognitive_complexity)]
-    fn evict<'a, S>(
-        &'a self,
-        cache: &mut HashTrieWriteTxn<'a, K, CacheItem<K, V>>,
+    fn evict<S>(
+        &self,
+        cache: &mut HashTrieWriteTxn<K, CacheItem<K, V>>,
         inner: &mut ArcInner<K, V>,
         shared: &ArcShared<K, V>,
         commit_txid: u64,
@@ -1513,9 +1513,9 @@ impl<
     }
 
     #[allow(clippy::unnecessary_mut_passed)]
-    fn commit<'a, S>(
-        &'a self,
-        mut cache: HashTrieWriteTxn<'a, K, CacheItem<K, V>>,
+    fn commit<S>(
+        &self,
+        mut cache: HashTrieWriteTxn<K, CacheItem<K, V>>,
         tlocal: Map<K, ThreadCacheItem<V>>,
         hit: Vec<u64>,
         clear: bool,
@@ -1646,11 +1646,10 @@ impl<
 }
 
 impl<
-        'a,
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
         V: Clone + Debug + Sync + Send + 'static,
         S: ARCacheWriteStat<K>,
-    > ARCacheWriteTxn<'a, K, V, S>
+    > ARCacheWriteTxn<'_, K, V, S>
 {
     /// Commit the changes of this writer, making them globally visible. This causes
     /// all items written to this thread's local store to become visible in the main
@@ -1705,7 +1704,7 @@ impl<
     /// the thread local cache, a `Some` is returned, else you will recieve a `None`. On a
     /// `None`, you must then consult the external data source that this structure is acting
     /// as a cache for.
-    pub fn get<'b, Q: ?Sized>(&'b mut self, k: &'b Q) -> Option<&'b V>
+    pub fn get<Q: ?Sized>(&mut self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord,
@@ -1774,7 +1773,7 @@ impl<
     ///
     /// Since you are mutating the state of the value, if you have sized insertions you MAY
     /// break this since you can change the weight of the value to be inconsistent
-    pub fn get_mut<'b, Q: ?Sized>(&'b mut self, k: &'b Q, make_dirty: bool) -> Option<&'b mut V>
+    pub fn get_mut<Q: ?Sized>(&mut self, k: &Q, make_dirty: bool) -> Option<&mut V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord,
@@ -2006,7 +2005,7 @@ impl<
     }
 
     #[cfg(test)]
-    pub(crate) fn peek_cache<'b, Q: ?Sized>(&'a self, k: &'b Q) -> CacheState
+    pub(crate) fn peek_cache<Q: ?Sized>(&self, k: &Q) -> CacheState
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord,
@@ -2039,17 +2038,16 @@ impl<
 }
 
 impl<
-        'a,
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
         V: Clone + Debug + Sync + Send + 'static,
         S: ARCacheReadStat + Clone,
-    > ARCacheReadTxn<'a, K, V, S>
+    > ARCacheReadTxn<'_, K, V, S>
 {
     /// Attempt to retieve a k-v pair from the cache. If it is present in the main cache OR
     /// the thread local cache, a `Some` is returned, else you will recieve a `None`. On a
     /// `None`, you must then consult the external data source that this structure is acting
     /// as a cache for.
-    pub fn get<'b, Q: ?Sized>(&'b mut self, k: &'b Q) -> Option<&'b V>
+    pub fn get<Q: ?Sized>(&mut self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord,
@@ -2077,7 +2075,7 @@ impl<
                         });
                     }
                     let v = &(**v).as_ref().v as *const _;
-                    // This discards the lifetime and repins it to &'b.
+                    // This discards the lifetime and repins it to the lifetime of `self`.
                     &(*v)
                 })
             })
@@ -2110,7 +2108,7 @@ impl<
     }
 
     /// Determine if this cache contains the following key.
-    pub fn contains_key<'b, Q: ?Sized>(&mut self, k: &'b Q) -> bool
+    pub fn contains_key<Q: ?Sized>(&mut self, k: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Hash + Eq + Ord,
@@ -2192,11 +2190,10 @@ impl<
 }
 
 impl<
-        'a,
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
         V: Clone + Debug + Sync + Send + 'static,
         S: ARCacheReadStat + Clone,
-    > Drop for ARCacheReadTxn<'a, K, V, S>
+    > Drop for ARCacheReadTxn<'_, K, V, S>
 {
     fn drop(&mut self) {
         // We could make this check the queue sizes rather than blindly quiescing

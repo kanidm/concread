@@ -43,10 +43,9 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 }
 
 impl<
-        'a,
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
-    > HashTrieWriteTxn<'a, K, V>
+    > HashTrieWriteTxn<'_, K, V>
 {
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to percieve these changes.

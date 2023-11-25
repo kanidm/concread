@@ -9,14 +9,14 @@ struct StrRef<'a> {
     r: &'a str,
 }
 
-impl<'a> Drop for StrRef<'a> {
+impl Drop for StrRef<'_> {
     fn drop(&mut self) {
         println!("{}", self.r);
     }
 }
 
-impl<'a> Clone for StrRef<'a> {
-    fn clone(&self) -> StrRef<'a> {
+impl Clone for StrRef<'_> {
+    fn clone(&self) -> StrRef {
         StrRef { r: self.r }
     }
 }

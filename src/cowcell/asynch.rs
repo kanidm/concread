@@ -38,7 +38,7 @@ pub struct CowCell<T> {
 /// rollback a change, don't call commit and allow the write transaction to
 /// be dropped. This causes the `CowCell` to unlock allowing the next writer
 /// to proceed.
-pub struct CowCellWriteTxn<'a, T: 'a> {
+pub struct CowCellWriteTxn<'a, T> {
     // Hold open the guard, and initiate the copy to here.
     work: Option<T>,
     read: Arc<T>,
@@ -146,7 +146,7 @@ impl<T> Deref for CowCellReadTxn<T> {
     }
 }
 
-impl<'a, T> CowCellWriteTxn<'a, T>
+impl<T> CowCellWriteTxn<'_, T>
 where
     T: Clone,
 {
@@ -174,7 +174,7 @@ where
     }
 }
 
-impl<'a, T> Deref for CowCellWriteTxn<'a, T>
+impl<T> Deref for CowCellWriteTxn<'_, T>
 where
     T: Clone,
 {
@@ -189,7 +189,7 @@ where
     }
 }
 
-impl<'a, T> DerefMut for CowCellWriteTxn<'a, T>
+impl<T> DerefMut for CowCellWriteTxn<'_, T>
 where
     T: Clone,
 {

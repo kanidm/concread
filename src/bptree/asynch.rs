@@ -22,8 +22,8 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 }
 
-impl<'a, K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapWriteTxn<'a, K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    BptreeMapWriteTxn<'_, K, V>
 {
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to percieve these changes.

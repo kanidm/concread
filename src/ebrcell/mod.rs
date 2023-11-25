@@ -40,7 +40,7 @@ pub struct EbrCellWriteTxn<'a, T: 'static + Clone + Send + Sync> {
     _guard: MutexGuard<'a, ()>,
 }
 
-impl<'a, T> EbrCellWriteTxn<'a, T>
+impl<T> EbrCellWriteTxn<'_, T>
 where
     T: Clone + Sync + Send + 'static,
 {
@@ -64,7 +64,7 @@ where
     }
 }
 
-impl<'a, T> Deref for EbrCellWriteTxn<'a, T>
+impl<T> Deref for EbrCellWriteTxn<'_, T>
 where
     T: Clone + Sync + Send,
 {
@@ -76,7 +76,7 @@ where
     }
 }
 
-impl<'a, T> DerefMut for EbrCellWriteTxn<'a, T>
+impl<T> DerefMut for EbrCellWriteTxn<'_, T>
 where
     T: Clone + Sync + Send,
 {

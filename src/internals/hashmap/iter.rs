@@ -19,7 +19,7 @@ where
     phantom_v: PhantomData<&'a V>,
 }
 
-impl<'a, K: Clone + Hash + Eq + Debug, V: Clone> LeafIter<'a, K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone> LeafIter<'_, K, V> {
     pub(crate) fn new(root: *mut Node<K, V>, size_hint: bool) -> Self {
         let length = if size_hint {
             Some(unsafe { (*root).leaf_count() })
@@ -90,7 +90,7 @@ impl<'a, K: Clone + Hash + Eq + Debug, V: Clone> LeafIter<'a, K, V> {
     }
 
     /*
-    fn peek(&'a mut self) -> Option<&'a Leaf<K, V>> {
+    fn peek(&mut self) -> Option<&Leaf<K, V>> {
         // I have no idea how peekable works, yolo.
         self.stack.back().map(|t| t.0.as_leaf())
     }
@@ -137,7 +137,7 @@ where
     leafiter: LeafIter<'a, K, V>,
 }
 
-impl<'a, K: Clone + Hash + Eq + Debug, V: Clone> Iter<'a, K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone> Iter<'_, K, V> {
     pub(crate) fn new(root: *mut Node<K, V>, length: usize) -> Self {
         let mut liter = LeafIter::new(root, false);
         let leaf = liter.next();
@@ -226,7 +226,7 @@ where
     iter: Iter<'a, K, V>,
 }
 
-impl<'a, K: Clone + Hash + Eq + Debug, V: Clone> ValueIter<'a, K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone> ValueIter<'_, K, V> {
     pub(crate) fn new(root: *mut Node<K, V>, length: usize) -> Self {
         ValueIter {
             iter: Iter::new(root, length),

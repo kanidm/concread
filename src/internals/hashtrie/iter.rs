@@ -18,7 +18,7 @@ where
     v: PhantomData<&'a V>,
 }
 
-impl<'a, K: Clone + Hash + Eq + Debug, V: Clone> Iter<'a, K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone> Iter<'_, K, V> {
     pub(crate) fn new(root: Ptr, length: usize) -> Self {
         let mut stack = VecDeque::with_capacity(MAX_HEIGHT as usize);
         stack.push_back((0, root));
@@ -91,7 +91,7 @@ where
     iter: Iter<'a, K, V>,
 }
 
-impl<'a, K: Clone + Hash + Eq + Debug, V: Clone> KeyIter<'a, K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone> KeyIter<'_, K, V> {
     pub(crate) fn new(root: Ptr, length: usize) -> Self {
         KeyIter {
             iter: Iter::new(root, length),
@@ -121,7 +121,7 @@ where
     iter: Iter<'a, K, V>,
 }
 
-impl<'a, K: Clone + Hash + Eq + Debug, V: Clone> ValueIter<'a, K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone> ValueIter<'_, K, V> {
     pub(crate) fn new(root: Ptr, length: usize) -> Self {
         ValueIter {
             iter: Iter::new(root, length),
