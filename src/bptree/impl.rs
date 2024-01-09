@@ -1,6 +1,7 @@
 use crate::internals::bptree::cursor::CursorReadOps;
 use crate::internals::bptree::cursor::{CursorRead, CursorWrite, SuperBlock};
 use crate::internals::bptree::iter::{Iter, RangeIter, KeyIter, ValueIter};
+use crate::internals::bptree::mutiter::RangeMutIter;
 use crate::internals::lincowcell::LinCowCellCapable;
 use std::borrow::Borrow;
 use std::fmt::Debug;
@@ -277,11 +278,19 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
         self.inner.as_mut().get_mut_ref(key)
     }
 
-    // range_mut
-
-    // entry
+    /// Iterate over a mutable range of values
+    pub fn range_mut<R, T>(&mut self, range: R) -> RangeMutIter<K, V>
+    where
+        K: Borrow<T>,
+        T: Ord + ?Sized,
+        R: RangeBounds<T>,
+    {
+        self.inner.as_mut().range_mut(range)
+    }
 
     // iter_mut
+
+    // entry
 
     #[cfg(test)]
     pub(crate) fn tree_density(&self) -> (usize, usize) {

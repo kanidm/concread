@@ -60,10 +60,8 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 }
 
-impl<
-        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
-        V: Clone + Sync + Send + 'static,
-    > HashMapWriteTxn<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    HashMapWriteTxn<'_, K, V>
 {
     /*
     pub(crate) fn get_txid(&self) -> u64 {

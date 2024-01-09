@@ -308,15 +308,15 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for RevLeafIter<'a, K, V> {
 // Wrappers
 
 /// Iterator over references to Key Value pairs stored in the map.
-pub struct Iter<'a, K, V>
+pub struct Iter<'n, 'a, K, V>
 where
     K: Ord + Clone + Debug,
     V: Clone,
 {
-    iter: RangeIter<'a, K, V>,
+    iter: RangeIter<'n, 'a, K, V>,
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> Iter<'_, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> Iter<'_, '_, K, V> {
     pub(crate) fn new(root: *mut Node<K, V>, length: usize) -> Self {
         let bounds: (Bound<K>, Bound<K>) = (Bound::Unbounded, Bound::Unbounded);
         let iter = RangeIter::new(root, bounds, length);
@@ -324,7 +324,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Iter<'_, K, V> {
     }
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for Iter<'a, K, V> {
+impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for Iter<'_, 'a, K, V> {
     type Item = (&'a K, &'a V);
 
     /// Yield the next key value reference, or `None` if exhausted.
@@ -342,7 +342,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for Iter<'a, K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for Iter<'_, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for Iter<'_, '_, K, V> {
     /// Yield the next key value reference, or `None` if exhausted.
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back()
@@ -350,23 +350,23 @@ impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for Iter<'_, K, V> {
 }
 
 /// Iterater over references to Keys stored in the map.
-pub struct KeyIter<'a, K, V>
+pub struct KeyIter<'n, 'a, K, V>
 where
     K: Ord + Clone + Debug,
     V: Clone,
 {
-    iter: Iter<'a, K, V>,
+    iter: Iter<'n, 'a, K, V>,
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> KeyIter<'_, K, V> {
-    pub(crate) fn new(root: *mut Node<K, V>, length: usize) -> Self {
+impl<K: Clone + Ord + Debug, V: Clone> KeyIter<'_, '_, K, V> {
+    pub(crate) fn new<'n>(root: *mut Node<K, V>, length: usize) -> Self {
         KeyIter {
             iter: Iter::new(root, length),
         }
     }
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for KeyIter<'a, K, V> {
+impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for KeyIter<'_, 'a, K, V> {
     type Item = &'a K;
 
     /// Yield the next key value reference, or `None` if exhausted.
@@ -379,7 +379,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for KeyIter<'a, K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for KeyIter<'_, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for KeyIter<'_, '_, K, V> {
     /// Yield the next key value reference, or `None` if exhausted.
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|(k, _)| k)
@@ -387,15 +387,15 @@ impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for KeyIter<'_, K, V>
 }
 
 /// Iterater over references to Values stored in the map.
-pub struct ValueIter<'a, K, V>
+pub struct ValueIter<'n, 'a, K, V>
 where
     K: Ord + Clone + Debug,
     V: Clone,
 {
-    iter: Iter<'a, K, V>,
+    iter: Iter<'n, 'a, K, V>,
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> ValueIter<'_, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> ValueIter<'_, '_, K, V> {
     pub(crate) fn new(root: *mut Node<K, V>, length: usize) -> Self {
         ValueIter {
             iter: Iter::new(root, length),
@@ -403,7 +403,7 @@ impl<K: Clone + Ord + Debug, V: Clone> ValueIter<'_, K, V> {
     }
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for ValueIter<'a, K, V> {
+impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for ValueIter<'_, 'a, K, V> {
     type Item = &'a V;
 
     /// Yield the next key value reference, or `None` if exhausted.
@@ -416,7 +416,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for ValueIter<'a, K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for ValueIter<'_, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for ValueIter<'_, '_, K, V> {
     /// Yield the next key value reference, or `None` if exhausted.
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back().map(|(_, v)| v)
@@ -424,7 +424,7 @@ impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for ValueIter<'_, K, 
 }
 
 /// Iterator over references to Key Value pairs stored, bounded by a range.
-pub struct RangeIter<'a, K, V>
+pub struct RangeIter<'n, 'a, K, V>
 where
     K: Ord + Clone + Debug,
     V: Clone,
@@ -434,14 +434,15 @@ where
     right_iter: RevLeafIter<'a, K, V>,
     phantom_k: PhantomData<&'a K>,
     phantom_v: PhantomData<&'a V>,
+    phantom_root: PhantomData<&'n ()>,
 }
 
-impl<K, V> RangeIter<'_, K, V>
+impl<K, V> RangeIter<'_, '_, K, V>
 where
     K: Clone + Ord + Debug,
     V: Clone,
 {
-    pub(crate) fn new<R, T>(root: *mut Node<K, V>, range: R, length: usize) -> Self
+    pub(crate) fn new<'n, R, T>(root: *mut Node<K, V>, range: R, length: usize) -> Self
     where
         T: Ord + ?Sized,
         K: Borrow<T>,
@@ -566,6 +567,7 @@ where
             right_iter,
             phantom_k: PhantomData,
             phantom_v: PhantomData,
+            phantom_root: PhantomData,
         }
     }
 
@@ -577,11 +579,12 @@ where
             right_iter: RevLeafIter::new_base(),
             phantom_k: PhantomData,
             phantom_v: PhantomData,
+            phantom_root: PhantomData,
         }
     }
 }
 
-impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for RangeIter<'a, K, V> {
+impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for RangeIter<'_, 'a, K, V> {
     type Item = (&'a K, &'a V);
 
     /// Yield the next key value reference, or `None` if exhausted.
@@ -628,7 +631,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for RangeIter<'a, K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for RangeIter<'_, K, V> {
+impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for RangeIter<'_, '_, K, V> {
     /// Yield the next key value reference, or `None` if exhausted.
     fn next_back(&mut self) -> Option<Self::Item> {
         loop {
