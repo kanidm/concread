@@ -68,10 +68,8 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 }
 
-impl<
-        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
-        V: Clone + Sync + Send + 'static,
-    > HashTrieWriteTxn<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    HashTrieWriteTxn<'_, K, V>
 {
     #[cfg(feature = "arcache")]
     pub(crate) fn get_txid(&self) -> u64 {
@@ -105,10 +103,8 @@ impl<
     }
 }
 
-impl<
-        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
-        V: Clone + Sync + Send + 'static,
-    > HashTrieReadTxn<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    HashTrieReadTxn<'_, K, V>
 {
     #[cfg(feature = "arcache")]
     pub(crate) fn get_txid(&self) -> u64 {
