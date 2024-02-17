@@ -32,7 +32,7 @@ hashtrie_skinny = []
 default = ["asynch", "ahash", "ebr", "maps", "arcache"]
 
 [dependencies]
-ahash = { version = "0.7", optional = true }
+ahash = { version = "0.8", optional = true }
 crossbeam-utils = { version = "0.8.12", optional = true }
 crossbeam-epoch = { version = "0.9.11", optional = true }
 crossbeam-queue = { version = "0.3.6", optional = true }
