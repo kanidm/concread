@@ -14,6 +14,7 @@
 //! the properties of this module.
 
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
@@ -95,6 +96,8 @@ where
     /// cache instances will be returned that you can then distribute to the threads.
     pub fn new(threads: usize, capacity: usize) -> Vec<Self> {
         assert!(threads > 0);
+        let capacity = NonZeroUsize::new(capacity).unwrap();
+
         let (txs, rxs): (Vec<_>, Vec<_>) = (0..threads)
             .into_iter()
             .map(|_| channel::<Invalidate<K>>())

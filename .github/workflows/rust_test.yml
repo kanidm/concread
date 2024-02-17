@@ -17,6 +17,6 @@ jobs:
         toolchain: stable
 
     - name: Cargo test
-      run: cargo test
+      run: cargo test --features tcache
 
 
