@@ -56,9 +56,9 @@ impl u64x8 {
 }
 
 #[cfg(all(test, not(miri)))]
-thread_local!(static NODE_COUNTER: AtomicUsize = AtomicUsize::new(1));
+thread_local!(static NODE_COUNTER: AtomicUsize = const { AtomicUsize::new(1) });
 #[cfg(all(test, not(miri)))]
-thread_local!(static ALLOC_LIST: Mutex<BTreeSet<usize>> = Mutex::new(BTreeSet::new()));
+thread_local!(static ALLOC_LIST: Mutex<BTreeSet<usize>> = const { Mutex::new(BTreeSet::new()) });
 
 #[cfg(all(test, not(miri)))]
 fn alloc_nid() -> usize {
@@ -77,7 +77,7 @@ fn release_nid(nid: usize) {
     // debug_assert!(nid != 3);
     {
         let r = ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
-        assert!(r == true);
+        assert!(r);
     }
 }
 
@@ -312,7 +312,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
                 let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
                 let mut lcount = 0; // leaf count
                 for idx in 0..(bref.slots() + 1) {
-                    let n = bref.nodes[idx] as *mut Node<K, V>;
+                    let n = bref.nodes[idx];
                     lcount += unsafe { (*n).leaf_count() };
                 }
                 lcount
@@ -403,7 +403,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
                     for i in 0..(bref.slots() + 1) {
                         let n = bref.nodes[i];
                         let r = unsafe { (*n).no_cycles_inner(track) };
-                        if r == false {
+                        if !r {
                             // panic!();
                             return false;
                         }
@@ -436,7 +436,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
             let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
             for idx in 0..(bref.slots() + 1) {
                 alloc.push(bref.nodes[idx]);
-                let n = bref.nodes[idx] as *mut Node<K, V>;
+                let n = bref.nodes[idx];
                 unsafe { (*n).sblock_collect(alloc) };
             }
         }
@@ -542,10 +542,10 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
         c
     }
 
-    pub(crate) fn get_ref<Q: ?Sized>(&self, h: u64, k: &Q) -> Option<&V>
+    pub(crate) fn get_ref<Q>(&self, h: u64, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Eq,
+        Q: Eq + ?Sized,
     {
         debug_assert_leaf!(self);
         leaf_simd_search(self, h, k)
@@ -556,10 +556,10 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             })
     }
 
-    pub(crate) fn get_mut_ref<Q: ?Sized>(&mut self, h: u64, k: &Q) -> Option<&mut V>
+    pub(crate) fn get_mut_ref<Q>(&mut self, h: u64, k: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
-        Q: Eq,
+        Q: Eq + ?Sized,
     {
         debug_assert_leaf!(self);
         leaf_simd_search(self, h, k)
@@ -571,10 +571,10 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
     }
 
     /*
-    pub(crate) fn get_slot_mut_ref<Q: ?Sized>(&mut self, h: u64) -> Option<&mut [Datum<K, V>]>
+    pub(crate) fn get_slot_mut_ref<Q>(&mut self, h: u64) -> Option<&mut [Datum<K, V>]>
     where
         K: Borrow<Q>,
-        Q: Eq,
+        Q: Eq + ?Sized,
     {
         debug_assert_leaf!(self);
         unsafe {
@@ -734,10 +734,10 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
         }
     }
 
-    pub(crate) fn remove<Q: ?Sized>(&mut self, h: u64, k: &Q) -> LeafRemoveState<V>
+    pub(crate) fn remove<Q>(&mut self, h: u64, k: &Q) -> LeafRemoveState<V>
     where
         K: Borrow<Q>,
-        Q: Eq,
+        Q: Eq + ?Sized,
     {
         debug_assert_leaf!(self);
         if self.slots() == 0 {
@@ -2400,7 +2400,7 @@ mod tests {
         let r = leaf.insert_or_update(y as u64, y, y);
         if let LeafInsertState::Split(rleaf) = r {
             unsafe {
-                assert!((&*rleaf).slots() == 1);
+                assert!((*rleaf).slots() == 1);
             }
             Leaf::free(rleaf);
         } else {
@@ -2411,7 +2411,7 @@ mod tests {
         let r = leaf.insert_or_update(0, 0, 0);
         if let LeafInsertState::RevSplit(lleaf) = r {
             unsafe {
-                assert!((&*lleaf).slots() == 1);
+                assert!((*lleaf).slots() == 1);
             }
             Leaf::free(lleaf);
         } else {
@@ -2511,8 +2511,8 @@ mod tests {
         assert!(branch_ref.get_ref(11, &11) == Some(&11));
         assert!(branch_ref.get_ref(21, &21) == Some(&21));
         // get some k that is out of bounds.
-        assert!(branch_ref.get_ref(1, &1) == None);
-        assert!(branch_ref.get_ref(100, &100) == None);
+        assert!(branch_ref.get_ref(1, &1).is_none());
+        assert!(branch_ref.get_ref(100, &100).is_none());
 
         Leaf::free(left as *mut _);
         Leaf::free(right as *mut _);

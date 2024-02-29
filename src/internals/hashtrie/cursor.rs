@@ -78,10 +78,10 @@ macro_rules! hash_key {
 }
 
 #[cfg(all(test, not(miri)))]
-thread_local!(static ALLOC_LIST: Mutex<BTreeSet<Ptr>> = Mutex::new(BTreeSet::new()));
+thread_local!(static ALLOC_LIST: Mutex<BTreeSet<Ptr>> = const { Mutex::new(BTreeSet::new()) });
 
 #[cfg(all(test, not(miri)))]
-thread_local!(static WRITE_LIST: Mutex<BTreeSet<Ptr>> = Mutex::new(BTreeSet::new()));
+thread_local!(static WRITE_LIST: Mutex<BTreeSet<Ptr>> = const { Mutex::new(BTreeSet::new()) });
 
 #[cfg(test)]
 fn assert_released() {
@@ -508,15 +508,15 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
 
     fn get_txid(&self) -> u64;
 
-    fn hash_key<Q: ?Sized>(&self, k: &Q) -> u64
+    fn hash_key<Q>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
-        Q: Hash + Eq;
+        Q: Hash + Eq + ?Sized;
 
-    fn search<Q: ?Sized>(&self, h: u64, k: &Q) -> Option<&V>
+    fn search<Q>(&self, h: u64, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         let mut node = self.get_root_ptr();
         for d in 0..MAX_HEIGHT {
@@ -560,6 +560,7 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
         ValueIter::new(self.get_root_ptr(), self.len())
     }
 
+    #[allow(unused)]
     fn verify_inner(&self, expect_clean: bool) {
         let root = self.get_root_ptr();
         assert!(root.is_branch());
@@ -595,6 +596,7 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
         assert!(length == self.len());
     }
 
+    #[allow(unused)]
     fn verify(&self);
 }
 
@@ -1027,10 +1029,10 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite
         self.txid
     }
 
-    fn hash_key<Q: ?Sized>(&self, k: &Q) -> u64
+    fn hash_key<Q>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         hash_key!(self, k)
     }
@@ -1094,10 +1096,10 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<
         self.txid
     }
 
-    fn hash_key<Q: ?Sized>(&self, k: &Q) -> u64
+    fn hash_key<Q>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         hash_key!(self, k)
     }

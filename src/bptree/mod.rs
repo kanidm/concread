@@ -43,7 +43,6 @@ mod tests {
     use crate::internals::bptree::node::{assert_released, L_CAPACITY};
     // use rand::prelude::*;
     use rand::seq::SliceRandom;
-    use std::iter::FromIterator;
 
     #[test]
     fn test_bptree2_map_basic_write() {
@@ -200,7 +199,7 @@ mod tests {
 
         let r3 = map.read();
         // println!("{:?}", r3.len());
-        assert!(r3.len() == 0);
+        assert!(r3.is_empty());
 
         std::mem::drop(r);
         std::mem::drop(r2);
@@ -264,9 +263,9 @@ mod tests {
         let rd = map.read();
 
         wr.insert(1, 1);
-        assert!(rd.get(&1) == None);
+        assert!(rd.get(&1).is_none());
         wr.commit();
-        assert!(rd.get(&1) == None);
+        assert!(rd.get(&1).is_none());
     }
 
     #[test]

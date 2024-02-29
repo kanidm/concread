@@ -13,7 +13,6 @@ use std::mem;
 use super::iter::{Iter, KeyIter, RangeIter, ValueIter};
 use super::mutiter::RangeMutIter;
 use super::states::*;
-use std::iter::Extend;
 use std::ops::RangeBounds;
 
 use std::sync::Mutex;
@@ -173,6 +172,7 @@ unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Se
 }
 
 pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
+    #[allow(unused)]
     fn get_root_ref(&self) -> &Node<K, V>;
 
     fn get_root(&self) -> *mut Node<K, V>;
@@ -188,10 +188,10 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         rref.tree_density()
     }
 
-    fn search<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+    fn search<Q>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Ord,
+        Q: Ord + ?Sized,
     {
         let mut node = self.get_root();
         for _i in 0..65536 {
@@ -214,11 +214,10 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         panic!("Tree depth exceeded max limit (65536). This may indicate memory corruption.");
     }
 
-    #[allow(clippy::needless_lifetimes)]
-    fn contains_key<Q: ?Sized>(&self, k: &Q) -> bool
+    fn contains_key<Q>(&self, k: &Q) -> bool
     where
         K: Borrow<Q>,
-        Q: Ord,
+        Q: Ord + ?Sized,
     {
         self.search(k).is_some()
     }
@@ -741,10 +740,8 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
         // move k:v into both closures!
         match branch_ref!(node, K, V).req_clone(txid) {
             Some(cnode) => {
-                //
-                first_seen.push(cnode as *mut Node<K, V>);
-                // println!("ls push 6");
-                last_seen.push(node as *mut Node<K, V>);
+                first_seen.push(cnode);
+                last_seen.push(node);
                 // Not same txn, clone instead.
                 let nmref = branch_ref!(cnode, K, V);
                 let anode_idx = nmref.locate_node(&k);
@@ -1097,12 +1094,10 @@ fn clone_and_remove<K: Clone + Ord + Debug, V: Clone>(
     }
 }
 
-fn path_get_mut_ref<'a, K: Clone + Ord + Debug, V: Clone>(
-    node: *mut Node<K, V>,
-    k: &K,
-) -> Option<&'a mut V>
+fn path_get_mut_ref<'a, K, V>(node: *mut Node<K, V>, k: &K) -> Option<&'a mut V>
 where
-    K: 'a,
+    K: Clone + Ord + Debug + 'a,
+    V: Clone,
 {
     if self_meta!(node).is_leaf() {
         leaf_ref!(node, K, V).get_mut_ref(k)
@@ -1806,7 +1801,7 @@ mod tests {
 
         for v in 0..L_CAPACITY {
             let x = wcurs.remove(&v);
-            assert!(x == None);
+            assert!(x.is_none());
         }
 
         mem::drop(wcurs);
@@ -2692,10 +2687,10 @@ mod tests {
                 assert!(wcurs.contains_key(&(v - 1)));
             }
 
-            wcurs.split_off_lt(&v);
+            wcurs.split_off_lt(v);
             assert!(!wcurs.contains_key(&(v - 1)));
             if v < &1024 {
-                assert!(wcurs.contains_key(&v));
+                assert!(wcurs.contains_key(v));
             }
             assert!(wcurs.verify());
             let contents: Vec<_> = wcurs.k_iter().collect();
@@ -2710,11 +2705,11 @@ mod tests {
         let sb = SuperBlock::new_test(1, node as *mut Node<isize, isize>);
         let mut wcurs = sb.create_writer();
 
-        wcurs.extend([(0, 0), (1, 1), (2, 2), (3, 3)].into_iter());
+        wcurs.extend([(0, 0), (1, 1), (2, 2), (3, 3)]);
         assert!(wcurs.len() == 4);
         assert!(wcurs.verify());
 
-        wcurs.extend([(2, 2), (3, 3), (4, 4), (5, 5)].into_iter());
+        wcurs.extend([(2, 2), (3, 3), (4, 4), (5, 5)]);
         assert!(wcurs.len() == 6);
         assert!(wcurs.verify());
 

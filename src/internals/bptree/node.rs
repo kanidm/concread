@@ -42,9 +42,9 @@ pub(crate) const L_CAPACITY_N1: usize = L_CAPACITY - 1;
 pub(crate) const BV_CAPACITY: usize = L_CAPACITY + 1;
 
 #[cfg(all(test, not(miri)))]
-thread_local!(static NODE_COUNTER: AtomicUsize = AtomicUsize::new(1));
+thread_local!(static NODE_COUNTER: AtomicUsize = const { AtomicUsize::new(1) });
 #[cfg(all(test, not(miri)))]
-thread_local!(static ALLOC_LIST: Mutex<BTreeSet<usize>> = Mutex::new(BTreeSet::new()));
+thread_local!(static ALLOC_LIST: Mutex<BTreeSet<usize>> = const { Mutex::new(BTreeSet::new()) });
 
 #[cfg(all(test, not(miri)))]
 fn alloc_nid() -> usize {
@@ -62,7 +62,7 @@ fn release_nid(nid: usize) {
     // println!("Release -> {:?}", nid);
     // debug_assert!(nid != 3);
     let r = ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
-    assert!(r == true);
+    assert!(r);
 }
 
 #[cfg(test)]
@@ -400,7 +400,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
                     for i in 0..(bref.count() + 1) {
                         let n = bref.nodes[i];
                         let r = unsafe { (*n).no_cycles_inner(track) };
-                        if r == false {
+                        if !r {
                             // panic!();
                             return false;
                         }
@@ -433,7 +433,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
             let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
             for idx in 0..(bref.count() + 1) {
                 alloc.push(bref.nodes[idx]);
-                let n = bref.nodes[idx] as *mut Node<K, V>;
+                let n = bref.nodes[idx];
                 unsafe { (*n).sblock_collect(alloc) };
             }
         }
@@ -531,19 +531,19 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
         self.meta.get_txid()
     }
 
-    pub(crate) fn locate<Q: ?Sized>(&self, k: &Q) -> Result<usize, usize>
+    pub(crate) fn locate<Q>(&self, k: &Q) -> Result<usize, usize>
     where
         K: Borrow<Q>,
-        Q: Ord,
+        Q: Ord + ?Sized,
     {
         debug_assert_leaf!(self);
         key_search!(self, k)
     }
 
-    pub(crate) fn get_ref<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+    pub(crate) fn get_ref<Q>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Ord,
+        Q: Ord + ?Sized,
     {
         debug_assert_leaf!(self);
         key_search!(self, k)
@@ -551,10 +551,10 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
             .map(|idx| unsafe { &*self.values[idx].as_ptr() })
     }
 
-    pub(crate) fn get_mut_ref<Q: ?Sized>(&mut self, k: &Q) -> Option<&mut V>
+    pub(crate) fn get_mut_ref<Q>(&mut self, k: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
-        Q: Ord,
+        Q: Ord + ?Sized,
     {
         debug_assert_leaf!(self);
         key_search!(self, k)
@@ -695,10 +695,10 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
         }
     }
 
-    pub(crate) fn remove<Q: ?Sized>(&mut self, k: &Q) -> LeafRemoveState<V>
+    pub(crate) fn remove<Q>(&mut self, k: &Q) -> LeafRemoveState<V>
     where
         K: Borrow<Q>,
-        Q: Ord,
+        Q: Ord + ?Sized,
     {
         debug_assert_leaf!(self);
         if self.count() == 0 {
@@ -971,10 +971,10 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
     }
 
     #[inline(always)]
-    pub(crate) fn locate_node<Q: ?Sized>(&self, k: &Q) -> usize
+    pub(crate) fn locate_node<Q>(&self, k: &Q) -> usize
     where
         K: Borrow<Q>,
-        Q: Ord,
+        Q: Ord + ?Sized,
     {
         debug_assert_branch!(self);
         match key_search!(self, k) {
@@ -2182,7 +2182,7 @@ mod tests {
         let r = leaf.insert_or_update(L_CAPACITY + 10, L_CAPACITY + 10);
         if let LeafInsertState::Split(rleaf) = r {
             unsafe {
-                assert!((&*rleaf).count() == 1);
+                assert!((*rleaf).count() == 1);
             }
             Leaf::free(rleaf);
         } else {
@@ -2193,7 +2193,7 @@ mod tests {
         let r = leaf.insert_or_update(0, 0);
         if let LeafInsertState::RevSplit(lleaf) = r {
             unsafe {
-                assert!((&*lleaf).count() == 1);
+                assert!((*lleaf).count() == 1);
             }
             Leaf::free(lleaf);
         } else {
@@ -2291,8 +2291,8 @@ mod tests {
         assert!(branch_ref.get_ref(&11) == Some(&11));
         assert!(branch_ref.get_ref(&21) == Some(&21));
         // get some k that is out of bounds.
-        assert!(branch_ref.get_ref(&1) == None);
-        assert!(branch_ref.get_ref(&100) == None);
+        assert!(branch_ref.get_ref(&1).is_none());
+        assert!(branch_ref.get_ref(&100).is_none());
 
         Leaf::free(left as *mut _);
         Leaf::free(right as *mut _);

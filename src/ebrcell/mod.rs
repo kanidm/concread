@@ -19,7 +19,6 @@ use crossbeam_epoch as epoch;
 use crossbeam_epoch::{Atomic, Guard, Owned};
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
-use std::marker::Send;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Mutex, MutexGuard};
@@ -359,7 +358,7 @@ mod tests {
                                 let mut_ptr = cc_wrtxn.get_mut();
                                 assert!(*mut_ptr >= last_value);
                                 last_value = *mut_ptr;
-                                *mut_ptr = *mut_ptr + 1;
+                                *mut_ptr += 1;
                             }
                             cc_wrtxn.commit();
                         }
@@ -401,7 +400,7 @@ mod tests {
                 let mut cc_wrtxn = cc.write();
                 {
                     let mut_ptr = cc_wrtxn.get_mut();
-                    mut_ptr.data = mut_ptr.data + 1;
+                    mut_ptr.data += 1;
                 }
                 cc_wrtxn.commit();
             }
@@ -494,7 +493,7 @@ mod tests_linear {
             let mut cc_wrtxn = cc.write();
             {
                 let mut_ptr = cc_wrtxn.get_mut();
-                mut_ptr.data = mut_ptr.data + 1;
+                mut_ptr.data += 1;
             }
             cc_wrtxn.commit();
         }
@@ -505,7 +504,7 @@ mod tests_linear {
             let mut cc_wrtxn = cc.write();
             {
                 let mut_ptr = cc_wrtxn.get_mut();
-                mut_ptr.data = mut_ptr.data + 1;
+                mut_ptr.data += 1;
             }
             cc_wrtxn.commit();
         }

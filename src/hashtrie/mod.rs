@@ -77,10 +77,10 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 
     #[cfg(feature = "arcache")]
-    pub(crate) fn prehash<Q: ?Sized>(&self, k: &Q) -> u64
+    pub(crate) fn prehash<Q>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.inner.as_ref().hash_key(k)
     }
@@ -112,10 +112,10 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 
     #[cfg(feature = "arcache")]
-    pub(crate) fn prehash<Q: ?Sized>(&self, k: &Q) -> u64
+    pub(crate) fn prehash<Q>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.inner.as_ref().hash_key(k)
     }

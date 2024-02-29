@@ -184,7 +184,7 @@ where
     fn deref(&self) -> &T {
         match &self.work {
             Some(v) => v,
-            None => &(*self.read),
+            None => &self.read,
         }
     }
 }
@@ -285,7 +285,7 @@ mod tests {
                 let mut cc_wrtxn = cc.write().await;
                 {
                     let mut_ptr = cc_wrtxn.get_mut();
-                    mut_ptr.data = mut_ptr.data + 1;
+                    mut_ptr.data += 1;
                 }
                 cc_wrtxn.commit().await;
             }

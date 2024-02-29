@@ -98,10 +98,7 @@ where
         assert!(threads > 0);
         let capacity = NonZeroUsize::new(capacity).unwrap();
 
-        let (txs, rxs): (Vec<_>, Vec<_>) = (0..threads)
-            .into_iter()
-            .map(|_| channel::<Invalidate<K>>())
-            .unzip();
+        let (txs, rxs): (Vec<_>, Vec<_>) = (0..threads).map(|_| channel::<Invalidate<K>>()).unzip();
 
         // Create an Arc<Mutex<txs>> for the writer.
         let inv_up_to_txid = Arc::new(AtomicU64::new(0));

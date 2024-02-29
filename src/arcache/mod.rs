@@ -28,7 +28,6 @@ use std::sync::{Mutex, RwLock};
 
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
-use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem;
@@ -1118,7 +1117,7 @@ impl<
                             CacheItem::Haunted(*llp)
                         }
                     };
-                    mem::swap(&mut (*ci).v, &mut next_state);
+                    mem::swap(&mut ci.v, &mut next_state);
                 } // for each item in the bucket.
             }
             // Do nothing, it must have been evicted.
@@ -1344,7 +1343,7 @@ impl<
                         };
                         // Now change the state.
                         if let Some(ref mut next_state) = next_state {
-                            mem::swap(&mut (*ci).v, next_state);
+                            mem::swap(&mut ci.v, next_state);
                         }
                     } // for each ci in slots
                 }
@@ -1704,10 +1703,10 @@ impl<
     /// the thread local cache, a `Some` is returned, else you will recieve a `None`. On a
     /// `None`, you must then consult the external data source that this structure is acting
     /// as a cache for.
-    pub fn get<Q: ?Sized>(&mut self, k: &Q) -> Option<&V>
+    pub fn get<Q>(&mut self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Ord,
+        Q: Hash + Eq + Ord + ?Sized,
     {
         let k_hash: u64 = self.cache.prehash(k);
 
@@ -1773,10 +1772,10 @@ impl<
     ///
     /// Since you are mutating the state of the value, if you have sized insertions you MAY
     /// break this since you can change the weight of the value to be inconsistent
-    pub fn get_mut<Q: ?Sized>(&mut self, k: &Q, make_dirty: bool) -> Option<&mut V>
+    pub fn get_mut<Q>(&mut self, k: &Q, make_dirty: bool) -> Option<&mut V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Ord,
+        Q: Hash + Eq + Ord + ?Sized,
     {
         // If we were requested to clear, we can not copy to the tlocal cache.
         let is_cleared = unsafe {
@@ -1814,10 +1813,10 @@ impl<
     }
 
     /// Determine if this cache contains the following key.
-    pub fn contains_key<Q: ?Sized>(&mut self, k: &Q) -> bool
+    pub fn contains_key<Q>(&mut self, k: &Q) -> bool
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Ord,
+        Q: Hash + Eq + Ord + ?Sized,
     {
         self.get(k).is_some()
     }
@@ -2047,10 +2046,10 @@ impl<
     /// the thread local cache, a `Some` is returned, else you will recieve a `None`. On a
     /// `None`, you must then consult the external data source that this structure is acting
     /// as a cache for.
-    pub fn get<Q: ?Sized>(&mut self, k: &Q) -> Option<&V>
+    pub fn get<Q>(&mut self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Ord,
+        Q: Hash + Eq + Ord + ?Sized,
     {
         let k_hash: u64 = self.cache.prehash(k);
 
@@ -2108,10 +2107,10 @@ impl<
     }
 
     /// Determine if this cache contains the following key.
-    pub fn contains_key<Q: ?Sized>(&mut self, k: &Q) -> bool
+    pub fn contains_key<Q>(&mut self, k: &Q) -> bool
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Ord,
+        Q: Hash + Eq + Ord + ?Sized,
     {
         self.get(k).is_some()
     }
@@ -2220,8 +2219,8 @@ mod tests {
             .expect("Invalid cache parameters!");
         let mut wr_txn = arc.write();
 
-        assert!(wr_txn.get(&1) == None);
-        assert!(wr_txn.peek_hit().len() == 0);
+        assert!(wr_txn.get(&1).is_none());
+        assert!(wr_txn.peek_hit().is_empty());
         wr_txn.insert(1, 1);
         assert!(wr_txn.get(&1) == Some(&1));
         assert!(wr_txn.peek_hit().len() == 1);
@@ -2483,7 +2482,7 @@ mod tests {
         let gfreq_set: Vec<usize> = wr_txn.iter_ghost_freq().take(4).copied().collect();
 
         gfreq_set.iter().for_each(|i| wr_txn.insert(*i, *i));
-        let _stats = wr_txn.commit();
+        wr_txn.commit();
 
         println!("== 9");
         let wr_txn = arc.write();
@@ -2659,12 +2658,12 @@ mod tests {
         wr_txn.insert(1, 1);
 
         // assert 1 is not in rd.
-        assert!(rd_txn.get(&1) == None);
+        assert!(rd_txn.get(&1).is_none());
 
         // Commit wr
         wr_txn.commit();
         // Even after the commit, it's not in rd.
-        assert!(rd_txn.get(&1) == None);
+        assert!(rd_txn.get(&1).is_none());
         // begin wr
         let mut wr_txn = arc.write();
         // We now need to flood the cache, to cause ghost rec eviction.
@@ -2684,7 +2683,7 @@ mod tests {
         // assert that 1 is haunted.
         assert!(wr_txn.peek_cache(&1) == CacheState::Haunted);
         // assert 1 is not in rd.
-        assert!(rd_txn.get(&1) == None);
+        assert!(rd_txn.get(&1).is_none());
         // now that 1 is hanuted, in rd attempt to insert 1, X
         rd_txn.insert(1, 100);
         // commit wr

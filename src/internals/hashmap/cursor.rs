@@ -180,18 +180,20 @@ unsafe impl<K: Clone + Hash + Eq + Debug + Sync + Send + 'static, V: Clone + Syn
 }
 
 pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
+    #[allow(unused)]
     fn get_root_ref(&self) -> &Node<K, V>;
 
     fn get_root(&self) -> *mut Node<K, V>;
 
     fn len(&self) -> usize;
 
+    #[allow(unused)]
     fn get_txid(&self) -> u64;
 
-    fn hash_key<Q: ?Sized>(&self, k: &Q) -> u64
+    fn hash_key<Q>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
-        Q: Hash + Eq;
+        Q: Hash + Eq + ?Sized;
 
     #[cfg(test)]
     fn get_tree_density(&self) -> (usize, usize, usize) {
@@ -200,10 +202,10 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
         rref.tree_density()
     }
 
-    fn search<Q: ?Sized>(&self, h: u64, k: &Q) -> Option<&V>
+    fn search<Q>(&self, h: u64, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         let mut node = self.get_root();
         for _i in 0..65536 {
@@ -226,11 +228,11 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
         panic!("Tree depth exceeded max limit (65536). This may indicate memory corruption.");
     }
 
-    #[allow(clippy::needless_lifetimes)]
-    fn contains_key<Q: ?Sized>(&self, h: u64, k: &Q) -> bool
+    #[allow(unused)]
+    fn contains_key<Q>(&self, h: u64, k: &Q) -> bool
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.search(h, k).is_some()
     }
@@ -564,10 +566,10 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<
         self.txid
     }
 
-    fn hash_key<Q: ?Sized>(&self, k: &Q) -> u64
+    fn hash_key<Q>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         hash_key!(self, k)
     }
@@ -590,10 +592,10 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite
         self.txid
     }
 
-    fn hash_key<Q: ?Sized>(&self, k: &Q) -> u64
+    fn hash_key<Q>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         hash_key!(self, k)
     }
@@ -684,9 +686,9 @@ fn clone_and_insert<K: Clone + Hash + Eq + Debug, V: Clone>(
         match branch_ref!(node, K, V).req_clone(txid) {
             Some(cnode) => {
                 //
-                first_seen.push(cnode as *mut Node<K, V>);
+                first_seen.push(cnode);
                 // println!("ls push 6");
-                last_seen.push(node as *mut Node<K, V>);
+                last_seen.push(node);
                 // Not same txn, clone instead.
                 let nmref = branch_ref!(cnode, K, V);
                 let anode_idx = nmref.locate_node(h);
@@ -1040,13 +1042,10 @@ fn clone_and_remove<K: Clone + Hash + Eq + Debug, V: Clone>(
     }
 }
 
-fn path_get_mut_ref<'a, K: Clone + Hash + Eq + Debug, V: Clone>(
-    node: *mut Node<K, V>,
-    h: u64,
-    k: &K,
-) -> Option<&'a mut V>
+fn path_get_mut_ref<'a, K, V>(node: *mut Node<K, V>, h: u64, k: &K) -> Option<&'a mut V>
 where
-    K: 'a,
+    K: Clone + Hash + Eq + Debug + 'a,
+    V: Clone,
 {
     if self_meta!(node).is_leaf() {
         leaf_ref!(node, K, V).get_mut_ref(h, k)
@@ -1607,7 +1606,7 @@ mod tests {
 
         for v in 0..H_CAPACITY {
             let x = wcurs.remove(v as u64, &v);
-            assert!(x == None);
+            assert!(x.is_none());
         }
 
         mem::drop(wcurs);
