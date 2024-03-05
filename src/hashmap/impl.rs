@@ -134,39 +134,39 @@ impl<
     > HashMapWriteTxn<'_, K, V>
 {
     /*
-    pub(crate) fn prehash<Q: ?Sized>(&self, k: &Q) -> u64
+    pub(crate) fn prehash<Q>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.inner.as_ref().hash_key(k)
     }
     */
 
-    pub(crate) fn get_prehashed<Q: ?Sized>(&self, k: &Q, k_hash: u64) -> Option<&V>
+    pub(crate) fn get_prehashed<Q>(&self, k: &Q, k_hash: u64) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.inner.as_ref().search(k_hash, k)
     }
 
     /// Retrieve a value from the map. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
-    pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+    pub fn get<Q>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         let k_hash = self.inner.as_ref().hash_key(k);
         self.get_prehashed(k, k_hash)
     }
 
     /// Assert if a key exists in the map.
-    pub fn contains_key<Q: ?Sized>(&self, k: &Q) -> bool
+    pub fn contains_key<Q>(&self, k: &Q) -> bool
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.get(k).is_some()
     }
@@ -241,30 +241,30 @@ impl<
         V: Clone + Sync + Send + 'static,
     > HashMapReadTxn<'_, K, V>
 {
-    pub(crate) fn get_prehashed<Q: ?Sized>(&self, k: &Q, k_hash: u64) -> Option<&V>
+    pub(crate) fn get_prehashed<Q>(&self, k: &Q, k_hash: u64) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.inner.search(k_hash, k)
     }
 
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
-    pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+    pub fn get<Q>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         let k_hash = self.inner.as_ref().hash_key(k);
         self.get_prehashed(k, k_hash)
     }
 
     /// Assert if a key exists in the tree.
-    pub fn contains_key<Q: ?Sized>(&self, k: &Q) -> bool
+    pub fn contains_key<Q>(&self, k: &Q) -> bool
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.get(k).is_some()
     }
@@ -310,10 +310,10 @@ impl<
 {
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
-    pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+    pub fn get<Q>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         match self.inner {
             SnapshotType::R(inner) => {
@@ -328,10 +328,10 @@ impl<
     }
 
     /// Assert if a key exists in the tree.
-    pub fn contains_key<Q: ?Sized>(&self, k: &Q) -> bool
+    pub fn contains_key<Q>(&self, k: &Q) -> bool
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.get(k).is_some()
     }

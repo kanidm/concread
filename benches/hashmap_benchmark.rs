@@ -19,7 +19,7 @@ extern crate criterion;
 extern crate rand;
 
 use concread::hashmap::*;
-use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 use rand::{thread_rng, Rng};
 
 // ranges of counts for different benchmarks (MINs are inclusive, MAXes exclusive):
@@ -190,8 +190,7 @@ fn remove_vec<'a, V: Clone + Sync + Send + 'static>(
 fn search_vec<V: Clone + Sync + Send + 'static>(map: &HashMap<u32, V>, list: &Vec<u32>) {
     let read_txn = map.read();
     for i in list.iter() {
-        // ! This could potentially get optimized into nothing !
-        read_txn.get(&i);
+        read_txn.get(black_box(i));
     }
 }
 
@@ -265,7 +264,7 @@ fn prepare_remove<V: Clone + Sync + Send + 'static>(value: V) -> (HashMap<u32, V
     for i in random_order(insert_count, insert_count).iter() {
         // We could count on the hash function alone to make the order random, but it seems
         // better to count on every possible implementation.
-        write_txn.insert(i.clone(), value.clone());
+        write_txn.insert(*i, value.clone());
     }
     write_txn.commit();
     (map, random_order(insert_count, remove_count))

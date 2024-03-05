@@ -65,10 +65,10 @@ pub(crate) unsafe fn slice_slide<T>(slice: &mut [T], idx: usize, count: usize) {
 }
 */
 
-pub(crate) fn slice_search_linear<K, Q: ?Sized>(slice: &[K], k: &Q) -> Result<usize, usize>
+pub(crate) fn slice_search_linear<K, Q>(slice: &[K], k: &Q) -> Result<usize, usize>
 where
     K: Borrow<Q>,
-    Q: Ord,
+    Q: Ord + ?Sized,
 {
     for (idx, nk) in slice.iter().enumerate() {
         let r = k.cmp(nk.borrow());

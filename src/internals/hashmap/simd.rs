@@ -183,11 +183,11 @@ where
 */
 
 #[cfg(not(feature = "simd_support"))]
-pub(crate) fn leaf_simd_search<K, V, Q: ?Sized>(leaf: &Leaf<K, V>, h: u64, k: &Q) -> KeyLoc
+pub(crate) fn leaf_simd_search<K, V, Q>(leaf: &Leaf<K, V>, h: u64, k: &Q) -> KeyLoc
 where
     K: Hash + Eq + Clone + Debug + Borrow<Q>,
     V: Clone,
-    Q: Eq,
+    Q: Eq + ?Sized,
 {
     debug_assert!(h < u64::MAX);
 
@@ -213,11 +213,11 @@ where
 }
 
 #[cfg(feature = "simd_support")]
-pub(crate) fn leaf_simd_search<K, V, Q: ?Sized>(leaf: &Leaf<K, V>, h: u64, k: &Q) -> KeyLoc
+pub(crate) fn leaf_simd_search<K, V, Q>(leaf: &Leaf<K, V>, h: u64, k: &Q) -> KeyLoc
 where
     K: Hash + Eq + Clone + Debug + Borrow<Q>,
     V: Clone,
-    Q: Eq,
+    Q: Eq + ?Sized,
 {
     // This is an important piece of logic!
     debug_assert!(h < u64::MAX);

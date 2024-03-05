@@ -358,7 +358,7 @@ mod tests {
                 let mut_ptr = cc_wrtxn.get_mut();
                 assert!(mut_ptr.x >= last_value);
                 last_value = mut_ptr.x;
-                mut_ptr.x = mut_ptr.x + 1;
+                mut_ptr.x += 1;
             }
             cc_wrtxn.commit().await;
         }
@@ -460,7 +460,7 @@ mod tests {
                 let mut cc_wrtxn = cc.write().await;
                 {
                     let mut_ptr = cc_wrtxn.get_mut();
-                    mut_ptr.data = mut_ptr.data + 1;
+                    mut_ptr.data += 1;
                 }
                 cc_wrtxn.commit().await;
             }
@@ -563,7 +563,7 @@ mod tests_linear {
             let mut cc_wrtxn = cc.write().await;
             {
                 let mut_ptr = cc_wrtxn.get_mut();
-                mut_ptr.data = mut_ptr.data + 1;
+                mut_ptr.data += 1;
             }
             cc_wrtxn.commit().await;
         }
@@ -574,7 +574,7 @@ mod tests_linear {
             let mut cc_wrtxn = cc.write().await;
             {
                 let mut_ptr = cc_wrtxn.get_mut();
-                mut_ptr.data = mut_ptr.data + 1;
+                mut_ptr.data += 1;
             }
             cc_wrtxn.commit().await;
         }

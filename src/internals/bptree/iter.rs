@@ -359,7 +359,7 @@ where
 }
 
 impl<K: Clone + Ord + Debug, V: Clone> KeyIter<'_, '_, K, V> {
-    pub(crate) fn new<'n>(root: *mut Node<K, V>, length: usize) -> Self {
+    pub(crate) fn new(root: *mut Node<K, V>, length: usize) -> Self {
         KeyIter {
             iter: Iter::new(root, length),
         }
@@ -442,7 +442,7 @@ where
     K: Clone + Ord + Debug,
     V: Clone,
 {
-    pub(crate) fn new<'n, R, T>(root: *mut Node<K, V>, range: R, length: usize) -> Self
+    pub(crate) fn new<R, T>(root: *mut Node<K, V>, range: R, length: usize) -> Self
     where
         T: Ord + ?Sized,
         K: Borrow<T>,
