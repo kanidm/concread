@@ -1,7 +1,16 @@
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 // use std::mem::MaybeUninit;
+#[cfg(feature = "serde")]
+use std::fmt;
+#[cfg(feature = "serde")]
+use std::iter;
+#[cfg(feature = "serde")]
+use std::marker::PhantomData;
 use std::ptr;
+
+#[cfg(feature = "serde")]
+use serde::de::{Deserialize, MapAccess, Visitor};
 
 pub(crate) unsafe fn slice_insert<T>(slice: &mut [T], new: T, idx: usize) {
     ptr::copy(
@@ -79,4 +88,35 @@ where
         }
     }
     Err(slice.len())
+}
+
+#[cfg(feature = "serde")]
+pub struct MapCollector<T, K, V>(PhantomData<(T, K, V)>);
+
+#[cfg(feature = "serde")]
+impl<T, K, V> MapCollector<T, K, V> {
+    pub fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T, K, V> Visitor<'de> for MapCollector<T, K, V>
+where
+    T: FromIterator<(K, V)>,
+    K: Deserialize<'de>,
+    V: Deserialize<'de>,
+{
+    type Value = T;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a map")
+    }
+
+    fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        iter::from_fn(|| access.next_entry().transpose()).collect()
+    }
 }

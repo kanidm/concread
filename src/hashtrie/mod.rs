@@ -28,20 +28,16 @@
 pub mod asynch;
 
 #[cfg(feature = "serde")]
-use std::fmt;
-#[cfg(feature = "serde")]
-use std::iter;
-#[cfg(feature = "serde")]
-use std::marker::PhantomData;
-
-#[cfg(feature = "serde")]
 use serde::{
-    de::{Deserialize, Deserializer, MapAccess, Visitor},
+    de::{Deserialize, Deserializer},
     ser::{Serialize, SerializeMap, Serializer},
 };
 
 #[cfg(feature = "arcache")]
 use crate::internals::hashtrie::cursor::Datum;
+
+#[cfg(feature = "serde")]
+use crate::utils::MapCollector;
 
 use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
 
@@ -166,28 +162,7 @@ where
     where
         D: Deserializer<'de>,
     {
-        struct Collector<K, V>(PhantomData<(K, V)>);
-
-        impl<'de, K, V> Visitor<'de> for Collector<K, V>
-        where
-            K: Deserialize<'de> + Hash + Eq + Clone + Debug + Sync + Send + 'static,
-            V: Deserialize<'de> + Clone + Sync + Send + 'static,
-        {
-            type Value = HashTrie<K, V>;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a map")
-            }
-
-            fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
-            where
-                M: MapAccess<'de>,
-            {
-                iter::from_fn(|| access.next_entry().transpose()).collect()
-            }
-        }
-
-        deserializer.deserialize_map(Collector(PhantomData))
+        deserializer.deserialize_map(MapCollector::new())
     }
 }
 
