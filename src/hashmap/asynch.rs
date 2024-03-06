@@ -4,6 +4,15 @@
 
 #![allow(clippy::implicit_hasher)]
 
+#[cfg(feature = "serde")]
+use serde::{
+    de::{Deserialize, Deserializer},
+    ser::{Serialize, SerializeMap, Serializer},
+};
+
+#[cfg(feature = "serde")]
+use crate::utils::MapCollector;
+
 use crate::internals::lincowcell_async::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
 
 include!("impl.rs");
@@ -51,6 +60,40 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     /// To abort (unstage changes), just do not call this function.
     pub async fn commit(self) {
         self.inner.commit().await;
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<K, V> Serialize for HashMapReadTxn<'_, K, V>
+where
+    K: Serialize + Hash + Eq + Clone + Debug + Sync + Send + 'static,
+    V: Serialize + Clone + Sync + Send + 'static,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_map(Some(self.len()))?;
+
+        for (key, val) in self.iter() {
+            state.serialize_entry(key, val)?;
+        }
+
+        state.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, K, V> Deserialize<'de> for HashMap<K, V>
+where
+    K: Deserialize<'de> + Hash + Eq + Clone + Debug + Sync + Send + 'static,
+    V: Deserialize<'de> + Clone + Sync + Send + 'static,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(MapCollector::new())
     }
 }
 
@@ -148,5 +191,20 @@ mod tests {
         assert!(hmap_r2.contains_key(&10));
         assert!(hmap_r2.contains_key(&15));
         assert!(hmap_r2.contains_key(&20));
+    }
+
+    #[cfg(feature = "serde")]
+    #[tokio::test]
+    async fn test_hashmap_serialize_deserialize() {
+        let hmap: HashMap<usize, usize> = vec![(10, 11), (15, 16), (20, 21)].into_iter().collect();
+
+        let value = serde_json::to_value(&hmap.read().await).unwrap();
+        assert_eq!(value, serde_json::json!({ "10": 11, "15": 16, "20": 21 }));
+
+        let hmap: HashMap<usize, usize> = serde_json::from_value(value).unwrap();
+        let mut vec: Vec<(usize, usize)> =
+            hmap.read().await.iter().map(|(k, v)| (*k, *v)).collect();
+        vec.sort_unstable();
+        assert_eq!(vec, [(10, 11), (15, 16), (20, 21)]);
     }
 }
