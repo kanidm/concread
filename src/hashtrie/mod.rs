@@ -27,8 +27,17 @@
 #[cfg(feature = "asynch")]
 pub mod asynch;
 
+#[cfg(feature = "serde")]
+use serde::{
+    de::{Deserialize, Deserializer},
+    ser::{Serialize, SerializeMap, Serializer},
+};
+
 #[cfg(feature = "arcache")]
 use crate::internals::hashtrie::cursor::Datum;
+
+#[cfg(feature = "serde")]
+use crate::utils::MapCollector;
 
 use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
 
@@ -118,6 +127,42 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
         Q: Hash + Eq + ?Sized,
     {
         self.inner.as_ref().hash_key(k)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<K, V> Serialize for HashTrie<K, V>
+where
+    K: Serialize + Hash + Eq + Clone + Debug + Sync + Send + 'static,
+    V: Serialize + Clone + Sync + Send + 'static,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let txn = self.read();
+
+        let mut state = serializer.serialize_map(Some(txn.len()))?;
+
+        for (key, val) in txn.iter() {
+            state.serialize_entry(key, val)?;
+        }
+
+        state.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, K, V> Deserialize<'de> for HashTrie<K, V>
+where
+    K: Deserialize<'de> + Hash + Eq + Clone + Debug + Sync + Send + 'static,
+    V: Deserialize<'de> + Clone + Sync + Send + 'static,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(MapCollector::new())
     }
 }
 
@@ -225,5 +270,19 @@ mod tests {
             tx.insert(13, 34);
             tx.remove(&13);
         }
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_hashmap_serialize_deserialize() {
+        let hmap: HashTrie<usize, usize> = vec![(10, 11), (15, 16), (20, 21)].into_iter().collect();
+
+        let value = serde_json::to_value(&hmap).unwrap();
+        assert_eq!(value, serde_json::json!({ "10": 11, "15": 16, "20": 21 }));
+
+        let hmap: HashTrie<usize, usize> = serde_json::from_value(value).unwrap();
+        let mut vec: Vec<(usize, usize)> = hmap.read().iter().map(|(k, v)| (*k, *v)).collect();
+        vec.sort_unstable();
+        assert_eq!(vec, [(10, 11), (15, 16), (20, 21)]);
     }
 }
