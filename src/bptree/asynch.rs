@@ -44,7 +44,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 }
 
 #[cfg(feature = "serde")]
-impl<K, V> Serialize for BptreeMapReadTxn<'_, K, V>
+impl<K, V> Serialize for BptreeMap<K, V>
 where
     K: Serialize + Clone + Ord + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
@@ -53,9 +53,11 @@ where
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_map(Some(self.len()))?;
+        let txn = self.read();
 
-        for (key, val) in self.iter() {
+        let mut state = serializer.serialize_map(Some(txn.len()))?;
+
+        for (key, val) in txn.iter() {
             state.serialize_entry(key, val)?;
         }
 
@@ -325,7 +327,7 @@ mod tests {
     async fn test_bptree2_serialize_deserialize() {
         let map: BptreeMap<usize, usize> = vec![(10, 11), (15, 16), (20, 21)].into_iter().collect();
 
-        let value = serde_json::to_value(&map.read()).unwrap();
+        let value = serde_json::to_value(&map).unwrap();
         assert_eq!(value, serde_json::json!({ "10": 11, "15": 16, "20": 21 }));
 
         let map: BptreeMap<usize, usize> = serde_json::from_value(value).unwrap();
