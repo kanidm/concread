@@ -18,8 +18,8 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 {
     /// Initiate a read transaction for the tree, concurrent to any
     /// other readers or writers.
-    pub async fn read<'x>(&'x self) -> BptreeMapReadTxn<'x, K, V> {
-        let inner = self.inner.read().await;
+    pub fn read<'x>(&'x self) -> BptreeMapReadTxn<'x, K, V> {
+        let inner = self.inner.read();
         BptreeMapReadTxn { inner }
     }
 
@@ -38,8 +38,8 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     /// will be able to percieve these changes.
     ///
     /// To abort (unstage changes), just do not call this function.
-    pub async fn commit(self) {
-        self.inner.commit().await;
+    pub fn commit(self) {
+        self.inner.commit();
     }
 }
 
@@ -95,7 +95,7 @@ mod tests {
             assert!(bpwrite.get(&0) == Some(&0));
             assert!(bpwrite.get(&1) == Some(&1));
             bpwrite.insert(2, 2);
-            bpwrite.commit().await;
+            bpwrite.commit();
             // println!("commit");
         }
         {
@@ -121,9 +121,9 @@ mod tests {
         {
             let mut w = bptree.write().await;
             w.insert(0, 0);
-            w.commit().await;
+            w.commit();
         }
-        let r1 = bptree.read().await;
+        let r1 = bptree.read();
         {
             let mut w = bptree.write().await;
             let cursed_zone = w.get_mut(&0).unwrap();
@@ -132,9 +132,9 @@ mod tests {
             // possible once w.remove occurs
             // w.remove(&0);
             // *cursed_zone = 2;
-            w.commit().await;
+            w.commit();
         }
-        let r2 = bptree.read().await;
+        let r2 = bptree.read();
         assert!(r1.get(&0) == Some(&0));
         assert!(r2.get(&0) == Some(&1));
 
@@ -195,11 +195,11 @@ mod tests {
         {
             let mut w = map.write().await;
             w.extend((0..lower).map(|v| (v, v)));
-            w.commit().await;
+            w.commit();
         }
 
         // read
-        let r = map.read().await;
+        let r = map.read();
         assert!(r.len() == lower);
         for i in 0..lower {
             assert!(r.contains_key(&i))
@@ -209,13 +209,13 @@ mod tests {
         {
             let mut w = map.write().await;
             w.extend((lower..upper).map(|v| (v, v)));
-            w.commit().await;
+            w.commit();
         }
 
         assert!(r.len() == lower);
 
         // But a new write can see
-        let r2 = map.read().await;
+        let r2 = map.read();
         assert!(r2.len() == upper);
         for i in 0..upper {
             assert!(r2.contains_key(&i))
@@ -227,7 +227,7 @@ mod tests {
             for i in 0..upper {
                 assert!(w.remove(&i).is_some())
             }
-            w.commit().await;
+            w.commit();
         }
 
         // All consistent!
@@ -237,7 +237,7 @@ mod tests {
             assert!(r2.contains_key(&i))
         }
 
-        let r3 = map.read().await;
+        let r3 = map.read();
         // println!("{:?}", r3.len());
         assert!(r3.is_empty());
 
@@ -259,28 +259,28 @@ mod tests {
         {
             let mut w = map.write().await;
             w.extend((0..(L_CAPACITY * 2)).map(|v| (v * 2, v * 2)));
-            w.commit().await;
+            w.commit();
         }
-        let ro_txn_a = map.read().await;
+        let ro_txn_a = map.read();
 
         // New write, add 1 val
         {
             let mut w = map.write().await;
             w.insert(1, 1);
-            w.commit().await;
+            w.commit();
         }
 
-        let ro_txn_b = map.read().await;
+        let ro_txn_b = map.read();
         // ro_txn_b now owns nodes from a
 
         // New write, update a value
         {
             let mut w = map.write().await;
             w.insert(1, 10001);
-            w.commit().await;
+            w.commit();
         }
 
-        let ro_txn_c = map.read().await;
+        let ro_txn_c = map.read();
         // ro_txn_c
         // Drop ro_txn_b
         assert!(ro_txn_b.verify());
@@ -300,11 +300,11 @@ mod tests {
         let map: BptreeMap<usize, usize> = BptreeMap::new();
 
         let mut wr = map.write().await;
-        let rd = map.read().await;
+        let rd = map.read();
 
         wr.insert(1, 1);
         assert!(rd.get(&1).is_none());
-        wr.commit().await;
+        wr.commit();
         assert!(rd.get(&1).is_none());
     }
 
@@ -325,11 +325,11 @@ mod tests {
     async fn test_bptree2_serialize_deserialize() {
         let map: BptreeMap<usize, usize> = vec![(10, 11), (15, 16), (20, 21)].into_iter().collect();
 
-        let value = serde_json::to_value(&map.read().await).unwrap();
+        let value = serde_json::to_value(&map.read()).unwrap();
         assert_eq!(value, serde_json::json!({ "10": 11, "15": 16, "20": 21 }));
 
         let map: BptreeMap<usize, usize> = serde_json::from_value(value).unwrap();
-        let mut vec: Vec<(usize, usize)> = map.read().await.iter().map(|(k, v)| (*k, *v)).collect();
+        let mut vec: Vec<(usize, usize)> = map.read().iter().map(|(k, v)| (*k, *v)).collect();
         vec.sort_unstable();
         assert_eq!(vec, [(10, 11), (15, 16), (20, 21)]);
     }
