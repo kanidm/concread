@@ -1,5 +1,14 @@
 //! Async `BptreeMap` - See the documentation for the sync `BptreeMap`
 
+#[cfg(feature = "serde")]
+use serde::{
+    de::{Deserialize, Deserializer},
+    ser::{Serialize, SerializeMap, Serializer},
+};
+
+#[cfg(feature = "serde")]
+use crate::utils::MapCollector;
+
 use crate::internals::lincowcell_async::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
 
 include!("impl.rs");
@@ -31,6 +40,40 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     /// To abort (unstage changes), just do not call this function.
     pub async fn commit(self) {
         self.inner.commit().await;
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<K, V> Serialize for BptreeMapReadTxn<'_, K, V>
+where
+    K: Serialize + Clone + Ord + Debug + Sync + Send + 'static,
+    V: Serialize + Clone + Sync + Send + 'static,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_map(Some(self.len()))?;
+
+        for (key, val) in self.iter() {
+            state.serialize_entry(key, val)?;
+        }
+
+        state.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, K, V> Deserialize<'de> for BptreeMap<K, V>
+where
+    K: Deserialize<'de> + Clone + Ord + Debug + Sync + Send + 'static,
+    V: Deserialize<'de> + Clone + Sync + Send + 'static,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(MapCollector::new())
     }
 }
 
@@ -275,5 +318,19 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     async fn test_bptree2_map_basic_concurrency_large() {
         bptree_map_basic_concurrency(10_000, 20_000).await
+    }
+
+    #[cfg(feature = "serde")]
+    #[tokio::test]
+    async fn test_bptree2_serialize_deserialize() {
+        let map: BptreeMap<usize, usize> = vec![(10, 11), (15, 16), (20, 21)].into_iter().collect();
+
+        let value = serde_json::to_value(&map.read().await).unwrap();
+        assert_eq!(value, serde_json::json!({ "10": 11, "15": 16, "20": 21 }));
+
+        let map: BptreeMap<usize, usize> = serde_json::from_value(value).unwrap();
+        let mut vec: Vec<(usize, usize)> = map.read().await.iter().map(|(k, v)| (*k, *v)).collect();
+        vec.sort_unstable();
+        assert_eq!(vec, [(10, 11), (15, 16), (20, 21)]);
     }
 }

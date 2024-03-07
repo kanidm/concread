@@ -274,7 +274,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn test_hashmap_serialize_deserialize() {
+    fn test_hashtrie_serialize_deserialize() {
         let hmap: HashTrie<usize, usize> = vec![(10, 11), (15, 16), (20, 21)].into_iter().collect();
 
         let value = serde_json::to_value(&hmap).unwrap();
