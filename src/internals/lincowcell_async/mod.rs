@@ -58,8 +58,7 @@
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::sync::Arc;
-use std::sync::Mutex as SyncMutex;
+use std::sync::{Arc, Mutex as SyncMutex};
 use tokio::sync::{Mutex, MutexGuard};
 
 use crate::internals::lincowcell::LinCowCellCapable;
@@ -69,7 +68,7 @@ use crate::internals::lincowcell::LinCowCellCapable;
 pub struct LinCowCell<T, R, U> {
     updater: PhantomData<U>,
     write: Mutex<T>,
-    active: Mutex<Arc<LinCowCellInner<R>>>,
+    active: SyncMutex<Arc<LinCowCellInner<R>>>,
 }
 
 #[derive(Debug)]
@@ -116,13 +115,13 @@ where
         LinCowCell {
             updater: PhantomData,
             write: Mutex::new(data),
-            active: Mutex::new(Arc::new(LinCowCellInner::new(r))),
+            active: SyncMutex::new(Arc::new(LinCowCellInner::new(r))),
         }
     }
 
     /// Begin a read txn
-    pub async fn read(&self) -> LinCowCellReadTxn<T, R, U> {
-        let rwguard = self.active.lock().await;
+    pub fn read(&self) -> LinCowCellReadTxn<T, R, U> {
+        let rwguard = self.active.lock().unwrap();
         LinCowCellReadTxn {
             _caller: self,
             // inc the arc.
@@ -163,7 +162,7 @@ where
             .ok()
     }
 
-    async fn commit(&self, write: LinCowCellWriteTxn<'_, T, R, U>) {
+    fn commit(&self, write: LinCowCellWriteTxn<'_, T, R, U>) {
         // Destructure our writer.
         let LinCowCellWriteTxn {
             // This is self.
@@ -173,7 +172,7 @@ where
         } = write;
 
         // Get the previous generation.
-        let mut rwguard = self.active.lock().await;
+        let mut rwguard = self.active.lock().unwrap();
         // Start to setup for the commit.
         let newdata = guard.pre_commit(work, &rwguard.data);
 
@@ -217,9 +216,9 @@ where
     }
 
     /// Commit the active changes.
-    pub async fn commit(self) {
+    pub fn commit(self) {
         /* Write our data back to the LinCowCell */
-        self.caller.commit(self).await;
+        self.caller.commit(self);
     }
 }
 
@@ -301,7 +300,7 @@ mod tests {
         let data = TestData { x: 0 };
         let cc = LinCowCell::new(data);
 
-        let cc_rotxn_a = cc.read().await;
+        let cc_rotxn_a = cc.read();
         println!("cc_rotxn_a -> {:?}", cc_rotxn_a);
         assert_eq!(cc_rotxn_a.work.data.x, 0);
 
@@ -339,11 +338,11 @@ mod tests {
             // Check we haven't mutated the old data.
             assert_eq!(cc_rotxn_a.work.data.x, 0);
             // Now commit
-            cc_wrtxn.commit().await;
+            cc_wrtxn.commit();
         }
         // Should not be percieved by the old txn.
         assert_eq!(cc_rotxn_a.work.data.x, 0);
-        let cc_rotxn_c = cc.read().await;
+        let cc_rotxn_c = cc.read();
         // Is visible to the new one though.
         assert_eq!(cc_rotxn_c.work.data.x, 2);
     }
@@ -360,14 +359,14 @@ mod tests {
                 last_value = mut_ptr.x;
                 mut_ptr.x += 1;
             }
-            cc_wrtxn.commit().await;
+            cc_wrtxn.commit();
         }
     }
 
-    async fn rt_writer(cc: Arc<LinCowCell<TestData, TestDataReadTxn, TestDataWriteTxn>>) {
+    fn rt_writer(cc: Arc<LinCowCell<TestData, TestDataReadTxn, TestDataWriteTxn>>) {
         let mut last_value: i64 = 0;
         while last_value < 500 {
-            let cc_rotxn = cc.read().await;
+            let cc_rotxn = cc.read();
             {
                 assert!(cc_rotxn.work.data.x >= last_value);
                 last_value = cc_rotxn.work.data.x;
@@ -384,10 +383,22 @@ mod tests {
         let cc = Arc::new(LinCowCell::new(data));
 
         let _ = tokio::join!(
-            tokio::task::spawn(rt_writer(cc.clone())),
-            tokio::task::spawn(rt_writer(cc.clone())),
-            tokio::task::spawn(rt_writer(cc.clone())),
-            tokio::task::spawn(rt_writer(cc.clone())),
+            tokio::task::spawn_blocking({
+                let cc = cc.clone();
+                move || rt_writer(cc)
+            }),
+            tokio::task::spawn_blocking({
+                let cc = cc.clone();
+                move || rt_writer(cc)
+            }),
+            tokio::task::spawn_blocking({
+                let cc = cc.clone();
+                move || rt_writer(cc)
+            }),
+            tokio::task::spawn_blocking({
+                let cc = cc.clone();
+                move || rt_writer(cc)
+            }),
             tokio::task::spawn(mt_writer(cc.clone())),
             tokio::task::spawn(mt_writer(cc.clone())),
         );
@@ -462,7 +473,7 @@ mod tests {
                     let mut_ptr = cc_wrtxn.get_mut();
                     mut_ptr.data += 1;
                 }
-                cc_wrtxn.commit().await;
+                cc_wrtxn.commit();
             }
         }
     }
@@ -556,8 +567,8 @@ mod tests_linear {
         let cc = LinCowCell::new(data);
 
         // Open a read A.
-        let cc_rotxn_a = cc.read().await;
-        let cc_rotxn_a_2 = cc.read().await;
+        let cc_rotxn_a = cc.read();
+        let cc_rotxn_a_2 = cc.read();
         // open a write, change and commit
         {
             let mut cc_wrtxn = cc.write().await;
@@ -565,10 +576,10 @@ mod tests_linear {
                 let mut_ptr = cc_wrtxn.get_mut();
                 mut_ptr.data += 1;
             }
-            cc_wrtxn.commit().await;
+            cc_wrtxn.commit();
         }
         // open a read B.
-        let cc_rotxn_b = cc.read().await;
+        let cc_rotxn_b = cc.read();
         // open a write, change and commit
         {
             let mut cc_wrtxn = cc.write().await;
@@ -576,10 +587,10 @@ mod tests_linear {
                 let mut_ptr = cc_wrtxn.get_mut();
                 mut_ptr.data += 1;
             }
-            cc_wrtxn.commit().await;
+            cc_wrtxn.commit();
         }
         // open a read C
-        let cc_rotxn_c = cc.read().await;
+        let cc_rotxn_c = cc.read();
 
         assert!(GC_COUNT.load(Ordering::Acquire) == 0);
 

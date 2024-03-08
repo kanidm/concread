@@ -30,8 +30,8 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 
     /// Initiate a read transaction for the Hashmap, concurrent to any
     /// other readers or writers.
-    pub async fn read<'x>(&'x self) -> HashMapReadTxn<'x, K, V> {
-        let inner = self.inner.read().await;
+    pub fn read<'x>(&'x self) -> HashMapReadTxn<'x, K, V> {
+        let inner = self.inner.read();
         HashMapReadTxn { inner }
     }
 
@@ -58,13 +58,13 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     /// will be able to percieve these changes.
     ///
     /// To abort (unstage changes), just do not call this function.
-    pub async fn commit(self) {
-        self.inner.commit().await;
+    pub fn commit(self) {
+        self.inner.commit();
     }
 }
 
 #[cfg(feature = "serde")]
-impl<K, V> Serialize for HashMapReadTxn<'_, K, V>
+impl<K, V> Serialize for HashMap<K, V>
 where
     K: Serialize + Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
@@ -73,9 +73,11 @@ where
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_map(Some(self.len()))?;
+        let txn = self.read();
 
-        for (key, val) in self.iter() {
+        let mut state = serializer.serialize_map(Some(txn.len()))?;
+
+        for (key, val) in txn.iter() {
             state.serialize_entry(key, val)?;
         }
 
@@ -129,7 +131,7 @@ mod tests {
         hmap_write.clear();
         assert!(!hmap_write.contains_key(&10));
         assert!(!hmap_write.contains_key(&15));
-        hmap_write.commit().await;
+        hmap_write.commit();
     }
 
     #[tokio::test]
@@ -138,22 +140,22 @@ mod tests {
         let mut hmap_w1 = hmap.write().await;
         hmap_w1.insert(10, 10);
         hmap_w1.insert(15, 15);
-        hmap_w1.commit().await;
+        hmap_w1.commit();
 
-        let hmap_r1 = hmap.read().await;
+        let hmap_r1 = hmap.read();
         assert!(hmap_r1.contains_key(&10));
         assert!(hmap_r1.contains_key(&15));
         assert!(!hmap_r1.contains_key(&20));
 
         let mut hmap_w2 = hmap.write().await;
         hmap_w2.insert(20, 20);
-        hmap_w2.commit().await;
+        hmap_w2.commit();
 
         assert!(hmap_r1.contains_key(&10));
         assert!(hmap_r1.contains_key(&15));
         assert!(!hmap_r1.contains_key(&20));
 
-        let hmap_r2 = hmap.read().await;
+        let hmap_r2 = hmap.read();
         assert!(hmap_r2.contains_key(&10));
         assert!(hmap_r2.contains_key(&15));
         assert!(hmap_r2.contains_key(&20));
@@ -187,7 +189,7 @@ mod tests {
     #[tokio::test]
     async fn test_hashmap_from_iter() {
         let hmap: HashMap<usize, usize> = vec![(10, 10), (15, 15), (20, 20)].into_iter().collect();
-        let hmap_r2 = hmap.read().await;
+        let hmap_r2 = hmap.read();
         assert!(hmap_r2.contains_key(&10));
         assert!(hmap_r2.contains_key(&15));
         assert!(hmap_r2.contains_key(&20));
@@ -198,12 +200,11 @@ mod tests {
     async fn test_hashmap_serialize_deserialize() {
         let hmap: HashMap<usize, usize> = vec![(10, 11), (15, 16), (20, 21)].into_iter().collect();
 
-        let value = serde_json::to_value(&hmap.read().await).unwrap();
+        let value = serde_json::to_value(&hmap).unwrap();
         assert_eq!(value, serde_json::json!({ "10": 11, "15": 16, "20": 21 }));
 
         let hmap: HashMap<usize, usize> = serde_json::from_value(value).unwrap();
-        let mut vec: Vec<(usize, usize)> =
-            hmap.read().await.iter().map(|(k, v)| (*k, *v)).collect();
+        let mut vec: Vec<(usize, usize)> = hmap.read().iter().map(|(k, v)| (*k, *v)).collect();
         vec.sort_unstable();
         assert_eq!(vec, [(10, 11), (15, 16), (20, 21)]);
     }
