@@ -47,6 +47,26 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 }
 
 #[cfg(feature = "serde")]
+impl<K, V> Serialize for BptreeMapReadTxn<'_, K, V>
+where
+    K: Serialize + Clone + Ord + Debug + Sync + Send + 'static,
+    V: Serialize + Clone + Sync + Send + 'static,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_map(Some(self.len()))?;
+
+        for (key, val) in self.iter() {
+            state.serialize_entry(key, val)?;
+        }
+
+        state.end()
+    }
+}
+
+#[cfg(feature = "serde")]
 impl<K, V> Serialize for BptreeMap<K, V>
 where
     K: Serialize + Clone + Ord + Debug + Sync + Send + 'static,
@@ -56,15 +76,7 @@ where
     where
         S: Serializer,
     {
-        let txn = self.read();
-
-        let mut state = serializer.serialize_map(Some(txn.len()))?;
-
-        for (key, val) in txn.iter() {
-            state.serialize_entry(key, val)?;
-        }
-
-        state.end()
+        self.read().serialize(serializer)
     }
 }
 
