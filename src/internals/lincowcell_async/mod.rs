@@ -58,8 +58,10 @@
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::sync::{Arc, Mutex as SyncMutex};
+use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};
+
+use arc_swap::{ArcSwap, ArcSwapOption};
 
 use crate::internals::lincowcell::LinCowCellCapable;
 
@@ -68,7 +70,7 @@ use crate::internals::lincowcell::LinCowCellCapable;
 pub struct LinCowCell<T, R, U> {
     updater: PhantomData<U>,
     write: Mutex<T>,
-    active: SyncMutex<Arc<LinCowCellInner<R>>>,
+    active: ArcSwap<LinCowCellInner<R>>,
 }
 
 #[derive(Debug)]
@@ -83,7 +85,7 @@ pub struct LinCowCellWriteTxn<'a, T, R, U> {
 #[derive(Debug)]
 struct LinCowCellInner<R> {
     // This gives the chain effect.
-    pin: SyncMutex<Option<Arc<LinCowCellInner<R>>>>,
+    pin: ArcSwapOption<LinCowCellInner<R>>,
     data: R,
 }
 
@@ -99,7 +101,7 @@ pub struct LinCowCellReadTxn<'a, T, R, U> {
 impl<R> LinCowCellInner<R> {
     pub fn new(data: R) -> Self {
         LinCowCellInner {
-            pin: SyncMutex::new(None),
+            pin: ArcSwapOption::empty(),
             data,
         }
     }
@@ -115,17 +117,17 @@ where
         LinCowCell {
             updater: PhantomData,
             write: Mutex::new(data),
-            active: SyncMutex::new(Arc::new(LinCowCellInner::new(r))),
+            active: ArcSwap::from_pointee(LinCowCellInner::new(r)),
         }
     }
 
     /// Begin a read txn
     pub fn read(&self) -> LinCowCellReadTxn<T, R, U> {
-        let rwguard = self.active.lock().unwrap();
+        // inc the arc.
+        let work = self.active.load_full();
         LinCowCellReadTxn {
             _caller: self,
-            // inc the arc.
-            work: rwguard.clone(),
+            work,
         }
     }
 
@@ -172,20 +174,19 @@ where
         } = write;
 
         // Get the previous generation.
-        let mut rwguard = self.active.lock().unwrap();
+        let rwguard = self.active.load();
         // Start to setup for the commit.
         let newdata = guard.pre_commit(work, &rwguard.data);
 
         let new_inner = Arc::new(LinCowCellInner::new(newdata));
         {
             // This modifies the next pointer of the existing read txns
-            let mut rwguard_inner = rwguard.pin.lock().unwrap();
             // Create the arc pointer to our new data
             // add it to the last value
-            *rwguard_inner = Some(new_inner.clone());
+            rwguard.pin.store(Some(new_inner.clone()));
         }
         // now over-write the last value in the mutex.
-        *rwguard = new_inner;
+        self.active.store(new_inner);
     }
 }
 
