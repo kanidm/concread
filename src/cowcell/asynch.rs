@@ -23,7 +23,7 @@ use tokio::sync::{Mutex, MutexGuard};
 ///
 /// Writers are serialised and are guaranteed they have exclusive write access
 /// to the structure.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CowCell<T> {
     write: Mutex<()>,
     active: Mutex<Arc<T>>,
@@ -307,5 +307,10 @@ mod tests {
         );
 
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
+    }
+
+    #[test]
+    fn test_default() {
+        CowCell::<()>::default();
     }
 }
