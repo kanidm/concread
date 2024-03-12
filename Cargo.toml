@@ -40,6 +40,7 @@ lru = { version = "0.12", optional = true }
 serde = { version = "1.0", optional = true }
 smallvec = { version = "1.4", optional = true }
 sptr = "0.3"
+arc-swap = "1.0"
 tokio = { version = "1", features = ["sync"], optional = true }
 tracing = "0.1"
 
