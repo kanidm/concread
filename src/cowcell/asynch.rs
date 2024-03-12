@@ -25,7 +25,7 @@ use arc_swap::ArcSwap;
 ///
 /// Writers are serialised and are guaranteed they have exclusive write access
 /// to the structure.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CowCell<T> {
     write: Mutex<()>,
     active: ArcSwap<T>,
@@ -300,5 +300,10 @@ mod tests {
         );
 
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
+    }
+
+    #[test]
+    fn test_default() {
+        CowCell::<()>::default();
     }
 }

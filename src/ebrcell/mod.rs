@@ -134,6 +134,15 @@ pub struct EbrCell<T: Clone + Sync + Send + 'static> {
     active: Atomic<T>,
 }
 
+impl<T> Default for EbrCell<T>
+where
+    T: Default + Clone + Sync + Send + 'static,
+{
+    fn default() -> Self {
+        Self::new(Default::default())
+    }
+}
+
 impl<T> EbrCell<T>
 where
     T: Clone + Sync + Send + 'static,
@@ -530,5 +539,10 @@ mod tests_linear {
 
         // gc count should be 2 (A + B, C is still live)
         assert!(GC_COUNT.load(Ordering::Acquire) <= 2);
+    }
+
+    #[test]
+    fn test_default() {
+        EbrCell::<()>::default();
     }
 }

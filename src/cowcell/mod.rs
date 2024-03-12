@@ -59,7 +59,7 @@ use arc_swap::ArcSwap;
 /// // And a new read transaction has '1'
 /// assert_eq!(*new_read_txn, 1);
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CowCell<T> {
     write: Mutex<()>,
     active: ArcSwap<T>,
@@ -403,5 +403,10 @@ mod tests {
         }));
 
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
+    }
+
+    #[test]
+    fn test_default() {
+        CowCell::<()>::default();
     }
 }
