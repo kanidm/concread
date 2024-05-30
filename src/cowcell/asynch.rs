@@ -157,6 +157,12 @@ where
         self.work.as_mut().expect("can not fail")
     }
 
+    /// Update the inner value with a new one. This function exists to prevent a clone
+    /// in the case where you take a read transaction and would otherwise use `mem::swap`
+    pub fn replace(&mut self, value: T) {
+        self.work = Some(value);
+    }
+
     /// Commit the changes made in this write transactions to the `CowCell`.
     /// This will consume the transaction so no further changes can be made
     /// after this is called. Not calling this in a block, is equivalent to

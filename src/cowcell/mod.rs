@@ -179,7 +179,6 @@ where
     /// Access a mutable pointer of the data in the `CowCell`. This data is only
     /// visible to the write transaction object in this thread, until you call
     /// `commit()`.
-    #[inline(always)]
     pub fn get_mut(&mut self) -> &mut T {
         if self.work.is_none() {
             let mut data: Option<T> = Some((*self.read).clone());
@@ -188,6 +187,12 @@ where
             debug_assert!(data.is_none())
         }
         self.work.as_mut().expect("can not fail")
+    }
+
+    /// Update the inner value with a new one. This function exists to prevent a clone
+    /// in the case where you take a read transaction and would otherwise use `mem::swap`
+    pub fn replace(&mut self, value: T) {
+        self.work = Some(value);
     }
 
     /// Commit the changes made in this write transactions to the `CowCell`.
