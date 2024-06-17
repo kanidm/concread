@@ -33,7 +33,7 @@ use serde::{
     ser::{Serialize, SerializeMap, Serializer},
 };
 
-#[cfg(feature = "arcache")]
+#[cfg(all(feature = "arcache", feature = "arcache-is-hashtrie"))]
 use crate::internals::hashtrie::cursor::Datum;
 
 #[cfg(feature = "serde")]
@@ -80,12 +80,13 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
     HashTrieWriteTxn<'_, K, V>
 {
-    #[cfg(feature = "arcache")]
-    pub(crate) fn get_txid(&self) -> u64 {
+    /// View the current transaction ID for this cache. This is a monotonically increasing
+    /// value. If two transactions have the same txid, they are the same data generation.
+    pub fn get_txid(&self) -> u64 {
         self.inner.as_ref().get_txid()
     }
 
-    #[cfg(feature = "arcache")]
+    #[cfg(all(feature = "arcache", feature = "arcache-is-hashtrie"))]
     pub(crate) fn prehash<Q>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
@@ -98,7 +99,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     /// have serious consequences. This API only exists to allow arcache to access the inner
     /// content of the slot to simplify its API. You should basically never touch this
     /// function as it's the HashTrie equivalent of a the demon sphere.
-    #[cfg(feature = "arcache")]
+    #[cfg(all(feature = "arcache", feature = "arcache-is-hashtrie"))]
     pub(crate) unsafe fn get_slot_mut(&mut self, k_hash: u64) -> Option<&mut [Datum<K, V>]> {
         self.inner.as_mut().get_slot_mut_ref(k_hash)
     }
@@ -115,12 +116,13 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
     HashTrieReadTxn<'_, K, V>
 {
-    #[cfg(feature = "arcache")]
-    pub(crate) fn get_txid(&self) -> u64 {
+    /// View the current transaction ID for this cache. This is a monotonically increasing
+    /// value. If two transactions have the same txid, they are the same data generation.
+    pub fn get_txid(&self) -> u64 {
         self.inner.as_ref().get_txid()
     }
 
-    #[cfg(feature = "arcache")]
+    #[cfg(all(feature = "arcache", feature = "arcache-is-hashtrie"))]
     pub(crate) fn prehash<Q>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,

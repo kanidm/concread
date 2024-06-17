@@ -11,15 +11,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 #[cfg(all(test, not(miri)))]
-thread_local!(static NODE_COUNTER: AtomicUsize = const { AtomicUsize::new(1) });
+thread_local!(static LL_NODE_COUNTER: AtomicUsize = const { AtomicUsize::new(1) });
 #[cfg(all(test, not(miri)))]
-thread_local!(static ALLOC_LIST: Mutex<BTreeSet<usize>> = const { Mutex::new(BTreeSet::new()) });
+thread_local!(static LL_ALLOC_LIST: Mutex<BTreeSet<usize>> = const { Mutex::new(BTreeSet::new()) });
 
 #[cfg(all(test, not(miri)))]
 fn alloc_nid() -> usize {
-    let nid: usize = NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel));
+    let nid: usize = LL_NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel));
+    #[cfg(not(feature = "dhat-heap"))]
     {
-        ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(nid));
+        LL_ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(nid));
     }
     eprintln!("Allocate -> {:?}", nid);
     nid
@@ -28,15 +29,18 @@ fn alloc_nid() -> usize {
 #[cfg(all(test, not(miri)))]
 fn release_nid(nid: usize) {
     println!("Release -> {:?}", nid);
-    let r = ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
-    assert!(r);
+    #[cfg(not(feature = "dhat-heap"))]
+    {
+        let r = LL_ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
+        assert!(r);
+    }
 }
 
 #[cfg(test)]
 pub fn assert_released() {
-    #[cfg(not(miri))]
+    #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
     {
-        let is_empt = ALLOC_LIST.with(|llist| {
+        let is_empt = LL_ALLOC_LIST.with(|llist| {
             let x = llist.lock().unwrap();
             eprintln!("Assert Released - Remaining -> {:?}", x);
             x.is_empty()
@@ -368,15 +372,15 @@ where
 
                 // K is not a null pointer.
                 debug_assert!(!(*n).k.as_mut_ptr().is_null());
-                ptr::drop_in_place((*n).k.as_mut_ptr());
+                // ptr::drop_in_place((*n).k.as_mut_ptr());
                 // Now we can proceed.
                 LLNode::free(n);
                 n = next;
             }
         }
 
-        LLNode::free(head);
-        LLNode::free(tail);
+        LLNode::free_marker(head);
+        LLNode::free_marker(tail);
 
         // #[cfg(all(test, not(miri)))]
         // assert_released();
@@ -432,7 +436,18 @@ where
     #[inline]
     fn free(v: *mut Self) {
         debug_assert!(!v.is_null());
+        let llnode = unsafe { Box::from_raw(v) };
+        // drop the inner k.
+        let _ = unsafe { llnode.k.assume_init() };
+        #[cfg(all(test, not(miri)))]
+        release_nid(llnode.nid)
+    }
+
+    #[inline]
+    fn free_marker(v: *mut Self) {
+        debug_assert!(!v.is_null());
         let _llnode = unsafe { Box::from_raw(v) };
+        // Markers never have a k to drop.
         #[cfg(all(test, not(miri)))]
         release_nid(_llnode.nid)
     }
@@ -482,7 +497,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{LLWeight, LL, assert_released};
+    use super::{assert_released, LLWeight, LL};
 
     impl LLWeight for Box<usize> {
         #[inline]

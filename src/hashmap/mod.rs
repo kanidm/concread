@@ -31,6 +31,9 @@ use serde::{
 #[cfg(feature = "serde")]
 use crate::utils::MapCollector;
 
+#[cfg(all(feature = "arcache", feature = "arcache-is-hashmap"))]
+use crate::internals::hashmap::cursor::Datum;
+
 use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
 
 include!("impl.rs");
@@ -72,13 +75,12 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
     HashMapWriteTxn<'_, K, V>
 {
-    /*
+    #[cfg(all(feature = "arcache", feature = "arcache-is-hashmap"))]
     pub(crate) fn get_txid(&self) -> u64 {
         self.inner.as_ref().get_txid()
     }
-    */
 
-    /*
+    #[cfg(all(feature = "arcache", feature = "arcache-is-hashmap"))]
     pub(crate) fn prehash<Q: ?Sized>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
@@ -86,17 +88,15 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     {
         self.inner.as_ref().hash_key(k)
     }
-    */
 
-    /*
     /// This is *unsafe* because changing the key CAN and WILL break hashing, which can
     /// have serious consequences. This API only exists to allow arcache to access the inner
     /// content of the slot to simplify its API. You should basically never touch this
     /// function as it's the HashMap equivalent of the demon sphere.
+    #[cfg(all(feature = "arcache", feature = "arcache-is-hashmap"))]
     pub(crate) unsafe fn get_slot_mut(&mut self, k_hash: u64) -> Option<&mut [Datum<K, V>]> {
         self.inner.as_mut().get_slot_mut_ref(k_hash)
     }
-    */
 
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to percieve these changes.
@@ -107,16 +107,15 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 }
 
-/*
-impl<
-        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
-        V: Clone + Sync + Send + 'static,
-    > HashMapReadTxn<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    HashMapReadTxn<'_, K, V>
 {
+    #[cfg(all(feature = "arcache", feature = "arcache-is-hashmap"))]
     pub(crate) fn get_txid(&self) -> u64 {
         self.inner.as_ref().get_txid()
     }
 
+    #[cfg(all(feature = "arcache", feature = "arcache-is-hashmap"))]
     pub(crate) fn prehash<Q: ?Sized>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
@@ -125,7 +124,6 @@ impl<
         self.inner.as_ref().hash_key(k)
     }
 }
-*/
 
 #[cfg(feature = "serde")]
 impl<K, V> Serialize for HashMapReadTxn<'_, K, V>

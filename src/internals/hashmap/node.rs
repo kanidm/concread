@@ -63,18 +63,18 @@ thread_local!(static ALLOC_LIST: Mutex<BTreeSet<usize>> = const { Mutex::new(BTr
 #[cfg(all(test, not(miri)))]
 fn alloc_nid() -> usize {
     let nid: usize = NODE_COUNTER.with(|nc| nc.fetch_add(1, Ordering::AcqRel));
-    #[cfg(all(test, not(miri)))]
+    #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
     {
         ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(nid));
     }
-    // eprintln!("Allocate -> {:?}", nid);
+    // eprintln!("Allocate Hmap -> {:?}", nid);
     nid
 }
 
 #[cfg(all(test, not(miri)))]
 fn release_nid(nid: usize) {
-    // println!("Release -> {:?}", nid);
-    // debug_assert!(nid != 3);
+    // eprintln!("Release Hmap -> {:?}", nid);
+    #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
     {
         let r = ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
         assert!(r);
@@ -83,7 +83,7 @@ fn release_nid(nid: usize) {
 
 #[cfg(test)]
 pub(crate) fn assert_released() {
-    #[cfg(not(miri))]
+    #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
     {
         let is_empt = ALLOC_LIST.with(|llist| {
             let x = llist.lock().unwrap();
@@ -570,7 +570,6 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             })
     }
 
-    /*
     pub(crate) fn get_slot_mut_ref<Q>(&mut self, h: u64) -> Option<&mut [Datum<K, V>]>
     where
         K: Borrow<Q>,
@@ -582,7 +581,6 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
                 .map(|slot_idx| (*self.values[slot_idx].as_mut_ptr()).as_mut_slice())
         }
     }
-    */
 
     #[inline(always)]
     pub(crate) fn get_kv_idx_checked(&self, slot_idx: usize, bk_idx: usize) -> Option<(&K, &V)> {
@@ -651,7 +649,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             // Copy in the values to the correct location.
             for idx in 0..self.slots() {
                 unsafe {
-                    let lvalue = (*self.values[idx].as_ptr()).clone();
+                    let lvalue: Bucket<K, V> = (*self.values[idx].as_ptr()).clone();
                     (*x).values[idx].as_mut_ptr().write(lvalue);
                 }
             }

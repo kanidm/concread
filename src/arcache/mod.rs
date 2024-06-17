@@ -17,9 +17,16 @@ pub mod stats;
 use self::ll::{LLNodeRef, LLWeight, LL};
 use self::stats::{ARCacheReadStat, ARCacheWriteStat};
 
-// use self::traits::ArcWeight;
-// use crate::cowcell::{CowCell, CowCellReadTxn};
-use crate::hashtrie::*;
+#[cfg(feature = "arcache-is-hashmap")]
+use crate::hashmap::{
+    HashMap as DataMap, HashMapReadTxn as DataMapReadTxn, HashMapWriteTxn as DataMapWriteTxn,
+};
+
+#[cfg(feature = "arcache-is-hashtrie")]
+use crate::hashtrie::{
+    HashTrie as DataMap, HashTrieReadTxn as DataMapReadTxn, HashTrieWriteTxn as DataMapWriteTxn,
+};
+
 use crossbeam_queue::ArrayQueue;
 use std::collections::HashMap as Map;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,6 +42,8 @@ use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::time::Instant;
+
+use tracing::trace;
 
 // const READ_THREAD_MIN: usize = 8;
 const READ_THREAD_RATIO: usize = 16;
@@ -139,9 +148,6 @@ where
     ghost_freq: LL<CacheItemInner<K>>,
     ghost_rec: LL<CacheItemInner<K>>,
     haunted: LL<CacheItemInner<K>>,
-    //
-    // stat_rx: Receiver<ReaderStatEvent>,
-    // rx: Receiver<CacheEvent<K, V>>,
     hit_queue: Arc<ArrayQueue<CacheHitEvent>>,
     inc_queue: Arc<ArrayQueue<CacheIncludeEvent<K, V>>>,
     min_txid: u64,
@@ -156,8 +162,6 @@ where
     max: usize,
     // Max number of elements for a reader per thread.
     read_max: usize,
-    // channels for readers.
-    // stat_tx: Sender<ReaderStatEvent>,
     hit_queue: Arc<ArrayQueue<CacheHitEvent>>,
     inc_queue: Arc<ArrayQueue<CacheIncludeEvent<K, V>>>,
     /// The number of items that are present in the cache before we start to process
@@ -185,7 +189,7 @@ where
 {
     // Use a unified tree, allows simpler movement of items between the
     // cache types.
-    cache: HashTrie<K, CacheItem<K, V>>,
+    cache: DataMap<K, CacheItem<K, V>>,
     // This is normally only ever taken in "read" mode, so it's effectively
     // an uncontended barrier.
     shared: RwLock<ArcShared<K, V>>,
@@ -253,25 +257,13 @@ where
 {
     caller: &'a ARCache<K, V>,
     // ro_txn to cache
-    cache: HashTrieReadTxn<'a, K, CacheItem<K, V>>,
+    cache: DataMapReadTxn<'a, K, CacheItem<K, V>>,
     tlocal: Option<ReadCache<K, V>>,
-    // channel to send stat information
-    // stat_tx: Sender<ReaderStatEvent>,
-    // tx channel to send forward events.
-    // tx: Sender<CacheEvent<K, V>>,
     hit_queue: Arc<ArrayQueue<CacheHitEvent>>,
     inc_queue: Arc<ArrayQueue<CacheIncludeEvent<K, V>>>,
     above_watermark: bool,
     reader_quiesce: bool,
     stats: S,
-    /*
-    hits: u32,
-    ops: u32,
-    tlocal_hits: u32,
-    tlocal_includes: u32,
-    reader_includes: u32,
-    reader_failed_includes: u32,
-    */
 }
 
 unsafe impl<
@@ -301,7 +293,7 @@ where
 {
     caller: &'a ARCache<K, V>,
     // wr_txn to cache
-    cache: HashTrieWriteTxn<'a, K, CacheItem<K, V>>,
+    cache: DataMapWriteTxn<'a, K, CacheItem<K, V>>,
     // Cache of missed items (w_ dirty/clean)
     // On COMMIT we drain this to the main cache
     tlocal: Map<K, ThreadCacheItem<V>>,
@@ -344,141 +336,6 @@ impl<
             CacheItem::Haunted(_) => CacheState::Haunted,
         }
     }
-}
-
-macro_rules! drain_ll_to_ghost {
-    (
-        $cache:expr,
-        $ll:expr,
-        $gf:expr,
-        $gr:expr,
-        $txid:expr,
-        $stats:expr
-    ) => {{
-        while $ll.len() > 0 {
-            let mut owned = $ll.pop();
-            debug_assert!(!owned.is_null());
-            // Set the item's evict txid.
-            owned.as_mut().txid = $txid;
-            let mut r = $cache.get_mut(&owned.as_ref().k);
-            match r {
-                Some(ref mut ci) => {
-                    let mut next_state = match &ci {
-                        CacheItem::Freq(n, _) => {
-                            debug_assert!(n == &owned);
-                            $stats.evict_from_frequent(&owned.as_ref().k);
-                            let pointer = $gf.append_n(owned);
-                            CacheItem::GhostFreq(pointer)
-                        }
-                        CacheItem::Rec(n, _) => {
-                            debug_assert!(n == &owned);
-                            $stats.evict_from_recent(&owned.as_ref().k);
-                            let pointer = $gr.append_n(owned);
-                            CacheItem::GhostRec(pointer)
-                        }
-                        _ => {
-                            // Impossible state!
-                            unreachable!();
-                        }
-                    };
-                    // Now change the state.
-                    mem::swap(*ci, &mut next_state);
-                }
-                None => {
-                    // Impossible state!
-                    unreachable!();
-                }
-            }
-        } // end while
-    }};
-}
-
-macro_rules! evict_to_len {
-    (
-        $cache:expr,
-        $ll:expr,
-        $to_ll:expr,
-        $size:expr,
-        $txid:expr,
-        $stats:expr
-    ) => {{
-        debug_assert!($ll.len() >= $size);
-
-        while $ll.len() > $size {
-            let mut owned = $ll.pop();
-            debug_assert!(!owned.is_null());
-            let mut r = $cache.get_mut(&owned.as_ref().k);
-            // Set the item's evict txid.
-            owned.as_mut().txid = $txid;
-            match r {
-                Some(ref mut ci) => {
-                    let mut next_state = match &ci {
-                        CacheItem::Freq(llp, _v) => {
-                            debug_assert!(llp == &owned);
-                            // No need to extract, already popped!
-                            // $ll.extract(*llp);
-                            $stats.evict_from_frequent(&owned.as_ref().k);
-                            let pointer = $to_ll.append_n(owned);
-                            CacheItem::GhostFreq(pointer)
-                        }
-                        CacheItem::Rec(llp, _v) => {
-                            debug_assert!(llp == &owned);
-                            // No need to extract, already popped!
-                            // $ll.extract(*llp);
-                            $stats.evict_from_recent(&owned.as_mut().k);
-                            let pointer = $to_ll.append_n(owned);
-                            CacheItem::GhostRec(pointer)
-                        }
-                        _ => {
-                            // Impossible state!
-                            unreachable!();
-                        }
-                    };
-                    // Now change the state.
-                    mem::swap(*ci, &mut next_state);
-                }
-                None => {
-                    // Impossible state!
-                    unreachable!();
-                }
-            }
-        }
-    }};
-}
-
-macro_rules! evict_to_haunted_len {
-    (
-        $cache:expr,
-        $ll:expr,
-        $to_ll:expr,
-        $size:expr,
-        $txid:expr
-    ) => {{
-        debug_assert!($ll.len() >= $size);
-
-        while $ll.len() > $size {
-            let mut owned = $ll.pop();
-            debug_assert!(!owned.is_null());
-
-            // Set the item's evict txid.
-            owned.as_mut().txid = $txid;
-
-            let pointer = $to_ll.append_n(owned);
-            let mut r = $cache.get_mut(&pointer.as_ref().k);
-
-            match r {
-                Some(ref mut ci) => {
-                    // Now change the state.
-                    let mut next_state = CacheItem::Haunted(pointer);
-                    mem::swap(*ci, &mut next_state);
-                }
-                None => {
-                    // Impossible state!
-                    unreachable!();
-                }
-            };
-        }
-    }};
 }
 
 impl Default for ARCacheBuilder {
@@ -578,20 +435,6 @@ impl ARCacheBuilder {
         }
     }
 
-    /*
-    /// Import read/write hit stats from a previous execution of this cache.
-    #[must_use]
-    pub fn set_stats(self, stats: CacheStats) -> Self {
-        ARCacheBuilder {
-            stats: Some(stats),
-            max: self.max,
-            read_max: self.read_max,
-            watermark: self.watermark,
-            reader_quiesce: self.reader_quiesce,
-        }
-    }
-    */
-
     /// Enable or Disable reader cache quiescing. In some cases this can improve
     /// reader performance, at the expense that cache includes or hits may be delayed
     /// before acknowledgement. You must MANUALLY run periodic quiesces if you mark
@@ -624,33 +467,10 @@ impl ARCacheBuilder {
 
         let (max, read_max) = max.zip(read_max)?;
 
-        /*
-        let stats = stats
-            .map(|mut stats| {
-                // Reset some values to 0 because else it doesn't really max sense ...
-                stats.shared_max = 0;
-                stats.freq = 0;
-                stats.recent = 0;
-                stats.all_seen_keys = 0;
-                stats.p_weight = 0;
-
-                // Ensure that p isn't too large. Could happen if the cache size was reduced from
-                // a previous stats invocation.
-                //
-                // NOTE: I decided not to port this over, because it may cause issues in early cache start
-                // up when the lists are empty.
-                // stats.p_weight = stats.p_weight.clamp(0, max);
-                stats
-            })
-            .unwrap_or_default();
-        */
-
         let watermark = watermark.unwrap_or(if max < 128 { 0 } else { (max / 20) * 18 });
         let watermark = watermark.clamp(0, max);
         // If the watermark is 0, always track from the start.
         let init_watermark = watermark == 0;
-
-        // let (stat_tx, stat_rx) = unbounded();
 
         // The hit queue is reasonably cheap, so we can let this grow a bit.
         /*
@@ -690,7 +510,7 @@ impl ARCacheBuilder {
         });
 
         Some(ARCache {
-            cache: HashTrie::new(),
+            cache: DataMap::new(),
             shared,
             inner,
             // stats: CowCell::new(stats),
@@ -801,42 +621,6 @@ impl<
         }
     }
 
-    /*
-    /// View the statistics for this cache. These values are a snapshot of a point in
-    /// time and may not be accurate at "this exact moment". You *may* pin this value
-    /// for as long as you wish without causing excess memory usage or transaction
-    /// cleanup issues.
-    pub fn view_stats(&self) -> CowCellReadTxn<CacheStats> {
-        self.stats.read()
-    }
-    */
-
-    /*
-    /// Reset access stats for this cache. This will reset all the hit and include
-    /// fields, but values related to current cache state are not altered. This can
-    /// be useful after a bulk import to prevent polution of the stats from that
-    /// operation.
-    pub fn reset_stats(&self) {
-        let mut stat_guard = self.stats.write();
-        stat_guard.reader_hits = 0;
-        stat_guard.reader_tlocal_hits = 0;
-        stat_guard.reader_tlocal_includes = 0;
-        stat_guard.reader_includes = 0;
-        stat_guard.write_hits = 0;
-        stat_guard.write_includes = 0;
-        stat_guard.write_modifies = 0;
-        stat_guard.freq_evicts = 0;
-        stat_guard.recent_evicts = 0;
-        stat_guard.commit();
-    }
-    */
-
-    /*
-    fn try_write(&self) -> Option<ARCacheWriteTxn<K, V, ()>> {
-        self.try_write_stats(()).ok()
-    }
-    */
-
     fn try_write_stats<S>(&self, stats: S) -> Result<ARCacheWriteTxn<K, V, S>, S>
     where
         S: ARCacheWriteStat<K>,
@@ -918,7 +702,7 @@ impl<
 
     fn drain_tlocal_inc<S>(
         &self,
-        cache: &mut HashTrieWriteTxn<K, CacheItem<K, V>>,
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
         inner: &mut ArcInner<K, V>,
         shared: &ArcShared<K, V>,
         tlocal: Map<K, ThreadCacheItem<V>>,
@@ -1075,7 +859,7 @@ impl<
 
     fn drain_hit_rx(
         &self,
-        cache: &mut HashTrieWriteTxn<K, CacheItem<K, V>>,
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
         inner: &mut ArcInner<K, V>,
         commit_ts: Instant,
     ) {
@@ -1130,7 +914,7 @@ impl<
 
     fn drain_inc_rx<S>(
         &self,
-        cache: &mut HashTrieWriteTxn<K, CacheItem<K, V>>,
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
         inner: &mut ArcInner<K, V>,
         shared: &ArcShared<K, V>,
         commit_ts: Instant,
@@ -1265,6 +1049,7 @@ impl<
                     }
                 }
                 None => {
+                    // This key has never been seen before.
                     // It's not present - include it!
                     // println!("rxinc {:?} None -> Rec", k);
                     if txid >= inner.min_txid {
@@ -1288,7 +1073,7 @@ impl<
 
     fn drain_tlocal_hits(
         &self,
-        cache: &mut HashTrieWriteTxn<K, CacheItem<K, V>>,
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
         inner: &mut ArcInner<K, V>,
         // shared: &ArcShared<K, V>,
         commit_txid: u64,
@@ -1354,43 +1139,94 @@ impl<
         });
     }
 
-    /*
-    fn drain_stat_rx(
-        &self,
-        inner: &mut ArcInner<K, V>,
-        stats: &mut CacheStats,
-        commit_ts: Instant,
+    fn evict_to_haunted_len(
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
+        ll: &mut LL<CacheItemInner<K>>,
+        to_ll: &mut LL<CacheItemInner<K>>,
+        size: usize,
+        txid: u64,
     ) {
-        while let Ok(ce) = inner.stat_rx.try_recv() {
-            let ReaderStatEvent {
-                t,
-                ops,
-                hits,
-                tlocal_hits,
-                tlocal_includes,
-                reader_includes,
-                reader_failed_includes,
-            } = ce;
+        while ll.len() > size {
+            let mut owned = ll.pop();
+            debug_assert!(!owned.is_null());
 
-            stats.reader_ops += ops as u64;
-            stats.reader_tlocal_hits += tlocal_hits as u64;
-            stats.reader_tlocal_includes += tlocal_includes as u64;
-            stats.reader_hits += hits as u64;
-            stats.reader_includes += reader_includes as u64;
-            stats.reader_failed_includes += reader_failed_includes as u64;
+            // Set the item's evict txid.
+            owned.as_mut().txid = txid;
 
-            // Stop processing the queue, we are up to "now".
-            if t >= commit_ts {
-                break;
+            let pointer = to_ll.append_n(owned);
+            let mut r = cache.get_mut(&pointer.as_ref().k);
+
+            match r {
+                Some(ref mut ci) => {
+                    // Now change the state.
+                    let mut next_state = CacheItem::Haunted(pointer);
+                    mem::swap(*ci, &mut next_state);
+                }
+                None => {
+                    // Impossible state!
+                    unreachable!();
+                }
+            };
+        }
+    }
+
+    fn evict_to_len<S>(
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
+        ll: &mut LL<CacheItemInner<K>>,
+        to_ll: &mut LL<CacheItemInner<K>>,
+        size: usize,
+        txid: u64,
+        stats: &mut S,
+    ) where
+        S: ARCacheWriteStat<K>,
+    {
+        debug_assert!(ll.len() >= size);
+
+        while ll.len() > size {
+            let mut owned = ll.pop();
+            debug_assert!(!owned.is_null());
+            let mut r = cache.get_mut(&owned.as_ref().k);
+            // Set the item's evict txid.
+            owned.as_mut().txid = txid;
+            match r {
+                Some(ref mut ci) => {
+                    let mut next_state = match &ci {
+                        CacheItem::Freq(llp, _v) => {
+                            debug_assert!(llp == &owned);
+                            // No need to extract, already popped!
+                            // $ll.extract(*llp);
+                            stats.evict_from_frequent(&owned.as_ref().k);
+                            let pointer = to_ll.append_n(owned);
+                            CacheItem::GhostFreq(pointer)
+                        }
+                        CacheItem::Rec(llp, _v) => {
+                            debug_assert!(llp == &owned);
+                            // No need to extract, already popped!
+                            // $ll.extract(*llp);
+                            stats.evict_from_recent(&owned.as_mut().k);
+                            let pointer = to_ll.append_n(owned);
+                            CacheItem::GhostRec(pointer)
+                        }
+                        _ => {
+                            // Impossible state!
+                            unreachable!();
+                        }
+                    };
+                    // Now change the state.
+                    mem::swap(*ci, &mut next_state);
+                }
+                None => {
+                    // Impossible state!
+                    unreachable!();
+                }
             }
         }
     }
-    */
 
     #[allow(clippy::cognitive_complexity)]
     fn evict<S>(
         &self,
-        cache: &mut HashTrieWriteTxn<K, CacheItem<K, V>>,
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
         inner: &mut ArcInner<K, V>,
         shared: &ArcShared<K, V>,
         commit_txid: u64,
@@ -1404,13 +1240,11 @@ impl<
 
         if inner.rec.len() + inner.freq.len() > shared.max {
             // println!("Checking cache evict");
-            /*
-            println!(
+            trace!(
                 "from -> rec {:?}, freq {:?}",
                 inner.rec.len(),
                 inner.freq.len()
             );
-            */
             let delta = (inner.rec.len() + inner.freq.len()) - shared.max;
             // We have overflowed by delta. As we are not "evicting as we go" we have to work out
             // what we should have evicted up to now.
@@ -1418,10 +1252,14 @@ impl<
             // keep removing from rec until == p OR delta == 0, and if delta remains, then remove from freq.
 
             let rec_to_len = if inner.p == 0 {
-                // println!("p == 0 => {:?}", inner.rec.len());
-                debug_assert!(delta <= inner.rec.len());
-                // We are fully weight to freq, so only remove in rec.
-                inner.rec.len() - delta
+                trace!("p == 0 => {:?} - {}", inner.rec.len(), delta);
+                if delta <= inner.rec.len() {
+                    // We are fully weight to freq, so only remove in rec.
+                    inner.rec.len() - delta
+                } else {
+                    // We need to fully clear rec *and* then from freq as well.
+                    inner.rec.len()
+                }
             } else if inner.rec.len() > inner.p {
                 // There is a partial weighting, how much do we need to move?
                 let rec_delta = inner.rec.len() - inner.p;
@@ -1458,62 +1296,109 @@ impl<
             };
 
             // Now we can get the expected sizes;
-            debug_assert!(shared.max >= rec_to_len);
             let freq_to_len = shared.max - rec_to_len;
             // println!("move to -> rec {:?}, freq {:?}", rec_to_len, freq_to_len);
-            debug_assert!(freq_to_len + rec_to_len <= shared.max);
+            debug_assert!(rec_to_len <= inner.rec.len());
+            debug_assert!(freq_to_len <= inner.freq.len());
 
             // stats.freq_evicts += (inner.freq.len() - freq_to_len) as u64;
             // stats.recent_evicts += (inner.rec.len() - rec_to_len) as u64;
             // stats.frequent_evict_add((inner.freq.len() - freq_to_len) as u64);
             // stats.recent_evict_add((inner.rec.len() - rec_to_len) as u64);
 
-            evict_to_len!(
+            Self::evict_to_len(
                 cache,
-                inner.rec,
+                &mut inner.rec,
                 &mut inner.ghost_rec,
                 rec_to_len,
                 commit_txid,
-                stats
+                stats,
             );
-            evict_to_len!(
+            Self::evict_to_len(
                 cache,
-                inner.freq,
+                &mut inner.freq,
                 &mut inner.ghost_freq,
                 freq_to_len,
                 commit_txid,
-                stats
+                stats,
             );
 
             // Finally, do an evict of the ghost sets if they are too long - these are weighted
             // inverse to the above sets. Note the freq to len in ghost rec, and rec to len in
             // ghost freq!
             if inner.ghost_rec.len() > (shared.max - p) {
-                evict_to_haunted_len!(
+                Self::evict_to_haunted_len(
                     cache,
-                    inner.ghost_rec,
+                    &mut inner.ghost_rec,
                     &mut inner.haunted,
                     freq_to_len,
-                    commit_txid
+                    commit_txid,
                 );
             }
 
             if inner.ghost_freq.len() > p {
-                evict_to_haunted_len!(
+                Self::evict_to_haunted_len(
                     cache,
-                    inner.ghost_freq,
+                    &mut inner.ghost_freq,
                     &mut inner.haunted,
                     rec_to_len,
-                    commit_txid
+                    commit_txid,
                 );
             }
         }
     }
 
+    fn drain_ll_to_ghost<S>(
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
+        ll: &mut LL<CacheItemInner<K>>,
+        gf: &mut LL<CacheItemInner<K>>,
+        gr: &mut LL<CacheItemInner<K>>,
+        txid: u64,
+        stats: &mut S,
+    ) where
+        S: ARCacheWriteStat<K>,
+    {
+        while ll.len() > 0 {
+            let mut owned = ll.pop();
+            debug_assert!(!owned.is_null());
+            // Set the item's evict txid.
+            owned.as_mut().txid = txid;
+            let mut r = cache.get_mut(&owned.as_ref().k);
+            match r {
+                Some(ref mut ci) => {
+                    let mut next_state = match &ci {
+                        CacheItem::Freq(n, _) => {
+                            debug_assert!(n == &owned);
+                            stats.evict_from_frequent(&owned.as_ref().k);
+                            let pointer = gf.append_n(owned);
+                            CacheItem::GhostFreq(pointer)
+                        }
+                        CacheItem::Rec(n, _) => {
+                            debug_assert!(n == &owned);
+                            stats.evict_from_recent(&owned.as_ref().k);
+                            let pointer = gr.append_n(owned);
+                            CacheItem::GhostRec(pointer)
+                        }
+                        _ => {
+                            // Impossible state!
+                            unreachable!();
+                        }
+                    };
+                    // Now change the state.
+                    mem::swap(*ci, &mut next_state);
+                }
+                None => {
+                    // Impossible state!
+                    unreachable!();
+                }
+            }
+        } // end while
+    }
+
     #[allow(clippy::unnecessary_mut_passed)]
     fn commit<S>(
         &self,
-        mut cache: HashTrieWriteTxn<K, CacheItem<K, V>>,
+        mut cache: DataMapWriteTxn<K, CacheItem<K, V>>,
         tlocal: Map<K, ThreadCacheItem<V>>,
         hit: Vec<u64>,
         clear: bool,
@@ -1544,23 +1429,17 @@ impl<
             // stats.frequent_evict_add(inner.freq.len() as u64);
             // stats.recent_evict_add(inner.rec.len() as u64);
 
+            // This weird looking dance is to convince rust that the mutable borrow is safe.
+            let m_inner = inner.deref_mut();
+
+            let i_f = &mut m_inner.freq;
+            let g_f = &mut m_inner.ghost_freq;
+            let i_r = &mut m_inner.rec;
+            let g_r = &mut m_inner.ghost_rec;
+
             // Move everything active into ghost sets.
-            drain_ll_to_ghost!(
-                &mut cache,
-                inner.freq,
-                inner.ghost_freq,
-                inner.ghost_rec,
-                commit_txid,
-                &mut stats
-            );
-            drain_ll_to_ghost!(
-                &mut cache,
-                inner.rec,
-                inner.ghost_freq,
-                inner.ghost_rec,
-                commit_txid,
-                &mut stats
-            );
+            Self::drain_ll_to_ghost(&mut cache, i_f, g_f, g_r, commit_txid, &mut stats);
+            Self::drain_ll_to_ghost(&mut cache, i_r, g_f, g_r, commit_txid, &mut stats);
         }
 
         // Why is it okay to drain the rx/tlocal and create the cache in a temporary
@@ -2207,15 +2086,19 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::stats::{TraceStat, WriteCountStat};
-    use super::ARCache as Arc;
+    use super::ARCache;
     use super::ARCacheBuilder;
     use super::CStat;
     use super::CacheState;
     use std::num::NonZeroUsize;
+    use std::sync::Arc;
+    use std::thread;
+
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn test_cache_arc_basic() {
-        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+        let arc: ARCache<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
             .expect("Invalid cache parameters!");
@@ -2245,7 +2128,7 @@ mod tests {
     fn test_cache_evict() {
         let _ = tracing_subscriber::fmt::try_init();
         println!("== 1");
-        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+        let arc: ARCache<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
             .expect("Invalid cache parameters!");
@@ -2518,9 +2401,8 @@ mod tests {
     #[test]
     fn test_cache_concurrent_basic() {
         // Now we want to check some basic interactions of read and write together.
-
         // Setup the cache.
-        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+        let arc: ARCache<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
             .expect("Invalid cache parameters!");
@@ -2647,7 +2529,7 @@ mod tests {
         // so that all keys and their eviction ids are always tracked for all of time
         // to ensure that we never incorrectly include a value that may have been updated
         // more recently.
-        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+        let arc: ARCache<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
             .expect("Invalid cache parameters!");
@@ -2702,7 +2584,7 @@ mod tests {
 
     #[test]
     fn test_cache_clear() {
-        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+        let arc: ARCache<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
             .expect("Invalid cache parameters!");
@@ -2775,7 +2657,7 @@ mod tests {
 
     #[test]
     fn test_cache_clear_rollback() {
-        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+        let arc: ARCache<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
             .expect("Invalid cache parameters!");
@@ -2844,7 +2726,7 @@ mod tests {
 
     #[test]
     fn test_cache_clear_cursed() {
-        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+        let arc: ARCache<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
             .expect("Invalid cache parameters!");
@@ -2887,7 +2769,7 @@ mod tests {
 
     #[test]
     fn test_cache_dirty_write() {
-        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+        let arc: ARCache<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
             .build()
             .expect("Invalid cache parameters!");
@@ -2901,7 +2783,7 @@ mod tests {
     fn test_cache_read_no_tlocal() {
         // Check a cache with no read local thread capacity
         // Setup the cache.
-        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+        let arc: ARCache<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 0)
             .build()
             .expect("Invalid cache parameters!");
@@ -2955,7 +2837,7 @@ mod tests {
 
     #[test]
     fn test_cache_weighted() {
-        let arc: Arc<usize, Weighted> = ARCacheBuilder::default()
+        let arc: ARCache<usize, Weighted> = ARCacheBuilder::default()
             .set_size(4, 0)
             .build()
             .expect("Invalid cache parameters!");
@@ -3067,7 +2949,7 @@ mod tests {
         let _ = tracing_subscriber::fmt::try_init();
 
         // Make a cache
-        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+        let arc: ARCache<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 0)
             .build()
             .expect("Invalid cache parameters!");
@@ -3084,7 +2966,7 @@ mod tests {
     #[test]
     fn test_cache_mut_inplace() {
         // Make a cache
-        let arc: Arc<usize, usize> = ARCacheBuilder::default()
+        let arc: ARCache<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 0)
             .build()
             .expect("Invalid cache parameters!");
@@ -3114,5 +2996,72 @@ mod tests {
         wr_txn.remove(1);
         assert!(wr_txn.get_mut(&1, false).is_none());
         wr_txn.commit();
+    }
+
+    #[allow(dead_code)]
+    pub static RUNNING: AtomicBool = AtomicBool::new(false);
+
+    #[allow(dead_code)]
+    fn multi_thread_worker(arc: Arc<ARCache<Box<u32>, Box<u32>>>) {
+        while RUNNING.load(Ordering::Relaxed) {
+            let mut rd_txn = arc.read();
+
+            for _i in 0..128 {
+                let x = rand::random::<u32>();
+
+                if rd_txn.get(&x).is_none() {
+                    rd_txn.insert(Box::new(x), Box::new(x))
+                }
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    #[cfg_attr(feature = "dhat-heap", test)]
+    #[cfg_attr(miri, ignore)]
+    fn test_cache_stress_1() {
+        #[cfg(feature = "dhat-heap")]
+        let _profiler = dhat::Profiler::builder().trim_backtraces(None).build();
+
+        let arc: Arc<ARCache<Box<u32>, Box<u32>>> = Arc::new(
+            ARCacheBuilder::default()
+                .set_size(64, 4)
+                .build()
+                .expect("Invalid cache parameters!"),
+        );
+
+        let thread_count = 4;
+
+        RUNNING.store(true, Ordering::Relaxed);
+
+        let handles: Vec<_> = (0..thread_count)
+            .into_iter()
+            .map(|_| {
+                // Build the threads.
+                let cache = arc.clone();
+                thread::spawn(move || multi_thread_worker(cache))
+            })
+            .collect();
+
+        for x in 0..1024 {
+            let mut wr_txn = arc.write();
+
+            if wr_txn.get(&x).is_none() {
+                wr_txn.insert(Box::new(x), Box::new(x))
+            }
+
+            wr_txn.commit();
+        }
+
+        RUNNING.store(false, Ordering::Relaxed);
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        drop(arc);
+
+        // super::ll::assert_released();
+        // crate::internals::hashmap::node::assert_released();
     }
 }

@@ -451,7 +451,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
         path_get_mut_ref(self.root, h, k)
     }
 
-    /*
+    #[allow(dead_code)]
     pub(crate) unsafe fn get_slot_mut_ref(&mut self, h: u64) -> Option<&mut [Datum<K, V>]> {
         match path_clone(
             self.root,
@@ -469,7 +469,6 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
         // Now get the ref.
         path_get_slot_mut_ref(self.root, h)
     }
-    */
 
     #[cfg(test)]
     pub(crate) fn root_txid(&self) -> u64 {
@@ -1064,7 +1063,6 @@ where
     }
 }
 
-/*
 unsafe fn path_get_slot_mut_ref<'a, K: Clone + Hash + Eq + Debug, V: Clone>(
     node: *mut Node<K, V>,
     h: u64,
@@ -1089,7 +1087,6 @@ where
         r.map(|v| &mut *v as &mut [Datum<K, V>])
     }
 }
-*/
 
 #[cfg(test)]
 mod tests {

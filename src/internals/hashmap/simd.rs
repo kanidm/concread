@@ -108,7 +108,6 @@ where
     }
 }
 
-/*
 #[cfg(not(feature = "simd_support"))]
 pub(crate) fn leaf_simd_get_slot<K, V>(leaf: &Leaf<K, V>, h: u64) -> Option<usize>
 where
@@ -180,7 +179,6 @@ where
     }
     None
 }
-*/
 
 #[cfg(not(feature = "simd_support"))]
 pub(crate) fn leaf_simd_search<K, V, Q>(leaf: &Leaf<K, V>, h: u64, k: &Q) -> KeyLoc
