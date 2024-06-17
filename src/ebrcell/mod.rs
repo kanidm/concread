@@ -334,7 +334,9 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn test_multithread_create() {
-        let start = time::Instant::now();
+        use std::time::Instant;
+
+        let start = Instant::now();
         // Create the new ebrcell.
         let data: i64 = 0;
         let cc = EbrCell::new(data);
@@ -384,7 +386,7 @@ mod tests {
             true
         }));
 
-        let end = time::Instant::now();
+        let end = Instant::now();
         print!("Ebr MT create :{:?} ", end - start);
     }
 

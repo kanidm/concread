@@ -52,7 +52,6 @@ tracing = "0.1"
 [dev-dependencies]
 criterion = { version = "0.3", features = ["html_reports"] }
 rand = "0.8"
-time = "0.3"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "std", "fmt"] }
 uuid = "1.0"
 function_name = "0.3"
