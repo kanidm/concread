@@ -268,6 +268,7 @@ mod tests {
     use super::LinCowCellCapable;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread::scope;
+    use std::time::Instant;
 
     #[derive(Debug)]
     struct TestData {
@@ -387,7 +388,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn test_multithread_create() {
-        let start = time::Instant::now();
+        let start = Instant::now();
         // Create the new cowcell.
         let data = TestData { x: 0 };
         let cc = LinCowCell::new(data);
@@ -421,7 +422,7 @@ mod tests {
             true
         }));
 
-        let end = time::Instant::now();
+        let end = Instant::now();
         print!("Arc MT create :{:?} ", end - start);
     }
 

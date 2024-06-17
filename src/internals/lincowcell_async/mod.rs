@@ -378,7 +378,9 @@ mod tests {
     #[tokio::test]
     #[cfg_attr(miri, ignore)]
     async fn test_concurrent_create() {
-        let start = time::Instant::now();
+        use std::time::Instant;
+
+        let start = Instant::now();
         // Create the new cowcell.
         let data = TestData { x: 0 };
         let cc = Arc::new(LinCowCell::new(data));
@@ -404,7 +406,7 @@ mod tests {
             tokio::task::spawn(mt_writer(cc.clone())),
         );
 
-        let end = time::Instant::now();
+        let end = Instant::now();
         print!("Arc MT create :{:?} ", end - start);
     }
 

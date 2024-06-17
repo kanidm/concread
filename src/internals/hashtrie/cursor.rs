@@ -172,14 +172,14 @@ impl Ptr {
 
     #[inline(always)]
     fn mark_dirty(&mut self) {
-        #[cfg(all(test, not(miri)))]
+        #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         WRITE_LIST.with(|llist| assert!(llist.lock().unwrap().insert(self.untagged())));
         self.p = self.p.map_addr(|a| a | FLAG_DIRTY)
     }
 
     #[inline(always)]
     fn mark_clean(&mut self) {
-        #[cfg(all(test, not(miri)))]
+        #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         WRITE_LIST.with(|llist| assert!(llist.lock().unwrap().remove(&(self.untagged()))));
         self.p = self.p.map_addr(|a| a & MARK_CLEAN)
     }
@@ -187,7 +187,7 @@ impl Ptr {
     #[inline(always)]
     pub(crate) fn as_bucket<K: Hash + Eq + Clone + Debug, V: Clone>(&self) -> &Bucket<K, V> {
         debug_assert!(self.is_bucket());
-        #[cfg(all(test, not(miri)))]
+        #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
         unsafe { &*(self.p.map_addr(|a| a & UNTAG) as *const Bucket<K, V>) }
     }
@@ -195,7 +195,7 @@ impl Ptr {
     #[inline(always)]
     fn as_bucket_raw<K: Hash + Eq + Clone + Debug, V: Clone>(&self) -> *mut Bucket<K, V> {
         debug_assert!(self.is_bucket());
-        #[cfg(all(test, not(miri)))]
+        #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
         self.p.map_addr(|a| a & UNTAG) as *mut Bucket<K, V>
     }
@@ -207,7 +207,7 @@ impl Ptr {
     ) -> &mut Bucket<K, V> {
         debug_assert!(self.is_bucket());
         debug_assert!(self.is_dirty());
-        #[cfg(all(test, not(miri)))]
+        #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         WRITE_LIST.with(|llist| {
             let wlist_guard = llist.lock().unwrap();
             assert!(wlist_guard.contains(&self.untagged()))
@@ -218,7 +218,7 @@ impl Ptr {
     #[inline(always)]
     pub(crate) fn as_branch<K: Hash + Eq + Clone + Debug, V: Clone>(&self) -> &Branch<K, V> {
         debug_assert!(self.is_branch());
-        #[cfg(all(test, not(miri)))]
+        #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
         unsafe { &*(self.p.map_addr(|a| a & UNTAG) as *const Branch<K, V>) }
     }
@@ -226,7 +226,7 @@ impl Ptr {
     #[inline(always)]
     fn as_branch_raw<K: Hash + Eq + Clone + Debug, V: Clone>(&self) -> *mut Branch<K, V> {
         debug_assert!(self.is_branch());
-        #[cfg(all(test, not(miri)))]
+        #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
         self.p.map_addr(|a| a & UNTAG) as *mut Branch<K, V>
     }
@@ -238,7 +238,7 @@ impl Ptr {
     ) -> &mut Branch<K, V> {
         debug_assert!(self.is_branch());
         debug_assert!(self.is_dirty());
-        #[cfg(all(test, not(miri)))]
+        #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         WRITE_LIST.with(|llist| {
             let wlist_guard = llist.lock().unwrap();
             assert!(wlist_guard.contains(&self.untagged()))
@@ -259,7 +259,7 @@ impl Ptr {
 
     fn free<K: Hash + Eq + Clone + Debug, V: Clone>(&self) {
         // We MUST have allocated this, else it's a double free
-        #[cfg(all(test, not(miri)))]
+        #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
 
         // It's getting freeeeeedddd
@@ -271,12 +271,12 @@ impl Ptr {
             }
         }
 
-        #[cfg(all(test, not(miri)))]
+        #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         if self.is_dirty() {
             WRITE_LIST.with(|llist| assert!(llist.lock().unwrap().remove(&(self.untagged()))))
         };
 
-        #[cfg(all(test, not(miri)))]
+        #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().remove(&self.untagged())));
     }
 }
@@ -727,6 +727,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
                         // If the bkt is dirty, we can just append.
                         tgt_ptr
                     } else {
+                        // Bucket is clean
                         self.last_seen.push(tgt_ptr);
                         let dbkt_ptr = new_dirty_bucket_ptr::<K, V>();
                         self.first_seen.push(dbkt_ptr);
