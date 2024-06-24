@@ -561,6 +561,17 @@ where
             right_iter.clear();
         }
 
+        // If both iterators end up in the same leaf and left index is larger,
+        // it indicates that there is nothing to return
+        if let Some((lnode, lidx)) = left_iter.get_mut() {
+            if let Some((rnode, ridx)) = right_iter.get_mut() {
+                if rnode == lnode && lidx > ridx {
+                    right_iter.clear();
+                    left_iter.clear();
+                }
+            }
+        }
+
         RangeIter {
             length,
             left_iter,
