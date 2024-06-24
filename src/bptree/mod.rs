@@ -355,6 +355,14 @@ mod tests {
         assert_released();
     }
 
+    #[test]
+    fn test_bptree2_map_rangeiter_2() {
+        let map = BptreeMap::from_iter([(3, ()), (4, ()), (0, ())]);
+
+        let r = map.read();
+        assert!(r.range(1..=2).count() == 0);
+    }
+
     /*
     #[test]
     fn test_bptree2_map_write_compact() {
