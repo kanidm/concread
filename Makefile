@@ -53,3 +53,10 @@ coverage/grcov:
 coverage: ## Run all the coverage tests
 coverage: coverage/run coverage/grcov
 	echo "Coverage report is in ./target/coverage/html/index.html"
+
+.PHONY: codespell
+codespell: ## spell-check things.
+codespell:
+	codespell -c \
+	--ignore-words .codespell_ignore \
+	--skip='./target'
