@@ -44,19 +44,19 @@ What is concurrently readable?
 
 In a multithread application, data is commonly needed to be shared between threads.
 In sharing this there are multiple policies for this - Atomics for single integer
-reads, Mutexs for single thread access, RwLock for many readers or one writer,
+reads, Mutexes for single thread access, RwLock for many readers or one writer,
 all the way to Lock Free which allows multiple read and writes of queues.
 
 Lock Free however has the limitation of being built on Atomics. This means it can
 really only update small amounts of data at a time consistently. It also means
 that you don't have transactional behaviours. While this is great for queues,
-it's not so good for a tree or hashmap where you want the state to be consistent
+it is not so good for a tree or hashmap where you want the state to be consistent
 from the state to the end of an operation. In the few places that lock free trees
 exist, they have the properly that as each thread is updating the tree, the changes
-are visibile immediately to all other readers. Your data could change before you
+are visible immediately to all other readers. Your data could change before you
 know it.
 
-Mutexs and RwLock on the other hand allow much more complex structures to be protected.
+Mutexes and RwLock on the other hand allow much more complex structures to be protected.
 The guarantee that all readers see the same data, always, and that writers are
 the only writer. But they cause stalls on other threads waiting to access them.
 RwLock for example can see large delays if a reader won't yield, and OS policy
@@ -68,7 +68,7 @@ writers to proceed simultaneously.
 
 This is achieved by having writers copy the internal data before they modify
 it. This allows readers to access old data, without modification, and allows
-the writer to change the data inplace before commiting. Once the new data is
+the writer to change the data inplace before committing. Once the new data is
 stored, old readers continue to access their old data - new readers will
 see the new data.
 
@@ -78,7 +78,7 @@ behaviour.
 Safety
 ------
 
-This library has extensive testing, and passes it's test suite under [miri], a rust
+This library has extensive testing, and passes its test suite under [miri], a rust
 undefined behaviour checker. If you find an issue however, please let us know so we can
 fix it!
 
@@ -104,4 +104,3 @@ Contributing
 ------------
 
 Please open an issue, pr or contact me directly by email (see github)
-
