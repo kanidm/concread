@@ -2499,6 +2499,7 @@ mod tests {
     //         t3 = i + j + 2
     //         t4 = i + j + 3
     //
+    #[cfg(not(feature = "skinny"))]
     fn create_split_off_leaf(base: usize) -> *mut Node<usize, usize> {
         let l = Node::new_leaf(0);
         let lref = leaf_ref!(l, usize, usize);
@@ -2507,6 +2508,7 @@ mod tests {
         l as *mut _
     }
 
+    #[cfg(not(feature = "skinny"))]
     fn create_split_off_branch(base: usize) -> *mut Node<usize, usize> {
         // This is a helper for create_split_off_tree to make the sub-branches based
         // on a base.
@@ -2523,6 +2525,7 @@ mod tests {
         branch as *mut _
     }
 
+    #[cfg(not(feature = "skinny"))]
     fn create_split_off_tree() -> *mut Node<usize, usize> {
         let b1 = create_split_off_branch(0);
         let b2 = create_split_off_branch(100);
@@ -2591,6 +2594,7 @@ mod tests {
         assert_released();
     }
 
+    #[cfg(not(feature = "skinny"))]
     fn run_split_off_test_clone(v: usize, _exp: usize) {
         // println!("RUNNING -> {:?}", v);
         let tree = create_split_off_tree();
@@ -2620,6 +2624,7 @@ mod tests {
         assert_released();
     }
 
+    #[cfg(not(feature = "skinny"))]
     fn run_split_off_test(v: usize, _exp: usize) {
         // println!("RUNNING -> {:?}", v);
         let tree = create_split_off_tree();
@@ -2641,6 +2646,7 @@ mod tests {
         assert_released();
     }
 
+    #[cfg(not(feature = "skinny"))]
     #[test]
     fn test_bptree2_cursor_split_off_lt_clone_stress() {
         // Can't proceed as the "fake" tree we make is invalid.
@@ -2657,6 +2663,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "skinny"))]
     #[test]
     fn test_bptree2_cursor_split_off_lt_stress() {
         debug_assert!(L_CAPACITY >= 4);

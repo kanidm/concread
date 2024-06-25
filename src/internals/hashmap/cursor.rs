@@ -1066,10 +1066,7 @@ where
 unsafe fn path_get_slot_mut_ref<'a, K: Clone + Hash + Eq + Debug, V: Clone>(
     node: *mut Node<K, V>,
     h: u64,
-) -> Option<&'a mut [Datum<K, V>]>
-where
-    K: 'a,
-{
+) -> Option<&'a mut [Datum<K, V>]> {
     if self_meta!(node).is_leaf() {
         leaf_ref!(node, K, V).get_slot_mut_ref(h)
     } else {

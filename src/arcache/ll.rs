@@ -102,6 +102,7 @@ where
         self.inner.is_null()
     }
 
+    #[allow(clippy::mut_from_ref)]
     pub unsafe fn make_mut(&self) -> &mut K {
         &mut *(*self.inner).k.as_mut_ptr()
     }
@@ -137,6 +138,7 @@ impl<K> LLNodeOwned<K>
 where
     K: LLWeight + Clone + Debug,
 {
+    #[allow(clippy::wrong_self_convention)]
     fn into_inner(&mut self) -> *mut LLNode<K> {
         let x = self.inner;
         self.inner = ptr::null_mut();
@@ -185,7 +187,7 @@ where
                 debug_assert!((*self.inner).next.is_null());
                 debug_assert!((*self.inner).prev.is_null());
             }
-            assert!(false);
+            panic!("dropping LLNodeOwned<K>");
         }
     }
 }
@@ -225,7 +227,7 @@ where
         }
     }
 
-    // Append a k to the set, and return it's pointer.
+    // Append a k to the set, and return its pointer.
     pub(crate) fn append_k(&mut self, k: K) -> LLNodeRef<K> {
         let n = LLNode::new(k);
         self.append_n(n)
@@ -417,6 +419,7 @@ where
     }
 
     #[inline]
+    #[allow(clippy::new_ret_no_self)]
     pub(crate) fn new(
         k: K,
         // tag: usize

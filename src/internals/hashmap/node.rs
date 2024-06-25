@@ -67,17 +67,19 @@ fn alloc_nid() -> usize {
     {
         ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(nid));
     }
-    // eprintln!("Allocate Hmap -> {:?}", nid);
     nid
 }
 
 #[cfg(all(test, not(miri)))]
 fn release_nid(nid: usize) {
-    // eprintln!("Release Hmap -> {:?}", nid);
     #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
     {
         let r = ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
         assert!(r);
+    }
+    #[cfg(all(test, not(miri), feature = "dhat-heap"))]
+    {
+        dbg!(nid);
     }
 }
 

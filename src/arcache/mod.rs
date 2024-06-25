@@ -426,7 +426,7 @@ impl ARCacheBuilder {
     /// max, it will be clamped to max.
     #[must_use]
     pub fn set_watermark(self, watermark: usize) -> Self {
-        ARCacheBuilder {
+        Self {
             // stats: self.stats,
             max: self.max,
             read_max: self.read_max,
@@ -741,14 +741,12 @@ impl<
                     // From whatever set we were in, pop and move to haunted.
                     let mut next_state = match ci {
                         CacheItem::Freq(llp, _v) => {
-                            // println!("tlocal {:?} Freq -> Freq", k);
                             let mut owned = inner.freq.extract(llp.clone());
                             owned.as_mut().txid = commit_txid;
                             let pointer = inner.haunted.append_n(owned);
                             CacheItem::Haunted(pointer)
                         }
                         CacheItem::Rec(llp, _v) => {
-                            // println!("tlocal {:?} Rec -> Freq", k);
                             // Remove the node and put it into freq.
                             let mut owned = inner.rec.extract(llp.clone());
                             owned.as_mut().txid = commit_txid;
@@ -756,21 +754,18 @@ impl<
                             CacheItem::Haunted(pointer)
                         }
                         CacheItem::GhostFreq(llp) => {
-                            // println!("tlocal {:?} GhostFreq -> Freq", k);
                             let mut owned = inner.ghost_freq.extract(llp.clone());
                             owned.as_mut().txid = commit_txid;
                             let pointer = inner.haunted.append_n(owned);
                             CacheItem::Haunted(pointer)
                         }
                         CacheItem::GhostRec(llp) => {
-                            // println!("tlocal {:?} GhostRec -> Rec", k);
                             let mut owned = inner.ghost_rec.extract(llp.clone());
                             owned.as_mut().txid = commit_txid;
                             let pointer = inner.haunted.append_n(owned);
                             CacheItem::Haunted(pointer)
                         }
                         CacheItem::Haunted(llp) => {
-                            // println!("tlocal {:?} Haunted -> Rec", k);
                             unsafe { llp.make_mut().txid = commit_txid };
                             CacheItem::Haunted(llp.clone())
                         }
@@ -786,7 +781,6 @@ impl<
                     // It's in the cache - what action must we take?
                     let mut next_state = match ci {
                         CacheItem::Freq(llp, _v) => {
-                            // println!("tlocal {:?} Freq -> Freq", k);
                             let mut owned = inner.freq.extract(llp.clone());
                             owned.as_mut().txid = commit_txid;
                             owned.as_mut().size = size;
@@ -797,7 +791,6 @@ impl<
                             CacheItem::Freq(pointer, tci)
                         }
                         CacheItem::Rec(llp, _v) => {
-                            // println!("tlocal {:?} Rec -> Freq", k);
                             // Remove the node and put it into freq.
                             let mut owned = inner.rec.extract(llp.clone());
                             owned.as_mut().txid = commit_txid;
@@ -807,8 +800,7 @@ impl<
                             CacheItem::Freq(pointer, tci)
                         }
                         CacheItem::GhostFreq(llp) => {
-                            // println!("tlocal {:?} GhostFreq -> Freq", k);
-                            // Ajdust p
+                            // Adjust p
                             Self::calc_p_freq(
                                 inner.ghost_rec.len(),
                                 inner.ghost_freq.len(),
@@ -823,8 +815,7 @@ impl<
                             CacheItem::Freq(pointer, tci)
                         }
                         CacheItem::GhostRec(llp) => {
-                            // println!("tlocal {:?} GhostRec -> Rec", k);
-                            // Ajdust p
+                            // Adjust p
                             Self::calc_p_rec(
                                 shared.max,
                                 inner.ghost_rec.len(),
@@ -840,8 +831,6 @@ impl<
                             CacheItem::Rec(pointer, tci)
                         }
                         CacheItem::Haunted(llp) => {
-                            // stats.write_includes += 1;
-                            // println!("tlocal {:?} Haunted -> Rec", k);
                             let mut owned = inner.haunted.extract(llp.clone());
                             owned.as_mut().txid = commit_txid;
                             owned.as_mut().size = size;
@@ -872,32 +861,27 @@ impl<
                 for ref mut ci in ci_slots.iter_mut() {
                     let mut next_state = match &ci.v {
                         CacheItem::Freq(llp, v) => {
-                            // println!("rxhit {:?} Freq -> Freq", k);
-                            inner.freq.touch(llp.clone());
-                            CacheItem::Freq(llp.clone(), v.clone())
+                            inner.freq.touch(llp.to_owned());
+                            CacheItem::Freq(llp.to_owned(), v.to_owned())
                         }
                         CacheItem::Rec(llp, v) => {
-                            // println!("rxhit {:?} Rec -> Freq", k);
-                            let owned = inner.rec.extract(llp.clone());
+                            let owned = inner.rec.extract(llp.to_owned());
                             let pointer = inner.freq.append_n(owned);
-                            CacheItem::Freq(pointer, v.clone())
+                            CacheItem::Freq(pointer, v.to_owned())
                         }
                         // While we can't add this from nothing, we can
                         // at least keep it in the ghost sets.
                         CacheItem::GhostFreq(llp) => {
-                            // println!("rxhit {:?} GhostFreq -> GhostFreq", k);
-                            inner.ghost_freq.touch(llp.clone());
-                            CacheItem::GhostFreq(llp.clone())
+                            inner.ghost_freq.touch(llp.to_owned());
+                            CacheItem::GhostFreq(llp.to_owned())
                         }
                         CacheItem::GhostRec(llp) => {
-                            // println!("rxhit {:?} GhostRec -> GhostRec", k);
-                            inner.ghost_rec.touch(llp.clone());
-                            CacheItem::GhostRec(llp.clone())
+                            inner.ghost_rec.touch(llp.to_owned());
+                            CacheItem::GhostRec(llp.to_owned())
                         }
                         CacheItem::Haunted(llp) => {
-                            // println!("rxhit {:?} Haunted -> Haunted", k);
                             // We can't do anything about this ...
-                            CacheItem::Haunted(llp.clone())
+                            CacheItem::Haunted(llp.to_owned())
                         }
                     };
                     mem::swap(&mut ci.v, &mut next_state);
@@ -937,14 +921,12 @@ impl<
                     let mut next_state = match &ci {
                         CacheItem::Freq(llp, _v) => {
                             if llp.as_ref().txid >= txid || inner.min_txid > txid {
-                                // println!("rxinc {:?} Freq -> Freq (touch only)", k);
                                 // Our cache already has a newer value, keep it.
-                                inner.freq.touch(llp.clone());
+                                inner.freq.touch(llp.to_owned());
                                 None
                             } else {
-                                // println!("rxinc {:?} Freq -> Freq (update)", k);
                                 // The value is newer, update.
-                                let mut owned = inner.freq.extract(llp.clone());
+                                let mut owned = inner.freq.extract(llp.to_owned());
                                 owned.as_mut().txid = txid;
                                 owned.as_mut().size = size;
                                 stats.modify(&owned.as_mut().k);
@@ -953,13 +935,11 @@ impl<
                             }
                         }
                         CacheItem::Rec(llp, v) => {
-                            let mut owned = inner.rec.extract(llp.clone());
+                            let mut owned = inner.rec.extract(llp.to_owned());
                             if llp.as_ref().txid >= txid || inner.min_txid > txid {
-                                // println!("rxinc {:?} Rec -> Freq (touch only)", k);
                                 let pointer = inner.freq.append_n(owned);
-                                Some(CacheItem::Freq(pointer, v.clone()))
+                                Some(CacheItem::Freq(pointer, v.to_owned()))
                             } else {
-                                // println!("rxinc {:?} Rec -> Freq (update)", k);
                                 owned.as_mut().txid = txid;
                                 owned.as_mut().size = size;
                                 stats.modify(&owned.as_mut().k);
@@ -970,7 +950,6 @@ impl<
                         CacheItem::GhostFreq(llp) => {
                             // Adjust p
                             if llp.as_ref().txid > txid || inner.min_txid > txid {
-                                // println!("rxinc {:?} GhostFreq -> GhostFreq", k);
                                 // The cache version is newer, this is just a hit.
                                 let size = llp.as_ref().size;
                                 Self::calc_p_freq(
@@ -979,18 +958,17 @@ impl<
                                     &mut inner.p,
                                     size,
                                 );
-                                inner.ghost_freq.touch(llp.clone());
+                                inner.ghost_freq.touch(llp.to_owned());
                                 None
                             } else {
                                 // This item is newer, so we can include it.
-                                // println!("rxinc {:?} GhostFreq -> Rec", k);
                                 Self::calc_p_freq(
                                     inner.ghost_rec.len(),
                                     inner.ghost_freq.len(),
                                     &mut inner.p,
                                     size,
                                 );
-                                let mut owned = inner.ghost_freq.extract(llp.clone());
+                                let mut owned = inner.ghost_freq.extract(llp.to_owned());
                                 owned.as_mut().txid = txid;
                                 owned.as_mut().size = size;
                                 stats.ghost_frequent_revive(&owned.as_mut().k);
@@ -1001,7 +979,6 @@ impl<
                         CacheItem::GhostRec(llp) => {
                             // Adjust p
                             if llp.as_ref().txid > txid || inner.min_txid > txid {
-                                // println!("rxinc {:?} GhostRec -> GhostRec", k);
                                 let size = llp.as_ref().size;
                                 Self::calc_p_rec(
                                     shared.max,
@@ -1013,7 +990,6 @@ impl<
                                 inner.ghost_rec.touch(llp.clone());
                                 None
                             } else {
-                                // println!("rxinc {:?} GhostRec -> Rec", k);
                                 Self::calc_p_rec(
                                     shared.max,
                                     inner.ghost_rec.len(),
@@ -1021,7 +997,7 @@ impl<
                                     &mut inner.p,
                                     size,
                                 );
-                                let mut owned = inner.ghost_rec.extract(llp.clone());
+                                let mut owned = inner.ghost_rec.extract(llp.to_owned());
                                 owned.as_mut().txid = txid;
                                 owned.as_mut().size = size;
                                 stats.ghost_recent_revive(&owned.as_ref().k);
@@ -1031,11 +1007,9 @@ impl<
                         }
                         CacheItem::Haunted(llp) => {
                             if llp.as_ref().txid > txid || inner.min_txid > txid {
-                                // println!("rxinc {:?} Haunted -> Haunted", k);
                                 None
                             } else {
-                                // println!("rxinc {:?} Haunted -> Rec", k);
-                                let mut owned = inner.haunted.extract(llp.clone());
+                                let mut owned = inner.haunted.extract(llp.to_owned());
                                 owned.as_mut().txid = txid;
                                 owned.as_mut().size = size;
                                 stats.include_haunted(&owned.as_mut().k);
@@ -1051,7 +1025,6 @@ impl<
                 None => {
                     // This key has never been seen before.
                     // It's not present - include it!
-                    // println!("rxinc {:?} None -> Rec", k);
                     if txid >= inner.min_txid {
                         let llp = inner.rec.append_k(CacheItemInner {
                             k: k.clone(),
@@ -1090,7 +1063,6 @@ impl<
             // Find the item in the cache.
             // * based on it's type, promote it in the correct list, or move it.
             // How does this prevent incorrect promotion from rec to freq? txid?
-            // println!("Checking Hit ... {:?}", k);
             let mut r = unsafe { cache.get_slot_mut(k_hash) };
             match r {
                 Some(ref mut ci_slots) => {
@@ -1103,9 +1075,8 @@ impl<
                         let mut next_state = match &ci.v {
                             CacheItem::Freq(llp, v) => {
                                 if llp.as_ref().txid != commit_txid {
-                                    // println!("hit {:?} Freq -> Freq", k);
-                                    inner.freq.touch(llp.clone());
-                                    Some(CacheItem::Freq(llp.clone(), v.clone()))
+                                    inner.freq.touch(llp.to_owned());
+                                    Some(CacheItem::Freq(llp.to_owned(), v.to_owned()))
                                 } else {
                                     None
                                 }
@@ -1515,7 +1486,6 @@ impl<
         // commit on the wr txn.
         cache.commit();
         // done!
-        // eprintln!("quiesce took - {:?}", commit_ts.elapsed());
 
         // Return the stats to the caller.
         stats
@@ -2098,7 +2068,7 @@ mod tests {
 
     #[test]
     fn test_cache_arc_basic() {
-        let arc: ARCache<usize, usize> = ARCacheBuilder::default()
+        let arc: ARCache<usize, usize> = ARCacheBuilder::new()
             .set_size(4, 4)
             .build()
             .expect("Invalid cache parameters!");
@@ -2841,9 +2811,6 @@ mod tests {
             .set_size(4, 0)
             .build()
             .expect("Invalid cache parameters!");
-
-        // let init_stats = arc.view_stats();
-        // println!("{:?}", *init_stats);
         let mut wr_txn = arc.write();
 
         assert!(
@@ -2882,7 +2849,7 @@ mod tests {
         // Now once commited, the proper sizes kick in.
 
         let wr_txn = arc.write();
-        // eprintln!("{:?}", wr_txn.peek_stat());
+        eprintln!("{:?}", wr_txn.peek_stat());
         assert!(
             CStat {
                 max: 4,
@@ -2938,10 +2905,6 @@ mod tests {
             } == wr_txn.peek_stat()
         );
         wr_txn.commit();
-
-        // let stats = arc.view_stats();
-        // println!("{:?}", *stats);
-        // println!("{:?}", (*stats).change_since(&*init_stats));
     }
 
     #[test]
@@ -3017,8 +2980,8 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    #[cfg_attr(feature = "dhat-heap", test)]
     #[cfg_attr(miri, ignore)]
+    #[cfg_attr(feature = "dhat-heap", test)]
     fn test_cache_stress_1() {
         #[cfg(feature = "dhat-heap")]
         let _profiler = dhat::Profiler::builder().trim_backtraces(None).build();
@@ -3060,8 +3023,5 @@ mod tests {
         }
 
         drop(arc);
-
-        // super::ll::assert_released();
-        // crate::internals::hashmap::node::assert_released();
     }
 }
