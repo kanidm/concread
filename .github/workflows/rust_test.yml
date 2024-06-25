@@ -1,3 +1,4 @@
+---
 name: "Rust Test"
 
 # Trigger the workflow on push to master or pull request
@@ -17,6 +18,8 @@ jobs:
         toolchain: stable
 
     - name: Cargo test
-      run: cargo test --features tcache
+      run: |
+        make test
 
-
+    - name: Cargo bench
+      run: cargo bench
