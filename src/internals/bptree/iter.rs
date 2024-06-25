@@ -487,6 +487,14 @@ where
                             // eprintln!("Excluding Using, {}", fidx);
                             *idx = fidx + 1;
                             if *idx >= leaf.count() {
+                                if let Some((rnode, _)) = right_iter.get_mut() {
+                                    // If the leaf iterators were in the same node before advancing left iterator
+                                    // means that left iterator would be ahead of right iter so no elements left
+                                    if rnode == node {
+                                        left_iter.clear();
+                                        right_iter.clear();
+                                    }
+                                }
                                 // Okay, this means we overflowed to the next leaf, so just
                                 // advanced the leaf iter to the start of the next
                                 left_iter.next();
@@ -521,6 +529,14 @@ where
                             // eprintln!("Using, {}", fidx);
                             let (nidx, oflow) = fidx.overflowing_sub(1);
                             if oflow {
+                                if let Some((lnode, _)) = left_iter.get_mut() {
+                                    // If the leaf iterators were in the same node before advancing right iterator
+                                    // means that left iterator would be ahead of right iter so no elements left
+                                    if lnode == node {
+                                        left_iter.clear();
+                                        right_iter.clear();
+                                    }
+                                }
                                 right_iter.next();
                             } else {
                                 *idx = nidx;
@@ -541,6 +557,14 @@ where
                             // eprintln!("Using, {}", fidx);
                             let (nidx, oflow) = fidx.overflowing_sub(1);
                             if oflow {
+                                if let Some((lnode, _)) = left_iter.get_mut() {
+                                    // If the leaf iterators were in the same node before advancing right iterator
+                                    // means that left iterator would be ahead of right iter so no elements left
+                                    if lnode == node {
+                                        left_iter.clear();
+                                        right_iter.clear();
+                                    }
+                                }
                                 right_iter.next();
                             } else {
                                 *idx = nidx;

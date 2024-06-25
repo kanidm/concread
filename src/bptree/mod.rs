@@ -96,6 +96,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Bound;
+
     use super::BptreeMap;
     use crate::internals::bptree::node::{assert_released, L_CAPACITY};
     // use rand::prelude::*;
@@ -361,6 +363,15 @@ mod tests {
 
         let r = map.read();
         assert!(r.range(1..=2).count() == 0);
+    }
+
+    #[test]
+    fn test_bptree2_map_rangeiter_3() {
+        let map = BptreeMap::from_iter([0, 1, 2, 3, 4, 5, 6, 8].map(|v| (v, ())));
+
+        let r = map.read();
+        assert!(r.range((Bound::Excluded(6), Bound::Included(7))).count() == 0);
+        assert!(r.range((Bound::Excluded(6), Bound::Excluded(8))).count() == 0);
     }
 
     /*
