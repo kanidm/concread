@@ -1760,8 +1760,8 @@ impl<
 
     /// Yields an iterator over all values that are currently dirty. As the iterator
     /// progresses, items will be marked clean. This is where you should sync dirty
-    /// cache content to your associated store. The iterator is K, Option<V>, where
-    /// the Option<V> indicates if the item has been remove (None) or is updated (Some).
+    /// cache content to your associated store. The iterator is `K, Option<V>`, where
+    /// the `Option<V>` indicates if the item has been remove (None) or is updated (Some).
     pub fn iter_mut_mark_clean(&mut self) -> impl Iterator<Item = (&K, Option<&mut V>)> {
         self.tlocal
             .iter_mut()
