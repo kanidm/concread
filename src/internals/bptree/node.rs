@@ -1552,7 +1552,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         //
         // This means it's start_idx - 1 up to BK cap
 
-        for kidx in (start_idx - 1)..L_CAPACITY {
+        for kidx in start_idx..L_CAPACITY {
             let _pk = unsafe { ptr::read(self.key.get_unchecked(kidx)).assume_init() };
             // They are dropped now.
         }
