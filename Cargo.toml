@@ -23,23 +23,24 @@ name = "concread"
 path = "src/lib.rs"
 
 [features]
+default = ["asynch", "ahash", "ebr", "maps", "arcache-is-hashtrie"]
+
 # Features to add/remove contents.
+ahash = ["dep:ahash"]
+arcache = ["maps", "lru", "crossbeam-queue"]
 asynch = ["tokio"]
 ebr = ["crossbeam-epoch"]
 maps = ["crossbeam-utils", "smallvec"]
 tcache = []
-arcache = ["maps", "lru", "crossbeam-queue"]
-# ahash is another feature here
 
 # Internal features for tweaking some align/perf behaviours.
+dhat-heap = ["dep:dhat"]
 skinny = []
 hashtrie_skinny = []
 
-default = ["asynch", "ahash", "ebr", "maps", "arcache-is-hashtrie"]
-dhat-heap = ["dep:dhat"]
-
 arcache-is-hashmap = ["arcache"]
 arcache-is-hashtrie = ["arcache"]
+simd_support = []
 
 [dependencies]
 ahash = { version = "0.8", optional = true }
