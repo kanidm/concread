@@ -118,7 +118,7 @@ mod tests {
     #[tokio::test]
     async fn test_hashmap_basic_write() {
         let hmap: HashMap<usize, usize> = HashMap::new();
-        let mut hmap_write = hmap.write().await;
+        let mut hmap_write = hmap.try_write().unwrap();
 
         hmap_write.insert(10, 10);
         hmap_write.insert(15, 15);
