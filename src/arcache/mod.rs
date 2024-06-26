@@ -2962,9 +2962,10 @@ mod tests {
     }
 
     #[allow(dead_code)]
+
     pub static RUNNING: AtomicBool = AtomicBool::new(false);
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn multi_thread_worker(arc: Arc<ARCache<Box<u32>, Box<u32>>>) {
         while RUNNING.load(Ordering::Relaxed) {
             let mut rd_txn = arc.read();
@@ -2982,6 +2983,7 @@ mod tests {
     #[allow(dead_code)]
     #[cfg_attr(miri, ignore)]
     #[cfg_attr(feature = "dhat-heap", test)]
+    #[cfg(test)]
     fn test_cache_stress_1() {
         #[cfg(feature = "dhat-heap")]
         let _profiler = dhat::Profiler::builder().trim_backtraces(None).build();
