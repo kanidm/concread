@@ -139,6 +139,7 @@ where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
 {
+    #[allow(dead_code)]
     txid: u64,
     length: usize,
     root: *mut Node<K, V>,
