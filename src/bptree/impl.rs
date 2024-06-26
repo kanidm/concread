@@ -1,6 +1,6 @@
 use crate::internals::bptree::cursor::CursorReadOps;
 use crate::internals::bptree::cursor::{CursorRead, CursorWrite, SuperBlock};
-use crate::internals::bptree::iter::{Iter, RangeIter, KeyIter, ValueIter};
+use crate::internals::bptree::iter::{Iter, KeyIter, RangeIter, ValueIter};
 use crate::internals::bptree::mutiter::RangeMutIter;
 use crate::internals::lincowcell::LinCowCellCapable;
 use std::borrow::Borrow;
@@ -24,7 +24,7 @@ use std::ops::RangeBounds;
 /// This is achieved through the use of [COW](https://en.wikipedia.org/wiki/Copy-on-write)
 /// or [MVCC](https://en.wikipedia.org/wiki/Multiversion_concurrency_control).
 /// As a write occurs, subsets of the tree are cloned into the writer thread
-/// and then commited later. This may cause memory usage to increase in exchange
+/// and then committed later. This may cause memory usage to increase in exchange
 /// for a gain in concurrent behaviour.
 ///
 /// Transactions can be rolled-back (aborted) without penalty by dropping
@@ -70,7 +70,7 @@ unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Se
 /// may be modified exclusively through this transaction without affecting
 /// readers. The write may be rolledback/aborted by dropping this guard
 /// without calling `commit()`. Once `commit()` is called, readers will be
-/// able to access and percieve changes in new transactions.
+/// able to access and perceive changes in new transactions.
 pub struct BptreeMapWriteTxn<'a, K, V>
 where
     K: Ord + Clone + Debug + Sync + Send + 'static,
@@ -89,7 +89,7 @@ where
 }
 
 /// A point-in-time snapshot of the tree from within a read OR write. This is
-/// useful for building other transactional types ontop of this structure, as
+/// useful for building other transactional types on top of this structure, as
 /// you need a way to downcast both BptreeMapReadTxn or BptreeMapWriteTxn to
 /// a singular reader type for a number of get_inner() style patterns.
 ///
@@ -239,7 +239,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     // == RW methods
 
     /// Reset this tree to an empty state. As this is within the transaction this
-    /// change only takes effect once commited.
+    /// change only takes effect once committed.
     pub fn clear(&mut self) {
         self.inner.as_mut().clear()
     }

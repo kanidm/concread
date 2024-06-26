@@ -16,7 +16,7 @@
 //!
 //! This structure is very different to the `im` crate. The `im` crate is
 //! sync + send over individual operations. This means that multiple writes can
-//! be interleaved atomicly and safely, and the readers always see the latest
+//! be interleaved atomically and safely, and the readers always see the latest
 //! data. While this is potentially useful to a set of problems, transactional
 //! structures are suited to problems where readers have to maintain consistent
 //! data views for a duration of time, cpu cache friendly behaviours and
@@ -105,7 +105,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 
     /// Commit the changes from this write transaction. Readers after this point
-    /// will be able to percieve these changes.
+    /// will be able to perceive these changes.
     ///
     /// To abort (unstage changes), just do not call this function.
     pub fn commit(self) {
@@ -218,12 +218,21 @@ mod tests {
     #[test]
     fn test_hashtrie_basic_read_write() {
         let hmap: HashTrie<usize, usize> = HashTrie::new();
-        let mut hmap_w1 = hmap.write();
+        // using try_write to get full coverage
+        let mut hmap_w1 = hmap.try_write().unwrap();
+        // just coverage things
+        assert!(hmap_w1.is_empty());
         hmap_w1.insert(10, 10);
-        hmap_w1.insert(15, 15);
+        // just coverage things
+        hmap_w1.extend([(15, 15)].into_iter());
+        assert!(!hmap_w1.is_empty());
         hmap_w1.commit();
 
+        assert_eq!(hmap.read().len(), 2);
+
         let hmap_r1 = hmap.read();
+        assert!(!hmap_r1.is_empty());
+        assert_eq!(hmap_r1.len(), 2);
         assert!(hmap_r1.contains_key(&10));
         assert!(hmap_r1.contains_key(&15));
         assert!(!hmap_r1.contains_key(&20));
@@ -244,12 +253,14 @@ mod tests {
 
     #[test]
     fn test_hashtrie_basic_read_snapshot() {
-        let hmap: HashTrie<usize, usize> = HashTrie::new();
+        let hmap: HashTrie<usize, usize> = HashTrie::default();
         let mut hmap_w1 = hmap.write();
         hmap_w1.insert(10, 10);
         hmap_w1.insert(15, 15);
 
         let snap = hmap_w1.to_snapshot();
+        assert!(!snap.is_empty());
+        assert_eq!(snap.len(), 2);
         assert!(snap.contains_key(&10));
         assert!(snap.contains_key(&15));
         assert!(!snap.contains_key(&20));
@@ -259,12 +270,16 @@ mod tests {
     fn test_hashtrie_basic_iter() {
         let hmap: HashTrie<usize, usize> = HashTrie::new();
         let mut hmap_w1 = hmap.write();
-        assert!(hmap_w1.iter().count() == 0);
+        assert_eq!(hmap_w1.iter().count(), 0);
 
         hmap_w1.insert(10, 10);
         hmap_w1.insert(15, 15);
 
-        assert!(hmap_w1.iter().count() == 2);
+        assert_eq!(hmap_w1.iter().count(), 2);
+        hmap_w1.commit();
+
+        let hmap_read = hmap.read();
+        assert_eq!(hmap_read.iter().count(), 2);
     }
 
     #[test]
@@ -274,6 +289,14 @@ mod tests {
         assert!(hmap_r2.contains_key(&10));
         assert!(hmap_r2.contains_key(&15));
         assert!(hmap_r2.contains_key(&20));
+    }
+    #[test]
+    fn test_hashtrie_keys() {
+        let hmap: HashTrie<usize, usize> = vec![(10, 10), (15, 15), (20, 20)].into_iter().collect();
+        let hmap_read = hmap.read();
+        assert!(hmap_read.keys().find(|&&x| x == 10).is_some());
+        let hmap_write = hmap.write();
+        assert!(hmap_write.keys().find(|&&x| x == 10).is_some());
     }
 
     #[test]

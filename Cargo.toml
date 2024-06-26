@@ -8,7 +8,13 @@ documentation = "https://docs.rs/concread/latest/concread/"
 homepage = "https://github.com/kanidm/concread/"
 repository = "https://github.com/kanidm/concread/"
 readme = "README.md"
-keywords = ["concurrency", "lru", "mvcc", "copy-on-write", "transactional-memory"]
+keywords = [
+    "concurrency",
+    "lru",
+    "mvcc",
+    "copy-on-write",
+    "transactional-memory",
+]
 categories = ["data-structures", "memory-management", "caching", "concurrency"]
 license = "MPL-2.0"
 
@@ -17,23 +23,24 @@ name = "concread"
 path = "src/lib.rs"
 
 [features]
+default = ["asynch", "ahash", "ebr", "maps", "arcache-is-hashtrie"]
+
 # Features to add/remove contents.
+ahash = ["dep:ahash"]
+arcache = ["maps", "lru", "crossbeam-queue"]
 asynch = ["tokio"]
 ebr = ["crossbeam-epoch"]
 maps = ["crossbeam-utils", "smallvec"]
 tcache = []
-arcache = ["maps", "lru", "crossbeam-queue"]
-# ahash is another feature here
 
-# Internal features for tweaking some alighn/perf behaviours.
+# Internal features for tweaking some align/perf behaviours.
+dhat-heap = ["dep:dhat"]
 skinny = []
 hashtrie_skinny = []
 
-default = ["asynch", "ahash", "ebr", "maps", "arcache-is-hashtrie"]
-dhat-heap = ["dep:dhat"]
-
 arcache-is-hashmap = ["arcache"]
 arcache-is-hashtrie = ["arcache"]
+simd_support = []
 
 [dependencies]
 ahash = { version = "0.8", optional = true }
@@ -52,7 +59,11 @@ tracing = "0.1"
 [dev-dependencies]
 criterion = { version = "0.3", features = ["html_reports"] }
 rand = "0.8"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "std", "fmt"] }
+tracing-subscriber = { version = "0.3", features = [
+    "env-filter",
+    "std",
+    "fmt",
+] }
 uuid = "1.0"
 function_name = "0.3"
 serde_json = "1.0"
@@ -65,5 +76,4 @@ harness = false
 [[bench]]
 name = "arccache"
 harness = false
-
-
+required-features = ["tcache"]

@@ -13,6 +13,7 @@ use std::ptr;
 use serde::de::{Deserialize, MapAccess, Visitor};
 
 pub(crate) unsafe fn slice_insert<T>(slice: &mut [T], new: T, idx: usize) {
+    // miri doesn't like this
     ptr::copy(
         slice.as_ptr().add(idx),
         slice.as_mut_ptr().add(idx + 1),

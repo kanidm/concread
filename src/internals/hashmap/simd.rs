@@ -116,13 +116,7 @@ where
 {
     debug_assert!(h < u64::MAX);
 
-    for cand_idx in 0..leaf.slots() {
-        if h == unsafe { leaf.ctrl.a.1[cand_idx] } {
-            return Some(cand_idx);
-        }
-    }
-
-    None
+    (0..leaf.slots()).find(|&cand_idx| h == unsafe { leaf.ctrl.a.1[cand_idx] })
 }
 
 #[cfg(feature = "simd_support")]

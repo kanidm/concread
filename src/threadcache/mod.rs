@@ -216,7 +216,7 @@ where
     /// Commit the changes to this cache so they are visible to others. If you do NOT call
     /// commit, all changes to this cache are rolled back to prevent invalidate states.
     pub fn commit(mut self) {
-        // We are commiting, so lets get ready.
+        // We are committing, so let's get ready.
         // First, anything that we touched in the rollback set will need
         // to be invalidated from other caches. It doesn't matter if we
         // removed or inserted, it has the same effect on them.

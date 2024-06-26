@@ -21,7 +21,7 @@ use std::iter::FromIterator;
 /// in time.
 ///
 /// This is achieved through the use of COW or MVCC. As a write occurs
-/// subsets of the tree are cloned into the writer thread and then commited
+/// subsets of the tree are cloned into the writer thread and then committed
 /// later. This may cause memory usage to increase in exchange for a gain
 /// in concurrent behaviour.
 ///
@@ -59,7 +59,7 @@ where
 /// may be modified exclusively through this transaction without affecting
 /// readers. The write may be rolledback/aborted by dropping this guard
 /// without calling `commit()`. Once `commit()` is called, readers will be
-/// able to access and percieve changes in new transactions.
+/// able to access and perceive changes in new transactions.
 pub struct HashMapWriteTxn<'a, K, V>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
@@ -78,7 +78,7 @@ where
 }
 
 /// A point-in-time snapshot of the tree from within a read OR write. This is
-/// useful for building other transactional types ontop of this structure, as
+/// useful for building other transactional types on top of this structure, as
 /// you need a way to downcast both HashMapReadTxn or HashMapWriteTxn to
 /// a singular reader type for a number of get_inner() style patterns.
 ///
@@ -118,20 +118,16 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 }
 
-impl<
-        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
-        V: Clone + Sync + Send + 'static,
-    > Extend<(K, V)> for HashMapWriteTxn<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    Extend<(K, V)> for HashMapWriteTxn<'_, K, V>
 {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         self.inner.as_mut().extend(iter);
     }
 }
 
-impl<
-        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
-        V: Clone + Sync + Send + 'static,
-    > HashMapWriteTxn<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    HashMapWriteTxn<'_, K, V>
 {
     /*
     pub(crate) fn prehash<Q>(&self, k: &Q) -> u64
@@ -197,8 +193,8 @@ impl<
     }
 
     /// Reset this map to an empty state. As this is within the transaction this
-    /// change only takes effect once commited. Once cleared, you can begin adding
-    /// new writes and changes, again, that will only be visible once commited.
+    /// change only takes effect once committed. Once cleared, you can begin adding
+    /// new writes and changes, again, that will only be visible once committed.
     pub fn clear(&mut self) {
         self.inner.as_mut().clear()
     }
@@ -236,10 +232,8 @@ impl<
     }
 }
 
-impl<
-        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
-        V: Clone + Sync + Send + 'static,
-    > HashMapReadTxn<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    HashMapReadTxn<'_, K, V>
 {
     pub(crate) fn get_prehashed<Q>(&self, k: &Q, k_hash: u64) -> Option<&V>
     where
@@ -303,10 +297,8 @@ impl<
     }
 }
 
-impl<
-        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
-        V: Clone + Sync + Send + 'static,
-    > HashMapReadSnapshot<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
+    HashMapReadSnapshot<'_, K, V>
 {
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
@@ -375,4 +367,3 @@ impl<
         }
     }
 }
-

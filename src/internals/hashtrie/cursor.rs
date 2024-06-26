@@ -33,8 +33,7 @@ use std::hash::{BuildHasher, Hash, Hasher};
 #[cfg(feature = "hashtrie_skinny")]
 pub(crate) const MAX_HEIGHT: u64 = 8;
 // The true absolute max height
-#[cfg(feature = "hashtrie_skinny")]
-#[cfg(test)]
+#[cfg(all(feature = "hashtrie_skinny", any(test, debug_assertions)))]
 const ABS_MAX_HEIGHT: u64 = 21;
 #[cfg(feature = "hashtrie_skinny")]
 pub(crate) const HT_CAPACITY: usize = 8;
@@ -47,8 +46,7 @@ const SHIFT: u64 = 3;
 // This defines the max height of our tree. Gives 16777216.0 entries
 #[cfg(not(feature = "hashtrie_skinny"))]
 pub(crate) const MAX_HEIGHT: u64 = 6;
-#[cfg(not(feature = "hashtrie_skinny"))]
-#[cfg(test)]
+#[cfg(all(not(feature = "hashtrie_skinny"), any(test, debug_assertions)))]
 const ABS_MAX_HEIGHT: u64 = 16;
 #[cfg(not(feature = "hashtrie_skinny"))]
 pub(crate) const HT_CAPACITY: usize = 16;
@@ -418,8 +416,11 @@ where
 impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
     /// 🔥 🔥 🔥
     pub unsafe fn new() -> Self {
-        #[cfg(debug)]
-        assert!(MAX_HEIGHT <= ABS_MAX_HEIGHT);
+        #[allow(clippy::assertions_on_constants)]
+        {
+            #[cfg(any(test, debug_assertions))]
+            assert!(MAX_HEIGHT <= ABS_MAX_HEIGHT);
+        }
 
         let b: Box<Branch<K, V>> = Branch::new();
         let root = Ptr::from(b);
@@ -851,7 +852,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
                         let v = if tgt_ptr.is_dirty() {
                             let tgt_bkt_mut = tgt_ptr.as_bucket_mut::<K, V>();
                             let Datum { v, .. } = tgt_bkt_mut.remove(0);
-                            // Keep any pointer that ISNT the one we are oob freeing.
+                            // Keep any pointer that ISN'T the one we are oob freeing.
                             self.first_seen.retain(|e| *e != tgt_ptr);
                             tgt_ptr.free::<K, V>();
                             v

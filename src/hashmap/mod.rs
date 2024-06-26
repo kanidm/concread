@@ -11,7 +11,7 @@
 //!
 //! This structure is very different to the `im` crate. The `im` crate is
 //! sync + send over individual operations. This means that multiple writes can
-//! be interleaved atomicly and safely, and the readers always see the latest
+//! be interleaved atomically and safely, and the readers always see the latest
 //! data. While this is potentially useful to a set of problems, transactional
 //! structures are suited to problems where readers have to maintain consistent
 //! data views for a duration of time, cpu cache friendly behaviours and
@@ -81,10 +81,10 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 
     #[cfg(all(feature = "arcache", feature = "arcache-is-hashmap"))]
-    pub(crate) fn prehash<Q: ?Sized>(&self, k: &Q) -> u64
+    pub(crate) fn prehash<Q>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.inner.as_ref().hash_key(k)
     }
@@ -99,7 +99,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 
     /// Commit the changes from this write transaction. Readers after this point
-    /// will be able to percieve these changes.
+    /// will be able to perceive these changes.
     ///
     /// To abort (unstage changes), just do not call this function.
     pub fn commit(self) {
@@ -116,10 +116,10 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 
     #[cfg(all(feature = "arcache", feature = "arcache-is-hashmap"))]
-    pub(crate) fn prehash<Q: ?Sized>(&self, k: &Q) -> u64
+    pub(crate) fn prehash<Q>(&self, k: &Q) -> u64
     where
         K: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.inner.as_ref().hash_key(k)
     }
@@ -183,7 +183,7 @@ mod tests {
         let mut hmap_write = hmap.write();
 
         hmap_write.insert(10, 10);
-        hmap_write.insert(15, 15);
+        hmap_write.extend(vec![(15, 15)]);
 
         assert!(hmap_write.contains_key(&10));
         assert!(hmap_write.contains_key(&15));
@@ -201,6 +201,9 @@ mod tests {
         assert!(hmap_write.contains_key(&15));
 
         assert!(hmap_write.remove(&30).is_none());
+        assert!(!hmap_write.is_empty());
+
+        assert_eq!(hmap_write.keys().count(), 1);
 
         hmap_write.clear();
         assert!(!hmap_write.contains_key(&10));
@@ -223,6 +226,9 @@ mod tests {
 
         let mut hmap_w2 = hmap.write();
         hmap_w2.insert(20, 20);
+        assert!(!hmap_w2.is_empty());
+        assert_eq!(hmap_w2.keys().count(), 3);
+        assert_eq!(hmap_w2.len(), 3);
         hmap_w2.commit();
 
         assert!(hmap_r1.contains_key(&10));
@@ -233,11 +239,14 @@ mod tests {
         assert!(hmap_r2.contains_key(&10));
         assert!(hmap_r2.contains_key(&15));
         assert!(hmap_r2.contains_key(&20));
+        assert!(!hmap_r2.is_empty());
+        assert_eq!(hmap_r2.len(), 3);
+        assert_eq!(hmap_r2.keys().count(), 3);
     }
 
     #[test]
     fn test_hashmap_basic_read_snapshot() {
-        let hmap: HashMap<usize, usize> = HashMap::new();
+        let hmap: HashMap<usize, usize> = HashMap::default();
         let mut hmap_w1 = hmap.write();
         hmap_w1.insert(10, 10);
         hmap_w1.insert(15, 15);
@@ -246,6 +255,18 @@ mod tests {
         assert!(snap.contains_key(&10));
         assert!(snap.contains_key(&15));
         assert!(!snap.contains_key(&20));
+        hmap_w1.commit();
+
+        let hmap_read = hmap.read();
+        let snap = hmap_read.to_snapshot();
+        assert!(snap.contains_key(&10));
+        assert!(snap.contains_key(&15));
+        assert!(!snap.contains_key(&20));
+        assert_eq!(snap.len(), 2);
+        assert!(!snap.is_empty());
+        assert!(snap.iter().find(|(_k, v)| **v == 10).is_some());
+        assert_eq!(snap.values().count(), 2);
+        assert_eq!(snap.keys().count(), 2);
     }
 
     #[test]
@@ -258,6 +279,9 @@ mod tests {
         hmap_w1.insert(15, 15);
 
         assert!(hmap_w1.iter().count() == 2);
+
+        let hmap_r1 = hmap.read();
+        assert!(hmap_r1.iter().count() == 0);
     }
 
     #[test]
@@ -281,5 +305,38 @@ mod tests {
         let mut vec: Vec<(usize, usize)> = hmap.read().iter().map(|(k, v)| (*k, *v)).collect();
         vec.sort_unstable();
         assert_eq!(vec, [(10, 11), (15, 16), (20, 21)]);
+    }
+
+    #[test]
+    fn test_hashmap_keys() {
+        let hmap: HashMap<usize, usize> = vec![(10, 10), (15, 15), (20, 20)].into_iter().collect();
+        let hmap_read = hmap.read();
+        assert!(hmap_read.keys().find(|&&x| x == 10).is_some());
+        let hmap_write = hmap.write();
+        assert!(hmap_write.keys().find(|&&x| x == 10).is_some());
+    }
+    #[test]
+    fn test_hashmap_values() {
+        let hmap: HashMap<usize, usize> = vec![(10, 11), (15, 15), (20, 20)].into_iter().collect();
+        let hmap_read = hmap.read();
+        assert!(hmap_read.values().find(|&&x| x == 11).is_some());
+        let hmap_write = hmap.write();
+        assert!(hmap_write.values().find(|&&x| x == 11).is_some());
+    }
+
+    #[test]
+    fn test_write_snapshot_bits() {
+        let hmap: HashMap<usize, usize> = vec![(10, 11), (15, 15), (20, 20)].into_iter().collect();
+        let hmap_write = hmap.write();
+        let hmap_write_snapshot = hmap_write.to_snapshot();
+        assert!(!hmap_write_snapshot.is_empty());
+        assert_eq!(hmap_write_snapshot.len(), 3);
+        assert!(hmap_write_snapshot.contains_key(&10));
+        assert!(hmap_write_snapshot.values().find(|&&x| x == 11).is_some());
+        assert!(hmap_write_snapshot.values().find(|&&x| x == 10).is_none());
+        assert!(hmap_write_snapshot.keys().find(|&&x| x == 10).is_some());
+        assert!(hmap_write_snapshot.keys().find(|&&x| x == 11).is_none());
+        assert!(hmap_write_snapshot.keys().find(|&&x| x == 10).is_some());
+        assert!(hmap_write_snapshot.iter().count() == 3);
     }
 }

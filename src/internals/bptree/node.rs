@@ -659,7 +659,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
                 if self.count() >= L_CAPACITY {
                     // Overflow to a new node
                     if idx >= self.count() {
-                        // Greate than all else, split right
+                        // Greater than all else, split right
                         let rnode = Node::new_leaf_ins(self.meta.0, k, v);
                         LeafInsertState::Split(rnode)
                     } else if idx == 0 {
@@ -1115,7 +1115,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
             // leaf when it grows, it splits to the right. That importantly
             // means that we only need to insert to replace the min and it's
             // right leaf, or anything higher. As a result, we are always
-            // targetting ins_idx and leaf_ins_idx = ins_idx + 1.
+            // targeting ins_idx and leaf_ins_idx = ins_idx + 1.
             //
             // We have a situation like:
             //
@@ -1343,7 +1343,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         //    /    \    /
         //   l1    l2  r1
         //
-        // This means rbranch issues a cloneshrink to root. clone shrink must contain the remainer
+        // This means rbranch issues a cloneshrink to root. clone shrink must contain the remainder
         // so that it can be reparented:
         //
         //          root
@@ -1360,7 +1360,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         //
         // So, we have to analyse the situation.
         //  * Have left or right been emptied? (how to handle when branches)
-        //  * Is left or right belowe a reasonable threshold?
+        //  * Is left or right below a reasonable threshold?
         //  * Does the opposite have capacity to remain valid?
 
         debug_assert_branch!(self);
@@ -1509,7 +1509,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         debug_assert!(self.count() > right.count());
         // Starting index of where we move from. We work normally from a branch
         // with only zero (but the base) branch item, but we do the math anyway
-        // to be sure incase we change later.
+        // to be sure in case we change later.
         //
         // So, self.len must be larger, so let's give a few examples here.
         //  4 = 7 - (7 + 0) / 2 (will move 4, 5, 6)
@@ -1756,7 +1756,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
                     BranchTrimState::Promote(rnode)
                 } else {
                     // * A key is between two values. We can remove everything less, but not
-                    //   the assocated. For example, remove 6 would cause n1, n2 to be removed, but
+                    //   the associated. For example, remove 6 would cause n1, n2 to be removed, but
                     //   the prune/walk will have to examine n3 to know about further changes.
                     debug_assert!(idx > 0);
 
@@ -2108,7 +2108,7 @@ mod tests {
         }
         assert!(leaf.count() == 1);
         assert!(leaf.max() == &(L_CAPACITY - 1));
-        // Remove a non-existant value.
+        // Remove a non-existent value.
         let r = leaf.remove(&(L_CAPACITY + 20));
         if let LeafRemoveState::Ok(None) = r {
             // Ok!
@@ -2124,7 +2124,7 @@ mod tests {
             assert!(false);
         }
         assert!(leaf.count() == 0);
-        // Remove non-existant post shrink. Should never happen
+        // Remove non-existent post shrink. Should never happen
         // but safety first!
         let r = leaf.remove(&0);
         if let LeafRemoveState::Shrink(None) = r {
@@ -2285,7 +2285,7 @@ mod tests {
         assert!(branch_ref.verify());
         // Test .min works on our descendants
         assert!(branch_ref.min() == &10);
-        // Test .max works on our descendats.
+        // Test .max works on our descendants.
         assert!(branch_ref.max() == &(20 + L_CAPACITY - 1));
         // Get some k within the leaves.
         assert!(branch_ref.get_ref(&11) == Some(&11));

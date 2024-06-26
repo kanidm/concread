@@ -1,18 +1,16 @@
+# Concurrent Adaptive Replacement Cache
 
-Concurrent Adaptive Replacement Cache
 William Brown, SUSE Labs
-wbrown@suse.de
+<wbrown@suse.de>
 
 2020-04-23
-
-# Concurrent Adaptive Replacement Cache
 
 Caching is a very important aspect of computing, helping to improve the performance of applications
 based on various work factors. Modern systems (especially servers)  are highly concurrent, so it is
 important that we are able to provide caching strategies for concurrent systems. However, to date
 the majority of work in concurrent data-structures has focused on lock free or systems that do not
 require transactional guarantees. While this is applicable in many cases, it does not suit all
-applications, limiting many applications to mutexs or read-write locks around existing
+applications, limiting many applications to mutexes or read-write locks around existing
 data-structures.
 
 In this document, I will present a strategy to create a concurrently readable adaptive replacement
@@ -33,10 +31,10 @@ point within a timeline into the past [fn 0].
 
 This is due to each CPU's cache being independent to the caches of every other CPU in a system, both
 within a die package and across a NUMA boundary. Updates to the memory from one CPU, requires
-coordination based on the MESI [r 0]. Each cache maintains it's own MESI state machine, and
+coordination based on the MESI [r 0]. Each cache maintains its own MESI state machine, and
 they coordinate through inter-processor communication when required.
 
-Examining MESI, it becomes apparent that it's best to keep cache-lines from becoming `Invalid` as 
+Examining MESI, it becomes apparent that it's best to keep cache-lines from becoming `Invalid` as
 this state causes the highest level of inter processor communication to validate the content of the cache
 which adds significant delays to any operation.
 
@@ -95,13 +93,8 @@ cache max. As p increases, ghost-frequent and recent are increased in size, whil
 decrease. This way as items are evicted and `p` shifts, we do not have a set of infinite items that
 may cause evictions or `p` shifts unexpectedly.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/arc_1.png" width="60%" height="auto" />
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/arc_2.png" width="60%" height="auto" />
-</p>
+![ARC Diagram 1](static/arc_1.png)
+![ARC Diagram 2](static/arc_2.png)
 
 With the cache always adapting `p` between recent inclusions and high frequency accesses, the
 cache is able to satisfy a variety of workloads, and other research [r 7] has shown it has a better hit
@@ -110,7 +103,7 @@ resistant to a number of cache invalidation/poisoning patterns such as repeated 
 items to never be evicted (affects LFU) or scans of large sets causing complete eviction (affects LRU).
 
 To explain, an item that is in the frequent set that is accessed many times in an LFU, would not
-be able to be evicted as it's counter has become very high and another item would need as many hits
+be able to be evicted as its counter has become very high and another item would need as many hits
 to displace it - this may cause stale data to remain in the cache. However in ARC, if a frequent item
 is accessed many times, but then different data becomes accessed highly, this would cause demand on
 recent and then promotions to frequent, which would quickly displace the item that previously was
@@ -122,7 +115,7 @@ set would cause a change in the weight of `p`, so any other items stored in the 
 not be evicted due to the scan.
 
 This makes ARC an attractive choice for an application cache, and as mentioned has already been
-proven through it's use in systems like ZFS, and even the Linux Memory Management subsystem
+proven through its use in systems like ZFS, and even the Linux Memory Management subsystem
 has considered ARC viable [r 8].
 
 However, due to the presence of multiple linked lists, and the updates required such as moving items
@@ -142,17 +135,9 @@ of a minimal set of nodes. For example, given a tree where each node has 7 desce
 tree has 823543 nodes (4941258 key value pairs), to update a single node only requires 6 nodes
 to be copied.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_1.png" width="60%" height="auto" />
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_2.png" width="60%" height="auto" />
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_3.png" width="60%" height="auto" />
-</p>
+![COW Diagram 1](static/cow_1.png)
+![COW Diagram 2](static/cow_2.png)
+![COW Diagram 3](static/cow_3.png)
 
 This copy on write property as previously described has a valuable property that if we preserve
 previous tree roots, they remain valid and whole trees, where new roots point to their own complete
@@ -239,9 +224,7 @@ the set. This creates the following pseudo structures:
 The majority of the challenge is during the writer commit. To understand this we need to understand
 what the readers and writers are doing and how they communicate to the commit phase.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_1.png" width="60%" height="auto" />
-</p>
+![CoW ARC](static/cow_arc_1.png)
 
 A reader acts like a normal cache - on a request it attempts to find the item in its thread local
 set. If it is found, we return the item. If it is not found, we attempt to search the
@@ -255,9 +238,7 @@ thread local set of items relevant to that operation. In addition, when an item 
 thread local set, an inclusion message is sent to the channel, consisting of `Inc(K, V, transaction_id, timestamp)`.
 This transaction id is from the read only cache transaction that is occurring.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_2.png" width="60%" height="auto" />
-</p>
+![CoW ARC 2](static/cow_arc_2.png)
 
 At the end of the read operation, the thread local set is discarded - any included items have been
 sent via the channel already. This allows long running readers to influence the commits of
@@ -265,14 +246,12 @@ shorter reader cycles, so that other readers that may spawn can benefit from the
 this reader.
 
 The writer acts in a very similar manner. During its operation, cache misses are stored into
-the thread local set, and hit's are store in the hit array. Dirty items (new, or modified) may
+the thread local set, and hits are stored in the hit array. Dirty items (new, or modified) may
 be stored in the thread local set. By searching the thread local set first, we will always
 return items that are relevant to this operation that may have been dirtied by the current
 thread.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_3.png" width="60%" height="auto" />
-</p>
+![CoW ARC 3](static/cow_arc_3.png)
 
 A writer does *not* alter the properties of the Arc during its operation - this is critical, as
 it allows the writer to be rolled back at any time, without affecting the state of the cache
@@ -292,9 +271,7 @@ The commit then drains the complete writer thread local state into the main cach
 cache item states as each item is implied as a hit or inclusion event. Each item's transaction
 id is updated to the transaction id of the writer.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_4.png" width="60%" height="auto" />
-</p>
+![CoW ARC 4](static/cow_arc_4.png)
 
 Next the commit drains from the mpsc channel until it is empty or the hit or include items timestamp
 exceeds the timestamp from the start of the commit operation. This exists so that a commit will not
@@ -303,9 +280,7 @@ commit phase began. Items from the channel are included only if their transactio
 or greater than the transaction id of the item existing in the cache. If the transaction id is
 lower, this acts as a hit instead of an inclusion to affect the weightings of the caches.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_5.png" width="60%" height="auto" />
-</p>
+![CoW ARC 5](static/cow_arc_5.png)
 
 This detail, where items are only updated if their transaction id is greater or equal is one of
 the most important to maintain temporal consistency, and is the reason for the existence of the
@@ -338,25 +313,17 @@ The commit then drains the writer hit set into the cache. This is because the wr
 somewhat in time after the readers, so it's an approximation of temporal ordering of events, and
 gives weight to the written items in the cache from being evicted suddenly.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_6.png" width="60%" height="auto" />
-</p>
+![CoW ARC 6](static/cow_arc_6.png)
 
 Finally, the caches are evicted to their relevant sizes based on the updates to the p weight
 factor. All items that are evicted are sent to the haunted set with the current transaction id
 to protect them from incorrect inclusion in the future.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_7.png" width="60%" height="auto" />
-</p>
+![CoW ARC 7](static/cow_arc_7.png)
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_8.png" width="60%" height="auto" />
-</p>
+![CoW ARC 8](static/cow_arc_8.png)
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Firstyear/concread/master/static/cow_arc_9.png" width="60%" height="auto" />
-</p>
+![CoW ARC 9](static/cow_arc_9.png)
 
 ## Side Effects of this Algorithm
 
@@ -372,7 +339,7 @@ always maintain a near perfect amount of items in memory based on the requested 
 will regularly, and almost always exceed that. This is because the included items in the queue
 are untracked, each thread has a thread local set, the haunted set must keep all keys
 ever perceived and that during the commit phase items are not evicted until the entire state is
-known causing ballooning. As a result implementors or deployments may need to reduce the cache size
+known causing ballooning. As a result implementers or deployments may need to reduce the cache size
 to prevent exceeding memory limits. On a modern system however, this may not be a concern in
 many cases however.
 
@@ -398,19 +365,18 @@ Some examples are:
 
 ## References
 
-* 0 - https://en.wikipedia.org/wiki/MESI_protocol
-* 1 - https://web.archive.org/web/20100329071954/http://www.almaden.ibm.com/StorageSystems/projects/arc/
-* 2 - https://www.usenix.org/system/files/login/articles/1180-Megiddo.pdf
-* 3 - https://www.zfsbuild.com/2010/04/15/explanation-of-arc-and-l2arc/
-* 4 - https://domino.research.ibm.com/library/cyberdig.nsf/papers/6E1C5B6A1B6EDD9885257A38006B6130/$File/rj10501.pdf
-* 5 - http://www.wiredtiger.com/
-* 6 - https://en.wikipedia.org/wiki/Cache_replacement_policies#B%C3%A9l%C3%A1dy's_algorithm
-* 7 - http://www.cs.biu.ac.il/~wiseman/2os/2os/os2.pdf
-* 8 - https://linux-mm.org/AdvancedPageReplacement
+* 0 - <https://en.wikipedia.org/wiki/MESI_protocol>
+* 1 - <https://web.archive.org/web/20100329071954/http://www.almaden.ibm.com/StorageSystems/projects/arc/>
+* 2 - <https://www.usenix.org/system/files/login/articles/1180-Megiddo.pdf>
+* 3 - <https://www.zfsbuild.com/2010/04/15/explanation-of-arc-and-l2arc/>
+* 4 - <https://domino.research.ibm.com/library/cyberdig.nsf/papers/6E1C5B6A1B6EDD9885257A38006B6130/$File/rj10501.pdf>
+* 5 - <http://www.wiredtiger.com/>
+* 6 - <https://en.wikipedia.org/wiki/Cache_replacement_policies#B%C3%A9l%C3%A1dy's_algorithm>
+* 7 - <http://www.cs.biu.ac.il/~wiseman/2os/2os/os2.pdf>
+* 8 - <https://linux-mm.org/AdvancedPageReplacement>
 
 ## Footnote
 
 * 0 - It is yet unknown to the author if it is possible to have a CPU with the capability of predicting
 the future content of memory and being able to cache that reliably, but I'm sure that someone is trying
 to develop it.
-
