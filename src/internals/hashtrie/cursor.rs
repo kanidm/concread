@@ -851,7 +851,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
                         let v = if tgt_ptr.is_dirty() {
                             let tgt_bkt_mut = tgt_ptr.as_bucket_mut::<K, V>();
                             let Datum { v, .. } = tgt_bkt_mut.remove(0);
-                            // Keep any pointer that ISNT the one we are oob freeing.
+                            // Keep any pointer that ISN'T the one we are oob freeing.
                             self.first_seen.retain(|e| *e != tgt_ptr);
                             tgt_ptr.free::<K, V>();
                             v

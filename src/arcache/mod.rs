@@ -1547,8 +1547,8 @@ impl<
         // Inserts are accepted.
     }
 
-    /// Attempt to retieve a k-v pair from the cache. If it is present in the main cache OR
-    /// the thread local cache, a `Some` is returned, else you will recieve a `None`. On a
+    /// Attempt to retrieve a k-v pair from the cache. If it is present in the main cache OR
+    /// the thread local cache, a `Some` is returned, else you will receive a `None`. On a
     /// `None`, you must then consult the external data source that this structure is acting
     /// as a cache for.
     pub fn get<Q>(&mut self, k: &Q) -> Option<&V>
@@ -1890,8 +1890,8 @@ impl<
         S: ARCacheReadStat + Clone,
     > ARCacheReadTxn<'_, K, V, S>
 {
-    /// Attempt to retieve a k-v pair from the cache. If it is present in the main cache OR
-    /// the thread local cache, a `Some` is returned, else you will recieve a `None`. On a
+    /// Attempt to retrieve a k-v pair from the cache. If it is present in the main cache OR
+    /// the thread local cache, a `Some` is returned, else you will receive a `None`. On a
     /// `None`, you must then consult the external data source that this structure is acting
     /// as a cache for.
     pub fn get<Q>(&mut self, k: &Q) -> Option<&V>
@@ -2022,7 +2022,7 @@ impl<
     /// Note that is invalid to insert an item who's key already exists in this thread local cache,
     /// and this is asserted IE will panic if you attempt this. It is also invalid for you to insert
     /// a value that does not match the source-of-truth state, IE inserting a different
-    /// value than another thread may percieve. This is a *read* thread, so you should only be adding
+    /// value than another thread may perceive. This is a *read* thread, so you should only be adding
     /// values that are relevant to this read transaction and this point in time. If you do not
     /// heed this warning, you may alter the fabric of time and space and have some interesting
     /// distortions in your data over time.
@@ -2846,7 +2846,7 @@ mod tests {
         );
         wr_txn.commit();
 
-        // Now once commited, the proper sizes kick in.
+        // Now once committed, the proper sizes kick in.
 
         let wr_txn = arc.write();
         eprintln!("{:?}", wr_txn.peek_stat());

@@ -55,7 +55,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     HashMapWriteTxn<'_, K, V>
 {
     /// Commit the changes from this write transaction. Readers after this point
-    /// will be able to percieve these changes.
+    /// will be able to perceive these changes.
     ///
     /// To abort (unstage changes), just do not call this function.
     pub fn commit(self) {

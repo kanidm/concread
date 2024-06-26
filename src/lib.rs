@@ -64,7 +64,7 @@ pub mod threadcache;
 // This is where the scary rust lives.
 #[cfg(feature = "maps")]
 pub mod internals;
-// This is where the gud rust lives.
+// This is where the good rust lives.
 #[cfg(feature = "maps")]
 mod utils;
 

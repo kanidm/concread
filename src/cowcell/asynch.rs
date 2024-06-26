@@ -121,9 +121,9 @@ where
     }
 
     fn commit(&self, newdata: Option<T>) {
-        if let Some(nd) = newdata {
+        if let Some(new_data) = newdata {
             // now over-write the last value in the `ArcSwap`.
-            self.active.store(Arc::new(nd));
+            self.active.store(Arc::new(new_data));
         }
         // If not some, we do nothing.
         // Done

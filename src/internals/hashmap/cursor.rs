@@ -197,7 +197,7 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
 
     #[cfg(test)]
     fn get_tree_density(&self) -> (usize, usize, usize) {
-        // Walk the tree and calculate the packing effeciency.
+        // Walk the tree and calculate the packing efficiency.
         let rref = self.get_root_ref();
         rref.tree_density()
     }
@@ -731,7 +731,7 @@ fn clone_and_insert<K: Clone + Hash + Eq + Debug, V: Clone>(
                     }
                     CRInsertState::NoClone(_res) => {
                         // If our descendant did not clone, then we don't have to either.
-                        unreachable!("Shoud never be possible.");
+                        unreachable!("Should never be possible.");
                         // CRInsertState::NoClone(res)
                     }
                     CRInsertState::Split(_rnode) => {
@@ -950,7 +950,7 @@ fn clone_and_remove<K: Clone + Hash + Eq + Debug, V: Clone>(
                                 CRRemoveState::Clone(res, cnode)
                             }
                             BranchShrinkState::Shrink(dnode) => {
-                                // Right was merged to left, but we have now falled under the needed
+                                // Right was merged to left, but we have now fallen under the needed
                                 // amount of values.
                                 // println!("ls push 21 {:?}", dnode);
                                 debug_assert!(!last_seen.contains(&dnode));
@@ -995,7 +995,7 @@ fn clone_and_remove<K: Clone + Hash + Eq + Debug, V: Clone>(
                                 CRRemoveState::NoClone(res)
                             }
                             BranchShrinkState::Shrink(dnode) => {
-                                // Right was merged to left, but we have now falled under the needed
+                                // Right was merged to left, but we have now fallen under the needed
                                 // amount of values, so we begin to shrink up.
                                 // println!("ls push 23 {:?}", dnode);
                                 debug_assert!(!last_seen.contains(&dnode));
@@ -1027,7 +1027,7 @@ fn clone_and_remove<K: Clone + Hash + Eq + Debug, V: Clone>(
                                 CRRemoveState::NoClone(res)
                             }
                             BranchShrinkState::Shrink(dnode) => {
-                                // Right was merged to left, but we have now falled under the needed
+                                // Right was merged to left, but we have now fallen under the needed
                                 // amount of values.
                                 // println!("ls push 25 {:?}", dnode);
                                 debug_assert!(!last_seen.contains(&dnode));
@@ -1221,7 +1221,7 @@ mod tests {
         //       ^
         //        \----- nnode
         //
-        //  Check leaf split inbetween l/sl (new txn)
+        //  Check leaf split in between l/sl (new txn)
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
@@ -1278,7 +1278,7 @@ mod tests {
         //       ^
         //        \----- nnode
         //
-        //  Check leaf split inbetween l/sl (same txn)
+        //  Check leaf split in between l/sl (same txn)
         //
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
@@ -1584,7 +1584,7 @@ mod tests {
         // Check that a single value can be removed correctly without change.
         // Check that a missing value is removed as "None".
         // Check that emptying the root is ok.
-        // BOTH of these need new txns to check clone, and then re-use txns.
+        // BOTH of these need new txns to check clone, and then reuse txns.
         //
         //
         let lnode = create_leaf_node_full(0);

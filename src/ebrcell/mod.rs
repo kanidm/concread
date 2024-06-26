@@ -187,7 +187,7 @@ where
         })
     }
 
-    /// This is an internal compontent of the commit cycle. It takes ownership
+    /// This is an internal component of the commit cycle. It takes ownership
     /// of the value stored in the writetxn, and commits it to the main EbrCell
     /// safely.
     ///
@@ -257,7 +257,7 @@ pub struct EbrCellReadTxn<T> {
 impl<T> Deref for EbrCellReadTxn<T> {
     type Target = T;
 
-    /// Derference and access the value within the read transaction.
+    /// De-reference and access the value within the read transaction.
     fn deref(&self) -> &T {
         unsafe { &(*self.data) }
     }

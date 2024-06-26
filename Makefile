@@ -19,7 +19,8 @@ clippy:
 	cargo clippy --features arcache
 
 check: ## check all the things
-check: test clippy
+check: test clippy codespell
+	cargo fmt --check
 	cargo outdated -R
 	cargo audit
 
@@ -59,4 +60,4 @@ codespell: ## spell-check things.
 codespell:
 	codespell -c \
 	--ignore-words .codespell_ignore \
-	--skip='./target'
+	--skip='./target,dhat-heap.json'

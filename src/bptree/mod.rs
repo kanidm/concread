@@ -38,7 +38,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     BptreeMapWriteTxn<'_, K, V>
 {
     /// Commit the changes from this write transaction. Readers after this point
-    /// will be able to percieve these changes.
+    /// will be able to perceive these changes.
     ///
     /// To abort (unstage changes), just do not call this function.
     pub fn commit(self) {
@@ -270,7 +270,7 @@ mod tests {
     fn test_bptree2_map_acb_order() {
         // Need to ensure that txns are dropped in order.
 
-        // Add data, enouugh to cause a split. All data should be *2
+        // Add data, enough to cause a split. All data should be *2
         let map = BptreeMap::new();
         // add values
         {

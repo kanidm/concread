@@ -1,6 +1,6 @@
 //! A CowCell with linear drop behaviour
 //!
-//! YOU SHOULD NOT USE THIS TYPE! Normaly concurrent cells do NOT require the linear dropping
+//! YOU SHOULD NOT USE THIS TYPE! Normally concurrent cells do NOT require the linear dropping
 //! behaviour that this implements, and it will only make your application
 //! worse for it. Consider `CowCell` and `EbrCell` instead.
 
@@ -351,7 +351,7 @@ mod tests {
             // Now commit
             cc_wrtxn.commit();
         }
-        // Should not be percieved by the old txn.
+        // Should not be perceived by the old txn.
         assert_eq!(cc_rotxn_a.work.data.x, 0);
         let cc_rotxn_c = cc.read();
         // Is visible to the new one though.

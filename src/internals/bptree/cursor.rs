@@ -183,7 +183,7 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
 
     #[cfg(test)]
     fn get_tree_density(&self) -> (usize, usize) {
-        // Walk the tree and calculate the packing effeciency.
+        // Walk the tree and calculate the packing efficiency.
         let rref = self.get_root_ref();
         rref.tree_density()
     }
@@ -498,7 +498,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         */
 
         /*
-        // Now work up the tree and clean up the remaining path inbetween
+        // Now work up the tree and clean up the remaining path in between
         let result = clone_and_split_off_prune_lt(&mut self.root, self.txid, k);
         // println!("clone_and_split_off_prune_lt -> {:?}", result);
         match result {
@@ -785,7 +785,7 @@ fn clone_and_insert<K: Clone + Ord + Debug, V: Clone>(
                     }
                     CRInsertState::NoClone(_res) => {
                         // If our descendant did not clone, then we don't have to either.
-                        unreachable!("Shoud never be possible.");
+                        unreachable!("Should never be possible.");
                         // CRInsertState::NoClone(res)
                     }
                     CRInsertState::Split(_rnode) => {
@@ -970,7 +970,6 @@ fn clone_and_remove<K: Clone + Ord + Debug, V: Clone>(
                 match clone_and_remove(anode, txid, k, last_seen, first_seen) {
                     CRRemoveState::NoClone(_res) => {
                         unreachable!("Should never occur");
-                        // CRRemoveState::NoClone(res)
                     }
                     CRRemoveState::Clone(res, lnode) => {
                         nmref.replace_by_idx(anode_idx, lnode);
@@ -997,15 +996,13 @@ fn clone_and_remove<K: Clone + Ord + Debug, V: Clone>(
                             BranchShrinkState::Merge(dnode) => {
                                 // Right was merged to left, and we remain
                                 // valid
-                                // println!("ls push 20 {:?}", dnode);
                                 debug_assert!(!last_seen.contains(&dnode));
                                 last_seen.push(dnode);
                                 CRRemoveState::Clone(res, cnode)
                             }
                             BranchShrinkState::Shrink(dnode) => {
-                                // Right was merged to left, but we have now falled under the needed
+                                // Right was merged to left, but we have now fallen under the needed
                                 // amount of values.
-                                // println!("ls push 21 {:?}", dnode);
                                 debug_assert!(!last_seen.contains(&dnode));
                                 last_seen.push(dnode);
                                 CRRemoveState::CloneShrink(res, cnode)
@@ -1048,7 +1045,7 @@ fn clone_and_remove<K: Clone + Ord + Debug, V: Clone>(
                                 CRRemoveState::NoClone(res)
                             }
                             BranchShrinkState::Shrink(dnode) => {
-                                // Right was merged to left, but we have now falled under the needed
+                                // Right was merged to left, but we have now fallen under the needed
                                 // amount of values, so we begin to shrink up.
                                 // println!("ls push 23 {:?}", dnode);
                                 debug_assert!(!last_seen.contains(&dnode));
@@ -1080,7 +1077,7 @@ fn clone_and_remove<K: Clone + Ord + Debug, V: Clone>(
                                 CRRemoveState::NoClone(res)
                             }
                             BranchShrinkState::Shrink(dnode) => {
-                                // Right was merged to left, but we have now falled under the needed
+                                // Right was merged to left, but we have now fallen under the needed
                                 // amount of values.
                                 // println!("ls push 25 {:?}", dnode);
                                 debug_assert!(!last_seen.contains(&dnode));
@@ -1424,7 +1421,7 @@ mod tests {
         //       ^
         //        \----- nnode
         //
-        //  Check leaf split inbetween l/sl (new txn)
+        //  Check leaf split in between l/sl (new txn)
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
@@ -1481,7 +1478,7 @@ mod tests {
         //       ^
         //        \----- nnode
         //
-        //  Check leaf split inbetween l/sl (same txn)
+        //  Check leaf split in between l/sl (same txn)
         //
         let lnode = create_leaf_node(10);
         let rnode = create_leaf_node(20);
@@ -1785,7 +1782,7 @@ mod tests {
         // Check that a single value can be removed correctly without change.
         // Check that a missing value is removed as "None".
         // Check that emptying the root is ok.
-        // BOTH of these need new txns to check clone, and then re-use txns.
+        // BOTH of these need new txns to check clone, and then reuse txns.
         //
         //
         let lnode = create_leaf_node_full(0);
@@ -2541,7 +2538,7 @@ mod tests {
 
     #[test]
     fn test_bptree2_cursor_split_off_lt_01() {
-        // Make a tree witth just a leaf
+        // Make a tree with just a leaf
         // Do a split_off_lt.
         let node = create_leaf_node(0);
         let sb = SuperBlock::new_test(1, node);
@@ -2559,7 +2556,7 @@ mod tests {
 
     #[test]
     fn test_bptree2_cursor_split_off_lt_02() {
-        // Make a tree witth just a leaf
+        // Make a tree with just a leaf
         // Do a split_off_lt.
         let node = create_leaf_node_full(10);
         let sb = SuperBlock::new_test(1, node);
@@ -2577,7 +2574,7 @@ mod tests {
 
     #[test]
     fn test_bptree2_cursor_split_off_lt_03() {
-        // Make a tree witth just a leaf
+        // Make a tree with just a leaf
         // Do a split_off_lt.
         let node = create_leaf_node_full(10);
         let sb = SuperBlock::new_test(1, node);

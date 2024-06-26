@@ -85,7 +85,7 @@ where
             if let Some((bref, bpidx)) = self.stack.back_mut() {
                 let wbranch = branch_ref!(*bref, K, V);
                 // We were currently looking at bpidx in bref. Increment and
-                // check whats next.
+                // check what's next.
                 *bpidx += 1;
 
                 if let Some(node) = wbranch.get_idx_checked(*bpidx) {
@@ -230,7 +230,7 @@ where
             if let Some((bref, bpidx)) = self.stack.back_mut() {
                 let wbranch = branch_ref!(*bref, K, V);
                 // We were currently looking at bpidx in bref. Increment and
-                // check whats next.
+                // check what's next.
                 // NOTE: If this underflows, it's okay because idx_checked won't
                 // return the Some case!
                 let (nidx, oflow) = (*bpidx).overflowing_sub(1);
@@ -349,7 +349,7 @@ impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for Iter<'_, '_, K, V
     }
 }
 
-/// Iterater over references to Keys stored in the map.
+/// Iterator over references to Keys stored in the map.
 pub struct KeyIter<'n, 'a, K, V>
 where
     K: Ord + Clone + Debug,
@@ -386,7 +386,7 @@ impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for KeyIter<'_, '_, K
     }
 }
 
-/// Iterater over references to Values stored in the map.
+/// Iterator over references to Values stored in the map.
 pub struct ValueIter<'n, 'a, K, V>
 where
     K: Ord + Clone + Debug,

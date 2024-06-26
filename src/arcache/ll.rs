@@ -369,7 +369,7 @@ where
         while n != tail {
             unsafe {
                 let next = (*n).next;
-                // For sanity - we want to check that the node preceeding us is the correct link.
+                // For sanity - we want to check that the node preceding us is the correct link.
                 debug_assert!((*next).prev == n);
 
                 // K is not a null pointer.

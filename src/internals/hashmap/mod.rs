@@ -11,7 +11,7 @@
 //!
 //! This structure is very different to the `im` crate. The `im` crate is
 //! sync + send over individual operations. This means that multiple writes can
-//! be interleaved atomicly and safely, and the readers always see the latest
+//! be interleaved atomically and safely, and the readers always see the latest
 //! data. While this is potentially useful to a set of problems, transactional
 //! structures are suited to problems where readers have to maintain consistent
 //! data views for a duration of time, cpu cache friendly behaviours and
