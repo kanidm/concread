@@ -1079,7 +1079,9 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
     }
 
     pub(crate) fn min_raw<'a>(pointer: *const Self) -> *const K {
-        unsafe { &*pointer }.min()
+        let this = unsafe { &*pointer };
+        debug_assert_branch!(this);
+        Node::min_raw(this.nodes[0])
     }
 
     // Can't inline as this is recursive!
@@ -1091,7 +1093,11 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
     }
 
     pub(crate) fn max_raw(pointer: *const Self) -> *const K {
-        unsafe { &*pointer }.max()
+        let this = unsafe { &*pointer };
+        debug_assert_branch!(this);
+        // Remember, self.count() is + 1 offset, so this gets
+        // the max node
+        Node::max_raw(this.nodes[this.count()])
     }
 
     pub(crate) fn min_node(&self) -> *mut Node<K, V> {
@@ -1204,7 +1210,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
             // 2 * The inserted node is between max - 1 and max, causing l(node, max) to be returned.
             // 3 * The inserted node is a low/middle value, causing max and max -1 to be returned.
             //
-            let kr = unsafe { (*node).min() };
+            let kr = unsafe { &*Node::min_raw(node) };
             let r = key_search!(self, kr);
             let ins_idx = r.unwrap_err();
             // Everything will pop max.

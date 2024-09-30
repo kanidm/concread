@@ -554,7 +554,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
 
     #[cfg(test)]
     pub(crate) fn tree_density(&self) -> (usize, usize) {
-        self.get_root_ref().tree_density()
+        Node::<K, V>::tree_density_raw(self.get_root())
     }
 
     pub(crate) fn range_mut<'n, R, T>(&'n mut self, range: R) -> RangeMutIter<'n, 'n, K, V>
