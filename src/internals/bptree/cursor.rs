@@ -66,8 +66,8 @@ impl<K: Clone + Ord + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, Curso
         // Now when the lock is dropped, both sides see the correct info and garbage for drops.
 
         // We are done, time to seal everything.
-        new.first_seen.iter().for_each(|n| unsafe {
-            (**n).make_ro();
+        new.first_seen.iter().for_each(|n| {
+            Node::make_ro_raw(*n);
         });
         // Clear first seen, we won't be dropping them from here.
         new.first_seen.clear();
