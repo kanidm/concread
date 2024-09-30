@@ -184,8 +184,8 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
     #[cfg(test)]
     fn get_tree_density(&self) -> (usize, usize) {
         // Walk the tree and calculate the packing efficiency.
-        let rref = self.get_root_ref();
-        rref.tree_density()
+        let rref = self.get_root();
+        Node::tree_density_raw(rref)
     }
 
     fn search<Q>(&self, k: &Q) -> Option<&V>
@@ -273,7 +273,7 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
 
     #[cfg(test)]
     fn verify(&self) -> bool {
-        self.get_root_ref().no_cycles() && self.get_root_ref().verify() && {
+        Node::no_cycles_raw(self.get_root()) && Node::verify_raw(self.get_root()) && {
             let (l, _) = self.get_tree_density();
             l == self.len()
         }
@@ -604,7 +604,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Drop for SuperBlock<K, V> {
         let mut first_seen = Vec::with_capacity(16);
         // eprintln!("{:?}", self.root);
         first_seen.push(self.root);
-        unsafe { (*self.root).sblock_collect(&mut first_seen) };
+        Node::sblock_collect_raw(self.root, &mut first_seen);
         first_seen.iter().for_each(|n| Node::free(*n));
     }
 }

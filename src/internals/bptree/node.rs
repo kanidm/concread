@@ -312,6 +312,29 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn tree_density_raw(pointer: *const Self) -> (usize, usize) {
+        match unsafe { &*pointer }.meta.0 & FLAG_MASK {
+            FLAG_LEAF => {
+                let lref = unsafe { &*(pointer as *const Leaf<K, V>) };
+                (lref.count(), L_CAPACITY)
+            }
+            FLAG_BRANCH => {
+                let bref = unsafe { &*(pointer as *const Branch<K, V>) };
+                let mut lcount = 0; // leaf populated
+                let mut mcount = 0; // leaf max possible
+                for idx in 0..(bref.count() + 1) {
+                    let n = bref.nodes[idx] as *mut Node<K, V>;
+                    let (l, m) = Self::tree_density_raw(n);
+                    lcount += l;
+                    mcount += m;
+                }
+                (lcount, mcount)
+            }
+            _ => unreachable!(),
+        }
+    }
+
     /*
     pub(crate) fn leaf_count(&self) -> usize {
         match self.meta.0 & FLAG_MASK {
@@ -458,9 +481,47 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     }
 
     #[cfg(test)]
+    fn no_cycles_inner_raw(pointer: *const Self, track: &mut BTreeSet<*const Self>) -> bool {
+        match unsafe { &*pointer }.meta.0 & FLAG_MASK {
+            FLAG_LEAF => {
+                // check if we are in the set?
+                track.insert(pointer as *const Self)
+            }
+            FLAG_BRANCH => {
+                if track.insert(pointer as *const Self) {
+                    // check
+                    let bref = unsafe { &*(pointer as *const Branch<K, V>) };
+                    for i in 0..(bref.count() + 1) {
+                        let n = bref.nodes[i];
+                        let r = Node::no_cycles_inner_raw(n, track);
+                        if !r {
+                            // panic!();
+                            return false;
+                        }
+                    }
+                    true
+                } else {
+                    // panic!();
+                    false
+                }
+            }
+            _ => {
+                // println!("FLAGS: {:x}", self.meta.0);
+                unreachable!()
+            }
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn no_cycles(&self) -> bool {
         let mut track = BTreeSet::new();
         self.no_cycles_inner(&mut track)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn no_cycles_raw(pointer: *const Self) -> bool {
+        let mut track = BTreeSet::new();
+        Self::no_cycles_inner_raw(pointer, &mut track)
     }
 
     pub(crate) fn sblock_collect(&mut self, alloc: &mut Vec<*mut Node<K, V>>) {
@@ -474,6 +535,21 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
                 alloc.push(bref.nodes[idx]);
                 let n = bref.nodes[idx];
                 unsafe { (*n).sblock_collect(alloc) };
+            }
+        }
+    }
+
+    pub(crate) fn sblock_collect_raw(pointer: *mut Self, alloc: &mut Vec<*mut Node<K, V>>) {
+        // Reset our txid.
+        // self.meta.0 &= FLAG_MASK | COUNT_MASK;
+        // self.meta.0 |= txid << TXID_SHF;
+
+        if (unsafe { &*pointer }.meta.0 & FLAG_MASK) == FLAG_BRANCH {
+            let bref = unsafe { &*(pointer as *const Branch<K, V>) };
+            for idx in 0..(bref.count() + 1) {
+                alloc.push(bref.nodes[idx]);
+                let n = bref.nodes[idx];
+                Node::sblock_collect_raw(n, alloc);
             }
         }
     }
@@ -1181,7 +1257,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         } else {
             // if space ->
             // Get the nodes min-key - we clone it because we'll certainly be inserting it!
-            let k: K = unsafe { (*node).min().clone() };
+            let k: K = unsafe { &*Node::min_raw(node) }.clone();
             // bst and find when min-key < key[idx]
             let r = key_search!(self, &k);
             // if r is ever found, I think this is a bug, because we should never be able to
