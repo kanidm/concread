@@ -250,7 +250,7 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         panic!("Tree depth exceeded max limit (65536). This may indicate memory corruption.");
     }
 
-    fn range<'n, R, T>(&'n self, range: R) -> RangeIter<'n, '_, K, V>
+    fn range<'n, R, T>(&'n self, range: R) -> RangeIter<'n, 'n, K, V>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
@@ -259,15 +259,15 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         RangeIter::new(self.get_root(), range, self.len())
     }
 
-    fn kv_iter<'n>(&'n self) -> Iter<'n, '_, K, V> {
+    fn kv_iter<'n>(&'n self) -> Iter<'n, 'n, K, V> {
         Iter::new(self.get_root(), self.len())
     }
 
-    fn k_iter<'n>(&'n self) -> KeyIter<'n, '_, K, V> {
+    fn k_iter<'n>(&'n self) -> KeyIter<'n, 'n, K, V> {
         KeyIter::new(self.get_root(), self.len())
     }
 
-    fn v_iter<'n>(&'n self) -> ValueIter<'n, '_, K, V> {
+    fn v_iter<'n>(&'n self) -> ValueIter<'n, 'n, K, V> {
         ValueIter::new(self.get_root(), self.len())
     }
 
@@ -557,7 +557,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         self.get_root_ref().tree_density()
     }
 
-    pub(crate) fn range_mut<'n, R, T>(&'n mut self, range: R) -> RangeMutIter<'n, '_, K, V>
+    pub(crate) fn range_mut<'n, R, T>(&'n mut self, range: R) -> RangeMutIter<'n, 'n, K, V>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
