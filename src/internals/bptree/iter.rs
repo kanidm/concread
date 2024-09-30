@@ -140,7 +140,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for LeafIter<'a, K, V> {
 
         // Return the leaf as we found at the start, regardless of the
         // stack operations.
-        Some(leaf_ref!(leafref, K, V))
+        Some(leaf_ref_shared!(leafref, K, V))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -181,7 +181,8 @@ where
                 }
                 break;
             } else {
-                let bref = branch_ref!(work_node, K, V);
+                let bref = branch_ref_shared!(work_node, K, V);
+                let bref_count = bref.count();
                 match bound {
                     Bound::Excluded(q) | Bound::Included(q) => {
                         let idx = bref.locate_node(q);
@@ -192,8 +193,8 @@ where
                     }
                     Bound::Unbounded => {
                         // count shows the most right node.
-                        stack.push_back((work_node, bref.count()));
-                        work_node = branch_ref!(work_node, K, V).get_idx_unchecked(bref.count());
+                        stack.push_back((work_node, bref_count));
+                        work_node = branch_ref!(work_node, K, V).get_idx_unchecked(bref_count);
                     }
                 }
             }
@@ -297,7 +298,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for RevLeafIter<'a, K, V> {
 
         // Return the leaf as we found at the start, regardless of the
         // stack operations.
-        Some(leaf_ref!(leafref, K, V))
+        Some(leaf_ref_shared!(leafref, K, V))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -671,7 +672,7 @@ impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for RangeIter<'_, '_,
     fn next_back(&mut self) -> Option<Self::Item> {
         loop {
             if let Some((node, idx)) = self.right_iter.get_mut() {
-                let leaf = leaf_ref!(*node, K, V);
+                let leaf = leaf_ref_shared!(*node, K, V);
                 // Get idx checked.
                 if let Some(r) = leaf.get_kv_idx_checked(*idx) {
                     if let Some((lnode, lidx)) = self.left_iter.get_mut() {

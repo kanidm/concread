@@ -105,19 +105,19 @@ impl<K: Clone + Ord + Debug, V: Clone> SuperBlock<K, V> {
         // let last_seen: Vec<*mut Node<K, V>> = Vec::with_capacity(16);
         let mut first_seen = Vec::with_capacity(16);
         // Do a pre-verify to be sure it's sane.
-        assert!(unsafe { (*root).verify() });
+        assert!(Node::verify_raw(root));
         // Collect anythinng from root into this txid if needed.
         // Set txid to txid on all tree nodes from the root.
         first_seen.push(root);
-        unsafe { (*root).sblock_collect(&mut first_seen) };
+        Node::sblock_collect_raw(root, &mut first_seen);
 
         // Lock them all
-        first_seen.iter().for_each(|n| unsafe {
-            (**n).make_ro();
+        first_seen.iter().for_each(|n| {
+            Node::make_ro_raw(*n);
         });
 
         // Determine our count internally.
-        let (length, _) = unsafe { (*root).tree_density() };
+        let (length, _) = Node::tree_density_raw(root);
 
         // Good to go!
         SuperBlock {
@@ -1096,7 +1096,7 @@ where
     K: Clone + Ord + Debug + 'a,
     V: Clone,
 {
-    if self_meta!(node).is_leaf() {
+    if unsafe {&* node}.meta.is_leaf() {
         leaf_ref!(node, K, V).get_mut_ref(k)
     } else {
         // This nmref binds the life of the reference ...

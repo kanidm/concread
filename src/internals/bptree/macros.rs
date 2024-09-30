@@ -23,6 +23,24 @@ macro_rules! branch_ref {
     }};
 }
 
+/// Like [`branch_ref`], but yields &Leaf without coercing from &mut Leaf. This is useful
+/// to avoid triggering Miri's analysis.
+macro_rules! branch_ref_shared {
+    ($x:expr, $k:ty, $v:ty) => {{
+        debug_assert!(unsafe { (*$x).meta.is_branch() });
+        unsafe { &*($x as *const Branch<$k, $v>) }
+    }};
+}
+
+/// Like [`leaf_ref`], but yields &Leaf without coercing from &mut Leaf. This is useful
+/// to avoid triggering Miri's analysis.
+macro_rules! leaf_ref_shared {
+    ($x:expr, $k:ty, $v:ty) => {{
+        debug_assert!(unsafe { (*$x).meta.is_leaf() });
+        unsafe { &*($x as *const Leaf<$k, $v>) }
+    }};
+}
+
 macro_rules! leaf_ref {
     ($x:expr, $k:ty, $v:ty) => {{
         debug_assert!(unsafe { (*$x).meta.is_leaf() });

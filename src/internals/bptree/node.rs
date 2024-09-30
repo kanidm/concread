@@ -1436,7 +1436,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
                 // println!("pre-fixup -> {:?}", self);
 
                 let sibnode = self.nodes[sibidx];
-                let nkey: K = unsafe { (*sibnode).min().clone() };
+                let nkey: K = unsafe { &*Node::min_raw(sibnode) }.clone();
 
                 unsafe {
                     slice_insert(&mut self.key, MaybeUninit::new(nkey), sibidx);
@@ -1463,7 +1463,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
             //
 
             let sibnode = self.nodes[sibidx];
-            let nkey: K = unsafe { (*sibnode).min().clone() };
+            let nkey: K = unsafe { &*Node::min_raw(sibnode) }.clone();
 
             unsafe {
                 slice_insert(&mut self.nodes, lnode, sibidx);
@@ -1636,7 +1636,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         debug_assert!(idx > 0);
         // For the node listed, rekey it.
         let nref = self.nodes[idx];
-        let nkey = unsafe { ((*nref).min()).clone() };
+        let nkey = unsafe { &*Node::min_raw(nref) }.clone();
         unsafe {
             self.key[idx - 1].as_mut_ptr().write(nkey);
         }
@@ -1651,7 +1651,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         if rc == 0 {
             let node = right.nodes[0];
             debug_assert!(!node.is_null());
-            let k: K = unsafe { (*node).min().clone() };
+            let k: K = unsafe { &*Node::min_raw(node) }.clone();
             let ins_idx = self.count();
             let leaf_ins_idx = ins_idx + 1;
             unsafe {
@@ -1674,7 +1674,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
             // rekey the lowest pointer.
             unsafe {
                 let nptr = self.nodes[1];
-                let k: K = (*nptr).min().clone();
+                let k: K = { &*Node::min_raw(nptr) }.clone();
                 self.key[0].as_mut_ptr().write(k);
             }
             // done!
@@ -1707,11 +1707,8 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         //    [   k1, k2, k3, k4, k5, k6   ]    [   --, --, --, --, ...
         //    [ v1, v2, v3, v4, v5, v6, v7 ] -> [ --, --, --, v8, --, ...
         //
-        unsafe {
-            ptr::swap(
-                right.nodes.get_unchecked_mut(0),
-                right.nodes.get_unchecked_mut(count),
-            )
+        if count != 0 {
+            right.nodes.swap(0, count);
         }
         // Move our values from the tail.
         // We would move 3 now to:
@@ -1772,19 +1769,13 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
 
         // move keys down in right
         unsafe {
-            ptr::copy(
-                right.key.as_ptr().add(count),
-                right.key.as_mut_ptr(),
-                start_idx,
-            );
+            let key = right.key.as_mut_ptr();
+            ptr::copy(key.add(count), key, start_idx);
         }
         // move nodes down in right
         unsafe {
-            ptr::copy(
-                right.nodes.as_ptr().add(count),
-                right.nodes.as_mut_ptr(),
-                start_idx + 1,
-            );
+            let nodes = right.nodes.as_mut_ptr();
+            ptr::copy(nodes.add(count), nodes, start_idx + 1);
         }
 
         // update counts

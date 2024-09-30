@@ -22,12 +22,10 @@ pub(crate) unsafe fn slice_insert<T>(slice: &mut [T], new: T, idx: usize) {
 // From std::collections::btree::node.rs
 pub(crate) unsafe fn slice_remove<T>(slice: &mut [T], idx: usize) -> T {
     // setup the value to be returned, IE give ownership to ret.
+    let len = slice.len();
     let ret = ptr::read(slice.get_unchecked(idx));
-    ptr::copy(
-        slice.as_ptr().add(idx + 1),
-        slice.as_mut_ptr().add(idx),
-        slice.len() - idx - 1,
-    );
+    let slice = slice.as_mut_ptr();
+    ptr::copy(slice.add(idx + 1), slice.add(idx), len - idx - 1);
     ret
 }
 
