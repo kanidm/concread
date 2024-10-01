@@ -376,6 +376,23 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         }
     }
 
+    #[cfg(test)]
+    #[inline(always)]
+    pub(crate) fn get_ref_raw<Q: ?Sized>(pointer: *const Self, k: &Q) -> Option<*const V>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
+        match unsafe { &*pointer }.meta.0 & FLAG_MASK {
+            FLAG_LEAF => Leaf::<K, V>::get_ref_raw(pointer as *const _, k),
+            FLAG_BRANCH => Branch::<K, V>::get_ref_raw(pointer as *const _, k),
+            _ => {
+                // println!("FLAGS: {:x}", self.meta.0);
+                unreachable!()
+            }
+        }
+    }
+
     #[inline(always)]
     pub(crate) fn min(&self) -> &K {
         match self.meta.0 & FLAG_MASK {
@@ -664,6 +681,18 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
         key_search!(self, k)
             .ok()
             .map(|idx| unsafe { &*self.values[idx].as_ptr() })
+    }
+
+    pub(crate) fn get_ref_raw<Q>(pointer: *const Self, k: &Q) -> Option<*const V>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let this = unsafe { &*pointer };
+        debug_assert_leaf!(this);
+        key_search!(this, k)
+            .ok()
+            .map(|idx| this.values[idx].as_ptr())
     }
 
     pub(crate) fn get_mut_ref<Q>(&mut self, k: &Q) -> Option<&mut V>
@@ -1196,6 +1225,24 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         // as branches is of-by-one.
         let idx = self.locate_node(k);
         unsafe { (*self.nodes[idx]).get_ref(k) }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_ref_raw<Q: ?Sized>(pointer: *const Self, k: &Q) -> Option<*const V>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
+        let this = unsafe { &*pointer };
+        debug_assert_branch!(this);
+        // If the value is Ok(idx), then that means
+        // we were located to the right node. This is because we
+        // exactly hit and located on the key.
+        //
+        // If the value is Err(idx), then we have the exact index already.
+        // as branches is of-by-one.
+        let idx = this.locate_node(k);
+        Node::get_ref_raw(this.nodes[idx], k)
     }
 
     pub(crate) fn add_node(&mut self, node: *mut Node<K, V>) -> BranchInsertState<K, V> {
@@ -2179,8 +2226,8 @@ mod tests {
 
     #[test]
     fn test_bptree2_node_test_weird_basics() {
-        let leaf: *mut Leaf<u64, u64> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<u64, u64> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
 
         assert!(leaf.get_txid() == 1);
         // println!("{:?}", leaf);
@@ -2212,14 +2259,14 @@ mod tests {
         Branch::free(branch as *mut _);
         */
 
-        Leaf::free(leaf as *mut _);
+        Leaf::free(leaf_raw as *mut _);
         assert_released();
     }
 
     #[test]
     fn test_bptree2_node_leaf_in_order() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
         assert!(leaf.get_txid() == 1);
         // Check insert to capacity
         for kv in 0..L_CAPACITY {
@@ -2241,15 +2288,15 @@ mod tests {
                 assert!(false);
             }
         }
-        assert!(leaf.verify());
-        Leaf::free(leaf as *mut _);
+        assert!(Leaf::<usize, usize>::verify_raw(leaf_raw));
+        Leaf::free(leaf_raw);
         assert_released();
     }
 
     #[test]
     fn test_bptree2_node_leaf_out_of_order() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
 
         assert!(L_CAPACITY <= 8);
         let kvs = [7, 5, 1, 6, 2, 3, 0, 8];
@@ -2279,14 +2326,14 @@ mod tests {
         }
         assert!(leaf.verify());
         assert!(leaf.count() == L_CAPACITY);
-        Leaf::free(leaf as *mut _);
+        Leaf::free(leaf_raw);
         assert_released();
     }
 
     #[test]
     fn test_bptree2_node_leaf_min() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
         assert!(L_CAPACITY <= 8);
 
         let kvs = [3, 2, 6, 4, 5, 1, 9, 0];
@@ -2304,14 +2351,14 @@ mod tests {
         }
         assert!(leaf.verify());
         assert!(leaf.count() == L_CAPACITY);
-        Leaf::free(leaf as *mut _);
+        Leaf::free(leaf_raw);
         assert_released();
     }
 
     #[test]
     fn test_bptree2_node_leaf_max() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
         assert!(L_CAPACITY <= 8);
 
         let kvs = [1, 3, 2, 6, 4, 5, 9, 0];
@@ -2329,14 +2376,14 @@ mod tests {
         }
         assert!(leaf.verify());
         assert!(leaf.count() == L_CAPACITY);
-        Leaf::free(leaf as *mut _);
+        Leaf::free(leaf_raw);
         assert_released();
     }
 
     #[test]
     fn test_bptree2_node_leaf_remove_order() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
         for kv in 0..L_CAPACITY {
             leaf.insert_or_update(kv, kv);
         }
@@ -2378,14 +2425,14 @@ mod tests {
 
         assert!(leaf.count() == 0);
         assert!(leaf.verify());
-        Leaf::free(leaf as *mut _);
+        Leaf::free(leaf_raw as *mut _);
         assert_released();
     }
 
     #[test]
     fn test_bptree2_node_leaf_remove_out_of_order() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
         for kv in 0..L_CAPACITY {
             leaf.insert_or_update(kv, kv);
         }
@@ -2409,14 +2456,14 @@ mod tests {
 
         assert!(leaf.count() == 1);
         assert!(leaf.verify());
-        Leaf::free(leaf as *mut _);
+        Leaf::free(leaf_raw);
         assert_released();
     }
 
     #[test]
     fn test_bptree2_node_leaf_insert_split() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
         for kv in 0..L_CAPACITY {
             leaf.insert_or_update(kv + 10, kv + 10);
         }
@@ -2445,7 +2492,7 @@ mod tests {
 
         assert!(leaf.count() == L_CAPACITY);
         assert!(leaf.verify());
-        Leaf::free(leaf as *mut _);
+        Leaf::free(leaf_raw);
         assert_released();
     }
 
@@ -2523,19 +2570,22 @@ mod tests {
             left as *mut Node<usize, usize>,
             right as *mut Node<usize, usize>,
         );
-        let branch_ref = unsafe { &mut *branch };
         // verify
-        assert!(branch_ref.verify());
+        assert!(Branch::<usize, usize>::verify_raw(branch));
         // Test .min works on our descendants
-        assert!(branch_ref.min() == &10);
+        assert!(unsafe { *Branch::<usize, usize>::min_raw(branch) } == 10);
         // Test .max works on our descendants.
-        assert!(branch_ref.max() == &(20 + L_CAPACITY - 1));
+        assert!(unsafe { *Branch::<usize, usize>::max_raw(branch) } == (20 + L_CAPACITY - 1));
         // Get some k within the leaves.
-        assert!(branch_ref.get_ref(&11) == Some(&11));
-        assert!(branch_ref.get_ref(&21) == Some(&21));
+        assert!(
+            Branch::<usize, usize>::get_ref_raw(branch, &11).map(|val| unsafe { *val }) == Some(11)
+        );
+        assert!(
+            Branch::<usize, usize>::get_ref_raw(branch, &21).map(|val| unsafe { *val }) == Some(21)
+        );
         // get some k that is out of bounds.
-        assert!(branch_ref.get_ref(&1).is_none());
-        assert!(branch_ref.get_ref(&100).is_none());
+        assert!(Branch::<usize, usize>::get_ref_raw(branch, &1).is_none());
+        assert!(Branch::<usize, usize>::get_ref_raw(branch, &100).is_none());
 
         Leaf::free(left as *mut _);
         Leaf::free(right as *mut _);
@@ -2576,9 +2626,9 @@ mod tests {
                 b as *mut Node<usize, usize>,
                 c as *mut Node<usize, usize>,
             );
+            assert!(Branch::<usize, usize>::verify_raw(branch));
             let branch_ref = unsafe { &mut *branch };
             // verify
-            assert!(branch_ref.verify());
             // Now min node (uses a diff function!)
             let r = branch_ref.add_node_left(a as *mut Node<usize, usize>, 0);
             match r {
@@ -2586,7 +2636,7 @@ mod tests {
                 _ => debug_assert!(false),
             };
             // Assert okay + verify
-            assert!(branch_ref.verify());
+            assert!(Branch::<usize, usize>::verify_raw(branch));
             Branch::free(branch as *mut _);
         })
     }
@@ -2600,16 +2650,16 @@ mod tests {
                 a as *mut Node<usize, usize>,
                 c as *mut Node<usize, usize>,
             );
+            assert!(Branch::<usize, usize>::verify_raw(branch));
             let branch_ref = unsafe { &mut *branch };
             // verify
-            assert!(branch_ref.verify());
             let r = branch_ref.add_node(b as *mut Node<usize, usize>);
             match r {
                 BranchInsertState::Ok => {}
                 _ => debug_assert!(false),
             };
             // Assert okay + verify
-            assert!(branch_ref.verify());
+            assert!(Branch::<usize, usize>::verify_raw(branch));
             Branch::free(branch as *mut _);
         })
     }
@@ -2623,16 +2673,16 @@ mod tests {
                 a as *mut Node<usize, usize>,
                 b as *mut Node<usize, usize>,
             );
-            let branch_ref = unsafe { &mut *branch };
             // verify
-            assert!(branch_ref.verify());
+            assert!(Branch::<usize, usize>::verify_raw(branch));
+            let branch_ref = unsafe { &mut *branch };
             let r = branch_ref.add_node(c as *mut Node<usize, usize>);
             match r {
                 BranchInsertState::Ok => {}
                 _ => debug_assert!(false),
             };
             // Assert okay + verify
-            assert!(branch_ref.verify());
+            assert!(Branch::<usize, usize>::verify_raw(branch));
             Branch::free(branch as *mut _);
         })
     }
@@ -2728,14 +2778,14 @@ mod tests {
             match r {
                 BranchInsertState::Split(x, y) => {
                     unsafe {
-                        assert!((*x).min() == &(max - 10));
-                        assert!((*y).min() == &max);
+                        assert!({ &*Node::<usize, usize>::min_raw(x as *const _) } == &(max - 10));
+                        assert!({ &*Node::<usize, usize>::min_raw(y as *const _) } == &max);
                     }
                     // X, Y will be freed by the macro caller.
                 }
                 _ => debug_assert!(false),
             };
-            assert!(branch_ref.verify());
+            assert!(Branch::<usize, usize>::verify_raw(branch_ref as *mut _));
             // Free node.
             Leaf::free(node as *mut _);
         })
@@ -2757,14 +2807,15 @@ mod tests {
                     unsafe {
                         // println!("{:?}", (*y).min());
                         // println!("{:?}", (*mynode).min());
-                        assert!((*y).min() == &max);
-                        assert!((*mynode).min() == &200);
+
+                        assert!({ &*Node::<usize, usize>::min_raw(y as *const _) } == &max);
+                        assert!({ &*Node::<usize, usize>::min_raw(mynode as *const _) } == &200);
                     }
                     // Y will be freed by the macro caller.
                 }
                 _ => debug_assert!(false),
             };
-            assert!(branch_ref.verify());
+            assert!(Branch::<usize, usize>::verify_raw(branch_ref as *mut _));
             // Free node.
             Leaf::free(node as *mut _);
         })
@@ -2785,14 +2836,16 @@ mod tests {
             match r {
                 BranchInsertState::Split(mynode, y) => {
                     unsafe {
-                        assert!((*mynode).min() == &(max - 5));
-                        assert!((*y).min() == &max);
+                        assert!(
+                            { &*Node::<usize, usize>::min_raw(mynode as *const _) } == &(max - 5)
+                        );
+                        assert!({ &*Node::<usize, usize>::min_raw(y as *const _) } == &max);
                     }
                     // Y will be freed by the macro caller.
                 }
                 _ => debug_assert!(false),
             };
-            assert!(branch_ref.verify());
+            assert!(Branch::<usize, usize>::verify_raw(branch_ref as *mut _));
             // Free node.
             Leaf::free(node as *mut _);
         })
