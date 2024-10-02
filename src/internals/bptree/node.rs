@@ -203,21 +203,21 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         // println!("Req new branch");
         debug_assert!(!l.is_null());
         debug_assert!(!r.is_null());
-        debug_assert!(unsafe { (*l).verify() });
-        debug_assert!(unsafe { (*r).verify() });
+        debug_assert!(Node::verify_raw(l));
+        debug_assert!(Node::verify_raw(r));
         debug_assert!(txid < (TXID_MASK >> TXID_SHF));
         let x: Box<CachePadded<Branch<K, V>>> = Box::new(CachePadded::new(Branch {
             // This sets the default (key) count to 1, since we take an l/r
             meta: Meta((txid << TXID_SHF) | FLAG_BRANCH | 1),
             #[cfg(feature = "skinny")]
             key: [
-                MaybeUninit::new(unsafe { (*r).min().clone() }),
+                MaybeUninit::new(unsafe { &*Node::min_raw(r) }.clone()),
                 MaybeUninit::uninit(),
                 MaybeUninit::uninit(),
             ],
             #[cfg(not(feature = "skinny"))]
             key: [
-                MaybeUninit::new(unsafe { (*r).min().clone() }),
+                MaybeUninit::new(unsafe { &*Node::min_raw(r) }.clone()),
                 MaybeUninit::uninit(),
                 MaybeUninit::uninit(),
                 MaybeUninit::uninit(),
@@ -241,21 +241,16 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
             #[cfg(all(test, not(miri)))]
             nid: alloc_nid(),
         }));
-        debug_assert!(x.verify());
-        Box::into_raw(x) as *mut Branch<K, V>
+        let output = Box::into_raw(x) as *mut Branch<K, V>;
+        debug_assert!(Self::verify_raw(output as *const _));
+        output
     }
 
     #[inline(always)]
-    pub(crate) fn make_ro(&self) {
-        match self.meta.0 & FLAG_MASK {
-            FLAG_LEAF => {
-                let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
-                lref.make_ro()
-            }
-            FLAG_BRANCH => {
-                let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
-                bref.make_ro()
-            }
+    pub(crate) fn make_ro_raw(pointer: *const Self) {
+        match unsafe { &*pointer }.meta.0 & FLAG_MASK {
+            FLAG_LEAF => Leaf::<K, V>::make_ro_raw(pointer as *const _),
+            FLAG_BRANCH => Branch::<K, V>::make_ro_raw(pointer as *const _),
             _ => unreachable!(),
         }
     }
@@ -278,19 +273,19 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     }
 
     #[cfg(test)]
-    pub(crate) fn tree_density(&self) -> (usize, usize) {
-        match self.meta.0 & FLAG_MASK {
+    pub(crate) fn tree_density_raw(pointer: *const Self) -> (usize, usize) {
+        match unsafe { &*pointer }.meta.0 & FLAG_MASK {
             FLAG_LEAF => {
-                let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
+                let lref = unsafe { &*(pointer as *const Leaf<K, V>) };
                 (lref.count(), L_CAPACITY)
             }
             FLAG_BRANCH => {
-                let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
+                let bref = unsafe { &*(pointer as *const Branch<K, V>) };
                 let mut lcount = 0; // leaf populated
                 let mut mcount = 0; // leaf max possible
                 for idx in 0..(bref.count() + 1) {
                     let n = bref.nodes[idx] as *mut Node<K, V>;
-                    let (l, m) = unsafe { (*n).tree_density() };
+                    let (l, m) = Self::tree_density_raw(n);
                     lcount += l;
                     mcount += m;
                 }
@@ -320,20 +315,14 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
 
     #[cfg(test)]
     #[inline(always)]
-    pub(crate) fn get_ref<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+    pub(crate) fn get_ref_raw<Q: ?Sized>(pointer: *const Self, k: &Q) -> Option<*const V>
     where
         K: Borrow<Q>,
         Q: Ord,
     {
-        match self.meta.0 & FLAG_MASK {
-            FLAG_LEAF => {
-                let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
-                lref.get_ref(k)
-            }
-            FLAG_BRANCH => {
-                let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
-                bref.get_ref(k)
-            }
+        match unsafe { &*pointer }.meta.0 & FLAG_MASK {
+            FLAG_LEAF => Leaf::<K, V>::get_ref_raw(pointer as *const _, k),
+            FLAG_BRANCH => Branch::<K, V>::get_ref_raw(pointer as *const _, k),
             _ => {
                 // println!("FLAGS: {:x}", self.meta.0);
                 unreachable!()
@@ -357,49 +346,46 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     }
 
     #[inline(always)]
-    pub(crate) fn max(&self) -> &K {
-        match self.meta.0 & FLAG_MASK {
-            FLAG_LEAF => {
-                let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
-                lref.max()
-            }
-            FLAG_BRANCH => {
-                let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
-                bref.max()
-            }
+    pub(crate) fn min_raw(pointer: *const Self) -> *const K {
+        match unsafe { &*pointer }.meta.0 & FLAG_MASK {
+            FLAG_LEAF => Leaf::<K, V>::min_raw(pointer as *const _),
+            FLAG_BRANCH => Branch::<K, V>::min_raw(pointer as *const _),
             _ => unreachable!(),
         }
     }
 
     #[inline(always)]
-    pub(crate) fn verify(&self) -> bool {
-        match self.meta.0 & FLAG_MASK {
-            FLAG_LEAF => {
-                let lref = unsafe { &*(self as *const _ as *const Leaf<K, V>) };
-                lref.verify()
-            }
-            FLAG_BRANCH => {
-                let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
-                bref.verify()
-            }
+    pub(crate) fn max_raw(pointer: *const Self) -> *const K {
+        match unsafe { &*pointer }.meta.0 & FLAG_MASK {
+            FLAG_LEAF => Leaf::<K, V>::max_raw(pointer as *const _),
+            FLAG_BRANCH => Branch::<K, V>::max_raw(pointer as *const _),
+            _ => unreachable!(),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn verify_raw(pointer: *const Self) -> bool {
+        match unsafe { &*pointer }.meta.0 & FLAG_MASK {
+            FLAG_LEAF => Leaf::<K, V>::verify_raw(pointer as *const _),
+            FLAG_BRANCH => Branch::<K, V>::verify_raw(pointer as *const _),
             _ => unreachable!(),
         }
     }
 
     #[cfg(test)]
-    fn no_cycles_inner(&self, track: &mut BTreeSet<*const Self>) -> bool {
-        match self.meta.0 & FLAG_MASK {
+    fn no_cycles_inner_raw(pointer: *const Self, track: &mut BTreeSet<*const Self>) -> bool {
+        match unsafe { &*pointer }.meta.0 & FLAG_MASK {
             FLAG_LEAF => {
                 // check if we are in the set?
-                track.insert(self as *const Self)
+                track.insert(pointer as *const Self)
             }
             FLAG_BRANCH => {
-                if track.insert(self as *const Self) {
+                if track.insert(pointer as *const Self) {
                     // check
-                    let bref = unsafe { &*(self as *const _ as *const Branch<K, V>) };
+                    let bref = unsafe { &*(pointer as *const Branch<K, V>) };
                     for i in 0..(bref.count() + 1) {
                         let n = bref.nodes[i];
-                        let r = unsafe { (*n).no_cycles_inner(track) };
+                        let r = Node::no_cycles_inner_raw(n, track);
                         if !r {
                             // panic!();
                             return false;
@@ -419,9 +405,9 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
     }
 
     #[cfg(test)]
-    pub(crate) fn no_cycles(&self) -> bool {
+    pub(crate) fn no_cycles_raw(pointer: *const Self) -> bool {
         let mut track = BTreeSet::new();
-        self.no_cycles_inner(&mut track)
+        Self::no_cycles_inner_raw(pointer, &mut track)
     }
 
     pub(crate) fn sblock_collect(&mut self, alloc: &mut Vec<*mut Node<K, V>>) {
@@ -435,6 +421,21 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
                 alloc.push(bref.nodes[idx]);
                 let n = bref.nodes[idx];
                 unsafe { (*n).sblock_collect(alloc) };
+            }
+        }
+    }
+
+    pub(crate) fn sblock_collect_raw(pointer: *mut Self, alloc: &mut Vec<*mut Node<K, V>>) {
+        // Reset our txid.
+        // self.meta.0 &= FLAG_MASK | COUNT_MASK;
+        // self.meta.0 |= txid << TXID_SHF;
+
+        if (unsafe { &*pointer }.meta.0 & FLAG_MASK) == FLAG_BRANCH {
+            let bref = unsafe { &*(pointer as *const Branch<K, V>) };
+            for idx in 0..(bref.count() + 1) {
+                alloc.push(bref.nodes[idx]);
+                let n = bref.nodes[idx];
+                Node::sblock_collect_raw(n, alloc);
             }
         }
     }
@@ -551,6 +552,19 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
             .map(|idx| unsafe { &*self.values[idx].as_ptr() })
     }
 
+    #[cfg(test)]
+    pub(crate) fn get_ref_raw<Q>(pointer: *const Self, k: &Q) -> Option<*const V>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let this = unsafe { &*pointer };
+        debug_assert_leaf!(this);
+        key_search!(this, k)
+            .ok()
+            .map(|idx| this.values[idx].as_ptr())
+    }
+
     pub(crate) fn get_mut_ref<Q>(&mut self, k: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
@@ -579,9 +593,20 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
         unsafe { &*self.key[0].as_ptr() }
     }
 
+    pub(crate) fn min_raw<'a>(pointer: *const Self) -> *const K {
+        unsafe { &*pointer }.min()
+    }
+
+    #[cfg(test)]
     pub(crate) fn max(&self) -> &K {
         debug_assert!(self.count() > 0);
         unsafe { &*self.key[self.count() - 1].as_ptr() }
+    }
+
+    pub(crate) fn max_raw(pointer: *const Self) -> *const K {
+        let this = unsafe { &*pointer };
+        debug_assert!(this.count() > 0);
+        unsafe { &*this.key[this.count() - 1].as_ptr() }
     }
 
     pub(crate) fn min_value(&self) -> Option<(&K, &V)> {
@@ -778,12 +803,12 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
     */
 
     #[inline(always)]
-    pub(crate) fn make_ro(&self) {
-        debug_assert_leaf!(self);
+    pub(crate) fn make_ro_raw(pointer: *const Self) {
+        debug_assert_leaf!(unsafe { &*pointer });
         /*
         let r = unsafe {
             mprotect(
-                self as *const Leaf<K, V> as *mut c_void,
+                this as *const Leaf<K, V> as *mut c_void,
                 size_of::<Leaf<K, V>>(),
                 PROT_READ
             )
@@ -806,6 +831,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
         right.meta.set_count(0);
     }
 
+    #[cfg(test)]
     pub(crate) fn verify(&self) -> bool {
         debug_assert_leaf!(self);
         // println!("verify leaf -> {:?}", self);
@@ -816,6 +842,30 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
         let mut lk: &K = unsafe { &*self.key[0].as_ptr() };
         for work_idx in 1..self.meta.count() {
             let rk: &K = unsafe { &*self.key[work_idx].as_ptr() };
+            if lk >= rk {
+                // println!("{:?}", self);
+                if cfg!(test) {
+                    return false;
+                } else {
+                    debug_assert!(false);
+                }
+            }
+            lk = rk;
+        }
+        true
+    }
+
+    pub(crate) fn verify_raw(pointer: *const Self) -> bool {
+        debug_assert_leaf!(unsafe { &*pointer });
+        // println!("verify leaf -> {:?}", self);
+        // Check key sorting
+        let count = unsafe { &*pointer }.meta.count();
+        if count == 0 {
+            return true;
+        }
+        let mut lk: &K = unsafe { &*(&*pointer).key[0].as_ptr() };
+        for work_idx in 1..count {
+            let rk: &K = unsafe { &*(&*pointer).key[work_idx].as_ptr() };
             if lk >= rk {
                 // println!("{:?}", self);
                 if cfg!(test) {
@@ -914,12 +964,18 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         unsafe { (*self.nodes[0]).min() }
     }
 
-    // Can't inline as this is recursive!
-    pub(crate) fn max(&self) -> &K {
-        debug_assert_branch!(self);
+    pub(crate) fn min_raw<'a>(pointer: *const Self) -> *const K {
+        let this = unsafe { &*pointer };
+        debug_assert_branch!(this);
+        Node::min_raw(this.nodes[0])
+    }
+
+    pub(crate) fn max_raw(pointer: *const Self) -> *const K {
+        let this = unsafe { &*pointer };
+        debug_assert_branch!(this);
         // Remember, self.count() is + 1 offset, so this gets
         // the max node
-        unsafe { (*self.nodes[self.count()]).max() }
+        Node::max_raw(this.nodes[this.count()])
     }
 
     pub(crate) fn min_node(&self) -> *mut Node<K, V> {
@@ -1004,20 +1060,21 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
     }
 
     #[cfg(test)]
-    pub(crate) fn get_ref<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+    pub(crate) fn get_ref_raw<Q: ?Sized>(pointer: *const Self, k: &Q) -> Option<*const V>
     where
         K: Borrow<Q>,
         Q: Ord,
     {
-        debug_assert_branch!(self);
+        let this = unsafe { &*pointer };
+        debug_assert_branch!(this);
         // If the value is Ok(idx), then that means
         // we were located to the right node. This is because we
         // exactly hit and located on the key.
         //
         // If the value is Err(idx), then we have the exact index already.
         // as branches is of-by-one.
-        let idx = self.locate_node(k);
-        unsafe { (*self.nodes[idx]).get_ref(k) }
+        let idx = this.locate_node(k);
+        Node::get_ref_raw(this.nodes[idx], k)
     }
 
     pub(crate) fn add_node(&mut self, node: *mut Node<K, V>) -> BranchInsertState<K, V> {
@@ -1032,7 +1089,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
             // 2 * The inserted node is between max - 1 and max, causing l(node, max) to be returned.
             // 3 * The inserted node is a low/middle value, causing max and max -1 to be returned.
             //
-            let kr = unsafe { (*node).min() };
+            let kr = unsafe { &*Node::min_raw(node) };
             let r = key_search!(self, kr);
             let ins_idx = r.unwrap_err();
             // Everything will pop max.
@@ -1085,7 +1142,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         } else {
             // if space ->
             // Get the nodes min-key - we clone it because we'll certainly be inserting it!
-            let k: K = unsafe { (*node).min().clone() };
+            let k: K = unsafe { &*Node::min_raw(node) }.clone();
             // bst and find when min-key < key[idx]
             let r = key_search!(self, &k);
             // if r is ever found, I think this is a bug, because we should never be able to
@@ -1258,7 +1315,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
                 // println!("pre-fixup -> {:?}", self);
 
                 let sibnode = self.nodes[sibidx];
-                let nkey: K = unsafe { (*sibnode).min().clone() };
+                let nkey: K = unsafe { &*Node::min_raw(sibnode) }.clone();
 
                 unsafe {
                     slice_insert(&mut self.key, MaybeUninit::new(nkey), sibidx);
@@ -1285,7 +1342,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
             //
 
             let sibnode = self.nodes[sibidx];
-            let nkey: K = unsafe { (*sibnode).min().clone() };
+            let nkey: K = unsafe { &*Node::min_raw(sibnode) }.clone();
 
             unsafe {
                 slice_insert(&mut self.nodes, lnode, sibidx);
@@ -1458,7 +1515,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         debug_assert!(idx > 0);
         // For the node listed, rekey it.
         let nref = self.nodes[idx];
-        let nkey = unsafe { ((*nref).min()).clone() };
+        let nkey = unsafe { &*Node::min_raw(nref) }.clone();
         unsafe {
             self.key[idx - 1].as_mut_ptr().write(nkey);
         }
@@ -1473,7 +1530,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         if rc == 0 {
             let node = right.nodes[0];
             debug_assert!(!node.is_null());
-            let k: K = unsafe { (*node).min().clone() };
+            let k: K = unsafe { &*Node::min_raw(node) }.clone();
             let ins_idx = self.count();
             let leaf_ins_idx = ins_idx + 1;
             unsafe {
@@ -1496,7 +1553,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
             // rekey the lowest pointer.
             unsafe {
                 let nptr = self.nodes[1];
-                let k: K = (*nptr).min().clone();
+                let k: K = { &*Node::min_raw(nptr) }.clone();
                 self.key[0].as_mut_ptr().write(k);
             }
             // done!
@@ -1529,11 +1586,8 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         //    [   k1, k2, k3, k4, k5, k6   ]    [   --, --, --, --, ...
         //    [ v1, v2, v3, v4, v5, v6, v7 ] -> [ --, --, --, v8, --, ...
         //
-        unsafe {
-            ptr::swap(
-                right.nodes.get_unchecked_mut(0),
-                right.nodes.get_unchecked_mut(count),
-            )
+        if count != 0 {
+            right.nodes.swap(0, count);
         }
         // Move our values from the tail.
         // We would move 3 now to:
@@ -1594,19 +1648,13 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
 
         // move keys down in right
         unsafe {
-            ptr::copy(
-                right.key.as_ptr().add(count),
-                right.key.as_mut_ptr(),
-                start_idx,
-            );
+            let key = right.key.as_mut_ptr();
+            ptr::copy(key.add(count), key, start_idx);
         }
         // move nodes down in right
         unsafe {
-            ptr::copy(
-                right.nodes.as_ptr().add(count),
-                right.nodes.as_mut_ptr(),
-                start_idx + 1,
-            );
+            let nodes = right.nodes.as_mut_ptr();
+            ptr::copy(nodes.add(count), nodes, start_idx + 1);
         }
 
         // update counts
@@ -1797,12 +1845,12 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
     */
 
     #[inline(always)]
-    pub(crate) fn make_ro(&self) {
-        debug_assert_branch!(self);
+    pub(crate) fn make_ro_raw(pointer: *const Self) {
+        debug_assert_branch!(unsafe { &*pointer });
         /*
         let r = unsafe {
             mprotect(
-                self as *const Branch<K, V> as *mut c_void,
+                this as *const Branch<K, V> as *mut c_void,
                 size_of::<Branch<K, V>>(),
                 PROT_READ
             )
@@ -1811,18 +1859,19 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         */
     }
 
-    pub(crate) fn verify(&self) -> bool {
-        debug_assert_branch!(self);
-        if self.count() == 0 {
+    pub(crate) fn verify_raw(pointer: *const Self) -> bool {
+        let this = unsafe { &*pointer };
+        debug_assert_branch!(this);
+        if this.count() == 0 {
             // Not possible to be valid!
             debug_assert!(false);
             return false;
         }
         // println!("verify branch -> {:?}", self);
         // Check we are sorted.
-        let mut lk: &K = unsafe { &*self.key[0].as_ptr() };
-        for work_idx in 1..self.count() {
-            let rk: &K = unsafe { &*self.key[work_idx].as_ptr() };
+        let mut lk: &K = unsafe { &*this.key[0].as_ptr() };
+        for work_idx in 1..this.count() {
+            let rk: &K = unsafe { &*this.key[work_idx].as_ptr() };
             // println!("{:?} >= {:?}", lk, rk);
             if lk >= rk {
                 debug_assert!(false);
@@ -1831,12 +1880,12 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
             lk = rk;
         }
         // Recursively call verify
-        for work_idx in 0..self.count() {
-            let node = unsafe { &*self.nodes[work_idx] };
-            if !node.verify() {
-                for work_idx in 0..(self.count() + 1) {
-                    let nref = unsafe { &*self.nodes[work_idx] };
-                    if !nref.verify() {
+        for work_idx in 0..this.count() {
+            let node = this.nodes[work_idx];
+            if !Node::verify_raw(node) {
+                for work_idx in 0..(this.count() + 1) {
+                    let nref = this.nodes[work_idx];
+                    if !Node::verify_raw(nref) {
                         // println!("Failed children");
                         debug_assert!(false);
                         return false;
@@ -1846,14 +1895,14 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         }
         // Check descendants are validly ordered.
         //                 V-- remember, there are count + 1 nodes.
-        for work_idx in 0..self.count() {
+        for work_idx in 0..this.count() {
             // get left max and right min
-            let lnode = unsafe { &*self.nodes[work_idx] };
-            let rnode = unsafe { &*self.nodes[work_idx + 1] };
+            let lnode = this.nodes[work_idx];
+            let rnode = this.nodes[work_idx + 1];
 
-            let pkey = unsafe { &*self.key[work_idx].as_ptr() };
-            let lkey = lnode.max();
-            let rkey = rnode.min();
+            let pkey = unsafe { &*this.key[work_idx].as_ptr() };
+            let lkey = unsafe { &*Node::max_raw(lnode as *const _) };
+            let rkey = unsafe { &*Node::min_raw(rnode as *const _) };
             if lkey >= pkey || pkey > rkey {
                 // println!("++++++");
                 // println!("{:?} >= {:?}, {:?} > {:?}", lkey, pkey, pkey, rkey);
@@ -1936,8 +1985,8 @@ mod tests {
 
     #[test]
     fn test_bptree2_node_test_weird_basics() {
-        let leaf: *mut Leaf<u64, u64> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<u64, u64> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
 
         assert!(leaf.get_txid() == 1);
         // println!("{:?}", leaf);
@@ -1969,14 +2018,14 @@ mod tests {
         Branch::free(branch as *mut _);
         */
 
-        Leaf::free(leaf as *mut _);
+        Leaf::free(leaf_raw as *mut _);
         assert_released();
     }
 
     #[test]
     fn test_bptree2_node_leaf_in_order() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
         assert!(leaf.get_txid() == 1);
         // Check insert to capacity
         for kv in 0..L_CAPACITY {
@@ -1998,15 +2047,15 @@ mod tests {
                 assert!(false);
             }
         }
-        assert!(leaf.verify());
-        Leaf::free(leaf as *mut _);
+        assert!(Leaf::<usize, usize>::verify_raw(leaf_raw));
+        Leaf::free(leaf_raw);
         assert_released();
     }
 
     #[test]
     fn test_bptree2_node_leaf_out_of_order() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
 
         assert!(L_CAPACITY <= 8);
         let kvs = [7, 5, 1, 6, 2, 3, 0, 8];
@@ -2036,14 +2085,14 @@ mod tests {
         }
         assert!(leaf.verify());
         assert!(leaf.count() == L_CAPACITY);
-        Leaf::free(leaf as *mut _);
+        Leaf::free(leaf_raw);
         assert_released();
     }
 
     #[test]
     fn test_bptree2_node_leaf_min() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
         assert!(L_CAPACITY <= 8);
 
         let kvs = [3, 2, 6, 4, 5, 1, 9, 0];
@@ -2061,14 +2110,14 @@ mod tests {
         }
         assert!(leaf.verify());
         assert!(leaf.count() == L_CAPACITY);
-        Leaf::free(leaf as *mut _);
+        Leaf::free(leaf_raw);
         assert_released();
     }
 
     #[test]
     fn test_bptree2_node_leaf_max() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
         assert!(L_CAPACITY <= 8);
 
         let kvs = [1, 3, 2, 6, 4, 5, 9, 0];
@@ -2086,14 +2135,14 @@ mod tests {
         }
         assert!(leaf.verify());
         assert!(leaf.count() == L_CAPACITY);
-        Leaf::free(leaf as *mut _);
+        Leaf::free(leaf_raw);
         assert_released();
     }
 
     #[test]
     fn test_bptree2_node_leaf_remove_order() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
         for kv in 0..L_CAPACITY {
             leaf.insert_or_update(kv, kv);
         }
@@ -2135,14 +2184,14 @@ mod tests {
 
         assert!(leaf.count() == 0);
         assert!(leaf.verify());
-        Leaf::free(leaf as *mut _);
+        Leaf::free(leaf_raw as *mut _);
         assert_released();
     }
 
     #[test]
     fn test_bptree2_node_leaf_remove_out_of_order() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
         for kv in 0..L_CAPACITY {
             leaf.insert_or_update(kv, kv);
         }
@@ -2166,14 +2215,14 @@ mod tests {
 
         assert!(leaf.count() == 1);
         assert!(leaf.verify());
-        Leaf::free(leaf as *mut _);
+        Leaf::free(leaf_raw);
         assert_released();
     }
 
     #[test]
     fn test_bptree2_node_leaf_insert_split() {
-        let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
-        let leaf = unsafe { &mut *leaf };
+        let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
+        let leaf = unsafe { &mut *leaf_raw };
         for kv in 0..L_CAPACITY {
             leaf.insert_or_update(kv + 10, kv + 10);
         }
@@ -2202,7 +2251,7 @@ mod tests {
 
         assert!(leaf.count() == L_CAPACITY);
         assert!(leaf.verify());
-        Leaf::free(leaf as *mut _);
+        Leaf::free(leaf_raw);
         assert_released();
     }
 
@@ -2280,19 +2329,22 @@ mod tests {
             left as *mut Node<usize, usize>,
             right as *mut Node<usize, usize>,
         );
-        let branch_ref = unsafe { &mut *branch };
         // verify
-        assert!(branch_ref.verify());
+        assert!(Branch::<usize, usize>::verify_raw(branch));
         // Test .min works on our descendants
-        assert!(branch_ref.min() == &10);
+        assert!(unsafe { *Branch::<usize, usize>::min_raw(branch) } == 10);
         // Test .max works on our descendants.
-        assert!(branch_ref.max() == &(20 + L_CAPACITY - 1));
+        assert!(unsafe { *Branch::<usize, usize>::max_raw(branch) } == (20 + L_CAPACITY - 1));
         // Get some k within the leaves.
-        assert!(branch_ref.get_ref(&11) == Some(&11));
-        assert!(branch_ref.get_ref(&21) == Some(&21));
+        assert!(
+            Branch::<usize, usize>::get_ref_raw(branch, &11).map(|val| unsafe { *val }) == Some(11)
+        );
+        assert!(
+            Branch::<usize, usize>::get_ref_raw(branch, &21).map(|val| unsafe { *val }) == Some(21)
+        );
         // get some k that is out of bounds.
-        assert!(branch_ref.get_ref(&1).is_none());
-        assert!(branch_ref.get_ref(&100).is_none());
+        assert!(Branch::<usize, usize>::get_ref_raw(branch, &1).is_none());
+        assert!(Branch::<usize, usize>::get_ref_raw(branch, &100).is_none());
 
         Leaf::free(left as *mut _);
         Leaf::free(right as *mut _);
@@ -2333,9 +2385,9 @@ mod tests {
                 b as *mut Node<usize, usize>,
                 c as *mut Node<usize, usize>,
             );
+            assert!(Branch::<usize, usize>::verify_raw(branch));
             let branch_ref = unsafe { &mut *branch };
             // verify
-            assert!(branch_ref.verify());
             // Now min node (uses a diff function!)
             let r = branch_ref.add_node_left(a as *mut Node<usize, usize>, 0);
             match r {
@@ -2343,7 +2395,7 @@ mod tests {
                 _ => debug_assert!(false),
             };
             // Assert okay + verify
-            assert!(branch_ref.verify());
+            assert!(Branch::<usize, usize>::verify_raw(branch));
             Branch::free(branch as *mut _);
         })
     }
@@ -2357,16 +2409,16 @@ mod tests {
                 a as *mut Node<usize, usize>,
                 c as *mut Node<usize, usize>,
             );
+            assert!(Branch::<usize, usize>::verify_raw(branch));
             let branch_ref = unsafe { &mut *branch };
             // verify
-            assert!(branch_ref.verify());
             let r = branch_ref.add_node(b as *mut Node<usize, usize>);
             match r {
                 BranchInsertState::Ok => {}
                 _ => debug_assert!(false),
             };
             // Assert okay + verify
-            assert!(branch_ref.verify());
+            assert!(Branch::<usize, usize>::verify_raw(branch));
             Branch::free(branch as *mut _);
         })
     }
@@ -2380,16 +2432,16 @@ mod tests {
                 a as *mut Node<usize, usize>,
                 b as *mut Node<usize, usize>,
             );
-            let branch_ref = unsafe { &mut *branch };
             // verify
-            assert!(branch_ref.verify());
+            assert!(Branch::<usize, usize>::verify_raw(branch));
+            let branch_ref = unsafe { &mut *branch };
             let r = branch_ref.add_node(c as *mut Node<usize, usize>);
             match r {
                 BranchInsertState::Ok => {}
                 _ => debug_assert!(false),
             };
             // Assert okay + verify
-            assert!(branch_ref.verify());
+            assert!(Branch::<usize, usize>::verify_raw(branch));
             Branch::free(branch as *mut _);
         })
     }
@@ -2485,14 +2537,14 @@ mod tests {
             match r {
                 BranchInsertState::Split(x, y) => {
                     unsafe {
-                        assert!((*x).min() == &(max - 10));
-                        assert!((*y).min() == &max);
+                        assert!({ &*Node::<usize, usize>::min_raw(x as *const _) } == &(max - 10));
+                        assert!({ &*Node::<usize, usize>::min_raw(y as *const _) } == &max);
                     }
                     // X, Y will be freed by the macro caller.
                 }
                 _ => debug_assert!(false),
             };
-            assert!(branch_ref.verify());
+            assert!(Branch::<usize, usize>::verify_raw(branch_ref as *mut _));
             // Free node.
             Leaf::free(node as *mut _);
         })
@@ -2514,14 +2566,15 @@ mod tests {
                     unsafe {
                         // println!("{:?}", (*y).min());
                         // println!("{:?}", (*mynode).min());
-                        assert!((*y).min() == &max);
-                        assert!((*mynode).min() == &200);
+
+                        assert!({ &*Node::<usize, usize>::min_raw(y as *const _) } == &max);
+                        assert!({ &*Node::<usize, usize>::min_raw(mynode as *const _) } == &200);
                     }
                     // Y will be freed by the macro caller.
                 }
                 _ => debug_assert!(false),
             };
-            assert!(branch_ref.verify());
+            assert!(Branch::<usize, usize>::verify_raw(branch_ref as *mut _));
             // Free node.
             Leaf::free(node as *mut _);
         })
@@ -2542,14 +2595,16 @@ mod tests {
             match r {
                 BranchInsertState::Split(mynode, y) => {
                     unsafe {
-                        assert!((*mynode).min() == &(max - 5));
-                        assert!((*y).min() == &max);
+                        assert!(
+                            { &*Node::<usize, usize>::min_raw(mynode as *const _) } == &(max - 5)
+                        );
+                        assert!({ &*Node::<usize, usize>::min_raw(y as *const _) } == &max);
                     }
                     // Y will be freed by the macro caller.
                 }
                 _ => debug_assert!(false),
             };
-            assert!(branch_ref.verify());
+            assert!(Branch::<usize, usize>::verify_raw(branch_ref as *mut _));
             // Free node.
             Leaf::free(node as *mut _);
         })

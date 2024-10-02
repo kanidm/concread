@@ -66,8 +66,8 @@ impl<K: Clone + Ord + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, Curso
         // Now when the lock is dropped, both sides see the correct info and garbage for drops.
 
         // We are done, time to seal everything.
-        new.first_seen.iter().for_each(|n| unsafe {
-            (**n).make_ro();
+        new.first_seen.iter().for_each(|n| {
+            Node::make_ro_raw(*n);
         });
         // Clear first seen, we won't be dropping them from here.
         new.first_seen.clear();
@@ -105,19 +105,19 @@ impl<K: Clone + Ord + Debug, V: Clone> SuperBlock<K, V> {
         // let last_seen: Vec<*mut Node<K, V>> = Vec::with_capacity(16);
         let mut first_seen = Vec::with_capacity(16);
         // Do a pre-verify to be sure it's sane.
-        assert!(unsafe { (*root).verify() });
+        assert!(Node::verify_raw(root));
         // Collect anythinng from root into this txid if needed.
         // Set txid to txid on all tree nodes from the root.
         first_seen.push(root);
-        unsafe { (*root).sblock_collect(&mut first_seen) };
+        Node::sblock_collect_raw(root, &mut first_seen);
 
         // Lock them all
-        first_seen.iter().for_each(|n| unsafe {
-            (**n).make_ro();
+        first_seen.iter().for_each(|n| {
+            Node::make_ro_raw(*n);
         });
 
         // Determine our count internally.
-        let (length, _) = unsafe { (*root).tree_density() };
+        let (length, _) = Node::tree_density_raw(root);
 
         // Good to go!
         SuperBlock {
@@ -184,8 +184,8 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
     #[cfg(test)]
     fn get_tree_density(&self) -> (usize, usize) {
         // Walk the tree and calculate the packing efficiency.
-        let rref = self.get_root_ref();
-        rref.tree_density()
+        let rref = self.get_root();
+        Node::tree_density_raw(rref)
     }
 
     fn search<Q>(&self, k: &Q) -> Option<&V>
@@ -250,7 +250,7 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         panic!("Tree depth exceeded max limit (65536). This may indicate memory corruption.");
     }
 
-    fn range<'n, R, T>(&'n self, range: R) -> RangeIter<'n, '_, K, V>
+    fn range<'n, R, T>(&'n self, range: R) -> RangeIter<'n, 'n, K, V>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
@@ -259,21 +259,21 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone> {
         RangeIter::new(self.get_root(), range, self.len())
     }
 
-    fn kv_iter<'n>(&'n self) -> Iter<'n, '_, K, V> {
+    fn kv_iter<'n>(&'n self) -> Iter<'n, 'n, K, V> {
         Iter::new(self.get_root(), self.len())
     }
 
-    fn k_iter<'n>(&'n self) -> KeyIter<'n, '_, K, V> {
+    fn k_iter<'n>(&'n self) -> KeyIter<'n, 'n, K, V> {
         KeyIter::new(self.get_root(), self.len())
     }
 
-    fn v_iter<'n>(&'n self) -> ValueIter<'n, '_, K, V> {
+    fn v_iter<'n>(&'n self) -> ValueIter<'n, 'n, K, V> {
         ValueIter::new(self.get_root(), self.len())
     }
 
     #[cfg(test)]
     fn verify(&self) -> bool {
-        self.get_root_ref().no_cycles() && self.get_root_ref().verify() && {
+        Node::no_cycles_raw(self.get_root()) && Node::verify_raw(self.get_root()) && {
             let (l, _) = self.get_tree_density();
             l == self.len()
         }
@@ -554,10 +554,10 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
 
     #[cfg(test)]
     pub(crate) fn tree_density(&self) -> (usize, usize) {
-        self.get_root_ref().tree_density()
+        Node::<K, V>::tree_density_raw(self.get_root())
     }
 
-    pub(crate) fn range_mut<'n, R, T>(&'n mut self, range: R) -> RangeMutIter<'n, '_, K, V>
+    pub(crate) fn range_mut<'n, R, T>(&'n mut self, range: R) -> RangeMutIter<'n, 'n, K, V>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
@@ -604,7 +604,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Drop for SuperBlock<K, V> {
         let mut first_seen = Vec::with_capacity(16);
         // eprintln!("{:?}", self.root);
         first_seen.push(self.root);
-        unsafe { (*self.root).sblock_collect(&mut first_seen) };
+        Node::sblock_collect_raw(self.root, &mut first_seen);
         first_seen.iter().for_each(|n| Node::free(*n));
     }
 }
@@ -1096,7 +1096,7 @@ where
     K: Clone + Ord + Debug + 'a,
     V: Clone,
 {
-    if self_meta!(node).is_leaf() {
+    if unsafe {&* node}.meta.is_leaf() {
         leaf_ref!(node, K, V).get_mut_ref(k)
     } else {
         // This nmref binds the life of the reference ...
