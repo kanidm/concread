@@ -4,9 +4,6 @@
 //! Additionally, the cursor also is responsible for general movement
 //! throughout the structure and how to handle that effectively
 
-#![allow(unstable_name_collisions)]
-use sptr::Strict;
-
 use crate::internals::lincowcell::LinCowCellCapable;
 
 use std::borrow::Borrow;

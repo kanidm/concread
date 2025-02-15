@@ -3,25 +3,22 @@
 use std::borrow::Borrow;
 // use std::collections::VecDeque;
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::ops::RangeBounds;
 
 use super::cursor::{CursorReadOps, CursorWrite};
 use super::iter::RangeIter;
 
 /// Mutable Iterator over references to Key Value pairs stored, bounded by a range.
-pub struct RangeMutIter<'n, 'a, K, V>
+pub struct RangeMutIter<'n, K, V>
 where
     K: Ord + Clone + Debug,
     V: Clone,
 {
     cursor: &'n mut CursorWrite<K, V>,
-    inner_range_iter: RangeIter<'n, 'a, K, V>,
-    phantom_k: PhantomData<&'a K>,
-    phantom_v: PhantomData<&'a V>,
+    inner_range_iter: RangeIter<'n, K, V>,
 }
 
-impl<'n, K, V> RangeMutIter<'n, '_, K, V>
+impl<'n, K, V> RangeMutIter<'n, K, V>
 where
     K: Clone + Ord + Debug,
     V: Clone,
@@ -50,17 +47,12 @@ where
         RangeMutIter {
             cursor,
             inner_range_iter,
-            phantom_k: PhantomData,
-            phantom_v: PhantomData,
         }
     }
 }
 
-impl<'n, 'a, K: Clone + Ord + Debug, V: Clone> Iterator for RangeMutIter<'n, 'a, K, V>
-where
-    'n: 'a,
-{
-    type Item = (&'a K, &'a mut V);
+impl<'n, K: Clone + Ord + Debug, V: Clone> Iterator for RangeMutIter<'n, K, V> {
+    type Item = (&'n K, &'n mut V);
 
     /// Yield the next key value reference, or `None` if exhausted.
     fn next(&mut self) -> Option<Self::Item> {

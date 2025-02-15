@@ -102,10 +102,7 @@ impl<'a, K: Clone + Hash + Eq + Debug, V: Clone> Iterator for LeafIter<'a, K, V>
 
     fn next(&mut self) -> Option<Self::Item> {
         // base case is the vecdeque is empty
-        let (leafref, parent_idx) = match self.stack.pop_back() {
-            Some(lr) => lr,
-            None => return None,
-        };
+        let (leafref, parent_idx) = self.stack.pop_back()?;
 
         // Setup the veqdeque for the next iteration.
         self.stack_position(parent_idx + 1);
