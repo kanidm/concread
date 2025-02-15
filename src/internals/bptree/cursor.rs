@@ -557,7 +557,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorWrite<K, V> {
         Node::<K, V>::tree_density_raw(self.get_root())
     }
 
-    pub(crate) fn range_mut<'n, R, T>(&'n mut self, range: R) -> RangeMutIter<'n, 'n, K, V>
+    pub(crate) fn range_mut<'n, R, T>(&'n mut self, range: R) -> RangeMutIter<'n, K, V>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
@@ -1096,7 +1096,7 @@ where
     K: Clone + Ord + Debug + 'a,
     V: Clone,
 {
-    if unsafe {&* node}.meta.is_leaf() {
+    if unsafe { &*node }.meta.is_leaf() {
         leaf_ref!(node, K, V).get_mut_ref(k)
     } else {
         // This nmref binds the life of the reference ...
