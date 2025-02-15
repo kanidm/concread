@@ -1074,6 +1074,8 @@ impl<
                         // TODO: find a way to remove these clones
                         let mut next_state = match &ci.v {
                             CacheItem::Freq(llp, v) => {
+                                // To prevent cache hysterisis, we require a hit over
+                                // two transactions.
                                 if llp.as_ref().txid != commit_txid {
                                     inner.freq.touch(llp.to_owned());
                                     Some(CacheItem::Freq(llp.to_owned(), v.to_owned()))
@@ -1221,15 +1223,23 @@ impl<
             // what we should have evicted up to now.
             //
             // keep removing from rec until == p OR delta == 0, and if delta remains, then remove from freq.
+            //
+            // Remember P is "the maximum size of recent" or "presure on recent". If P is max then
+            // we are pressuring churning on recent but not freq, so evict in freq.
+            //
+            // If P is toward 0 that means all our pressure is in frequent and we evicted things we
+            // shouldn't have so we want more space in frequent and less in rec.
+
+            // delta here is the number of elements we need to remove to remain below shared.max.
 
             let rec_to_len = if inner.p == 0 {
                 trace!("p == 0 => {:?} - {}", inner.rec.len(), delta);
-                if delta <= inner.rec.len() {
-                    // We are fully weight to freq, so only remove in rec.
+                if delta < inner.rec.len() {
+                    // We are fully weighted to freq, so only remove in recent.
                     inner.rec.len() - delta
                 } else {
                     // We need to fully clear rec *and* then from freq as well.
-                    inner.rec.len()
+                    0
                 }
             } else if inner.rec.len() > inner.p {
                 // There is a partial weighting, how much do we need to move?
@@ -1244,7 +1254,9 @@ impl<
                         delta
                     );
                     */
-                    // We will have removed enough through delta alone in rec.
+                    // We will have removed enough through delta alone in rec. Technically
+                    // this means we are still over p, but since we already removed delta
+                    // number of elements, freq won't change dimensions.
                     inner.rec.len() - delta
                 } else {
                     /*
@@ -1256,7 +1268,7 @@ impl<
                         delta
                     );
                     */
-                    // Remove the full delta, and excess will be removed from freq.
+                    // Remove the full recent delta, and excess will be removed from freq.
                     inner.rec.len() - rec_delta
                 }
             } else {
@@ -2738,6 +2750,79 @@ mod tests {
     }
 
     #[test]
+    fn test_cache_p_weight_zero_churn() {
+        let arc: ARCache<usize, usize> = ARCacheBuilder::new()
+            .set_size(4, 4)
+            .set_watermark(0)
+            .build()
+            .expect("Invalid cache parameters!");
+
+        let mut wr_txn = arc.write();
+
+        // First we need to load up frequent.
+        wr_txn.insert(1, 1);
+        wr_txn.insert(2, 2);
+        wr_txn.insert(3, 3);
+        wr_txn.insert(4, 4);
+        assert_eq!(wr_txn.get(&1), Some(&1));
+        assert_eq!(wr_txn.get(&2), Some(&2));
+        assert_eq!(wr_txn.get(&3), Some(&3));
+        assert_eq!(wr_txn.get(&4), Some(&4));
+
+        assert_eq!(wr_txn.peek_stat().p, 0);
+        wr_txn.commit();
+
+        // Hitting again in a new txn moves to freq
+        let mut wr_txn = arc.write();
+        assert_eq!(wr_txn.get(&1), Some(&1));
+        assert_eq!(wr_txn.get(&2), Some(&2));
+        assert_eq!(wr_txn.get(&3), Some(&3));
+        assert_eq!(wr_txn.get(&4), Some(&4));
+
+        assert_eq!(wr_txn.peek_stat().p, 0);
+        wr_txn.commit();
+
+        // Now include new items. The goal is we want to shift p to at least 1.
+        let mut wr_txn = arc.write();
+        // Won't fit, moves to ghost recent
+        wr_txn.insert(100, 100);
+        println!("b {:?}", wr_txn.peek_stat());
+        assert_eq!(wr_txn.peek_stat().p, 0);
+        wr_txn.commit();
+
+        // Include again, causes evict in freq.
+        let mut wr_txn = arc.write();
+        assert_eq!(wr_txn.peek_stat().p, 0);
+        assert_eq!(wr_txn.peek_stat().ghost_rec, 1);
+
+        // Causes shift in P, stays in recent.
+        wr_txn.insert(100, 100);
+        wr_txn.commit();
+
+        let wr_txn = arc.write();
+        println!("c {:?}", wr_txn.peek_stat());
+        assert_eq!(wr_txn.peek_stat().p, 1);
+        assert_eq!(wr_txn.peek_stat().ghost_rec, 0);
+        assert_eq!(wr_txn.peek_stat().ghost_freq, 1);
+        wr_txn.commit();
+
+        // Now, we want to bring back from ghost freq.
+        let mut wr_txn = arc.write();
+        assert_eq!(wr_txn.get(&1), None);
+        // We missed, so re-include.
+        wr_txn.insert(1, 1);
+        wr_txn.commit();
+
+        let wr_txn = arc.write();
+        println!("d {:?}", wr_txn.peek_stat());
+        // Weights P back to 0.
+        assert_eq!(wr_txn.peek_stat().p, 0);
+        assert_eq!(wr_txn.peek_stat().ghost_rec, 1);
+        assert_eq!(wr_txn.peek_stat().ghost_freq, 0);
+        wr_txn.commit();
+    }
+
+    #[test]
     fn test_cache_dirty_write() {
         let arc: ARCache<usize, usize> = ARCacheBuilder::default()
             .set_size(4, 4)
@@ -2849,7 +2934,6 @@ mod tests {
         // Now once committed, the proper sizes kick in.
 
         let wr_txn = arc.write();
-        eprintln!("{:?}", wr_txn.peek_stat());
         assert!(
             CStat {
                 max: 4,
