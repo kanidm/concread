@@ -323,7 +323,16 @@ where
         self.size
     }
 
-    #[cfg(test)]
+    pub(crate) fn drop_head(&mut self) {
+        assert!(self.size > 0);
+        let next = unsafe { (*self.head).next };
+        if next != self.tail {
+            let mut owned = self.pop();
+            let n = owned.into_inner();
+            LLNode::free(n);
+        }
+    }
+
     pub(crate) fn peek_head(&self) -> Option<&K> {
         debug_assert!(!self.head.is_null());
         let next = unsafe { (*self.head).next };

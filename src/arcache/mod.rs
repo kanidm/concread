@@ -171,15 +171,6 @@ where
     reader_quiesce: bool,
 }
 
-/// A configurable builder to create new concurrent Adaptive Replacement Caches.
-pub struct ARCacheBuilder {
-    // stats: Option<CacheStats>,
-    max: Option<usize>,
-    read_max: Option<usize>,
-    watermark: Option<usize>,
-    reader_quiesce: bool,
-}
-
 /// A concurrently readable adaptive replacement cache. Operations are performed on the
 /// cache via read and write operations.
 pub struct ARCache<K, V>
@@ -197,6 +188,7 @@ where
     inner: Mutex<ArcInner<K, V>>,
     // stats: CowCell<CacheStats>,
     above_watermark: AtomicBool,
+    look_back_limit: u64,
 }
 
 unsafe impl<
@@ -338,14 +330,23 @@ impl<
     }
 }
 
+/// A configurable builder to create new concurrent Adaptive Replacement Caches.
+pub struct ARCacheBuilder {
+    max: Option<usize>,
+    read_max: Option<usize>,
+    watermark: Option<usize>,
+    reader_quiesce: bool,
+    look_back_limit: Option<u8>,
+}
+
 impl Default for ARCacheBuilder {
     fn default() -> Self {
         ARCacheBuilder {
-            // stats: None,
             max: None,
             read_max: None,
             watermark: None,
             reader_quiesce: true,
+            look_back_limit: None,
         }
     }
 }
@@ -401,6 +402,7 @@ impl ARCacheBuilder {
             read_max: Some(read_max),
             watermark: self.watermark,
             reader_quiesce: self.reader_quiesce,
+            look_back_limit: self.look_back_limit,
         }
     }
 
@@ -410,29 +412,31 @@ impl ARCacheBuilder {
     /// and specifying your expected workload parameters to have a better derived
     /// cache size.
     #[must_use]
-    pub fn set_size(self, max: usize, read_max: usize) -> Self {
-        ARCacheBuilder {
-            // stats: self.stats,
-            max: Some(max),
-            read_max: Some(read_max),
-            watermark: self.watermark,
-            reader_quiesce: self.reader_quiesce,
-        }
+    pub fn set_size(mut self, max: usize, read_max: usize) -> Self {
+        self.max = Some(max);
+        self.read_max = Some(read_max);
+        self
     }
 
-    // TODO: new_size is deprecated and has no information to refer to?
     /// See [ARCache::new_size] for more information. This allows manual configuration of the data
     /// tracking watermark. To disable this, set to 0. If watermark is greater than
     /// max, it will be clamped to max.
     #[must_use]
-    pub fn set_watermark(self, watermark: usize) -> Self {
-        Self {
-            // stats: self.stats,
-            max: self.max,
-            read_max: self.read_max,
-            watermark: Some(watermark),
-            reader_quiesce: self.reader_quiesce,
-        }
+    pub fn set_watermark(mut self, watermark: usize) -> Self {
+        self.watermark = Some(watermark);
+        self
+    }
+
+    /// Set the look back limit for ghost lists. This is a balance between the cache's ability
+    /// to have "perfect information" about all past keys to tune the p weight, and memory
+    /// consumption of storing the ghost lists. If your dataset consists of small keys/large
+    /// values you should not change this value from it's default. If your dataset contains
+    /// equally sized keys/values, then you may wish to lower this value. The lowest value is
+    /// `4`, defaults to `32`.
+    #[must_use]
+    pub fn set_look_back_limit(mut self, look_back_limit: u8) -> Self {
+        self.look_back_limit = Some(look_back_limit);
+        self
     }
 
     /// Enable or Disable reader cache quiescing. In some cases this can improve
@@ -440,14 +444,9 @@ impl ARCacheBuilder {
     /// before acknowledgement. You must MANUALLY run periodic quiesces if you mark
     /// this as "false" to disable reader quiescing.
     #[must_use]
-    pub fn set_reader_quiesce(self, reader_quiesce: bool) -> Self {
-        ARCacheBuilder {
-            // stats: self.stats,
-            max: self.max,
-            read_max: self.read_max,
-            watermark: self.watermark,
-            reader_quiesce,
-        }
+    pub fn set_reader_quiesce(mut self, reader_quiesce: bool) -> Self {
+        self.reader_quiesce = reader_quiesce;
+        self
     }
 
     /// Consume this builder, returning a cache if successful. If configured parameters are
@@ -463,6 +462,7 @@ impl ARCacheBuilder {
             read_max,
             watermark,
             reader_quiesce,
+            look_back_limit,
         } = self;
 
         let (max, read_max) = max.zip(read_max)?;
@@ -471,6 +471,8 @@ impl ARCacheBuilder {
         let watermark = watermark.clamp(0, max);
         // If the watermark is 0, always track from the start.
         let init_watermark = watermark == 0;
+
+        let look_back_limit = look_back_limit.unwrap_or(32).clamp(4, u8::MAX) as u64;
 
         // The hit queue is reasonably cheap, so we can let this grow a bit.
         /*
@@ -515,6 +517,7 @@ impl ARCacheBuilder {
             inner,
             // stats: CowCell::new(stats),
             above_watermark: AtomicBool::new(init_watermark),
+            look_back_limit,
         })
     }
 }
@@ -881,6 +884,8 @@ impl<
                         }
                         CacheItem::Haunted(llp) => {
                             // We can't do anything about this ...
+                            // Don't touch or rearrange the haunted list, it should be
+                            // in commit txid order.
                             CacheItem::Haunted(llp.to_owned())
                         }
                     };
@@ -1344,8 +1349,10 @@ impl<
         while ll.len() > 0 {
             let mut owned = ll.pop();
             debug_assert!(!owned.is_null());
-            // Set the item's evict txid.
+
+            // Set the item's eviction txid.
             owned.as_mut().txid = txid;
+
             let mut r = cache.get_mut(&owned.as_ref().k);
             match r {
                 Some(ref mut ci) => {
@@ -1376,6 +1383,26 @@ impl<
                 }
             }
         } // end while
+    }
+
+    fn drain_ll_min_txid(
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
+        ll: &mut LL<CacheItemInner<K>>,
+        min_txid: u64,
+    ) {
+        while let Some(node) = ll.peek_head() {
+            if min_txid > node.txid {
+                // Need to free from the cache.
+                cache.remove(&node.k);
+
+                // Okay, this node can be trimmed.
+                ll.drop_head();
+            } else {
+                // We are done with this loop, everything else
+                // is newer.
+                break;
+            }
+        }
     }
 
     #[allow(clippy::unnecessary_mut_passed)]
@@ -1423,6 +1450,13 @@ impl<
             // Move everything active into ghost sets.
             Self::drain_ll_to_ghost(&mut cache, i_f, g_f, g_r, commit_txid, &mut stats);
             Self::drain_ll_to_ghost(&mut cache, i_r, g_f, g_r, commit_txid, &mut stats);
+        } else {
+            // Update the minimum txid we'll include from based on the look back limit
+            //
+            // If a clear happens, we don't want this setting the limit back lower than an existing
+            // limit, so we take the greater of these values.
+            let possible_new_limit = commit_txid.saturating_sub(self.look_back_limit);
+            inner.min_txid = inner.min_txid.max(possible_new_limit);
         }
 
         // Why is it okay to drain the rx/tlocal and create the cache in a temporary
@@ -1476,6 +1510,14 @@ impl<
         );
 
         // self.drain_stat_rx(inner.deref_mut(), stats, commit_ts);
+
+        // Now drain from the haunted set if required, this removes anything
+        // lower than the min_txid.
+        {
+            // Tell the compiler copying is okay.
+            let min_txid = inner.min_txid;
+            Self::drain_ll_min_txid(&mut cache, &mut inner.haunted, min_txid);
+        }
 
         stats.p_weight(inner.p as u64);
         stats.shared_max(shared.max as u64);
@@ -2819,6 +2861,40 @@ mod tests {
         assert_eq!(wr_txn.peek_stat().p, 0);
         assert_eq!(wr_txn.peek_stat().ghost_rec, 1);
         assert_eq!(wr_txn.peek_stat().ghost_freq, 0);
+        wr_txn.commit();
+    }
+
+    #[test]
+    fn test_cache_haunted_bounds() {
+        let arc: ARCache<usize, usize> = ARCacheBuilder::new()
+            .set_size(4, 4)
+            .set_watermark(0)
+            .set_look_back_limit(4)
+            .build()
+            .expect("Invalid cache parameters!");
+
+        let mut wr_txn = arc.write();
+
+        // We want to test that haunted items are removed after 4 generations.
+
+        // Setup a removed key which immediately goes to haunted.
+        wr_txn.remove(1);
+        wr_txn.commit();
+
+        // Now write and commit 4 times to advance the txid.
+        for _i in 0..5 {
+            let wr_txn = arc.write();
+            println!("l {:?}", wr_txn.peek_stat());
+            assert_eq!(wr_txn.peek_stat().haunted, 1);
+            assert!(wr_txn.peek_cache(&1) == CacheState::Haunted);
+            wr_txn.commit();
+        }
+
+        // Now it's removed.
+        let wr_txn = arc.write();
+        println!("d {:?}", wr_txn.peek_stat());
+        assert_eq!(wr_txn.peek_stat().haunted, 0);
+        assert_eq!(wr_txn.peek_cache(&1), CacheState::None);
         wr_txn.commit();
     }
 

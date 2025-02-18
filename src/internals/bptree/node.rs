@@ -593,7 +593,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
         unsafe { &*self.key[0].as_ptr() }
     }
 
-    pub(crate) fn min_raw<'a>(pointer: *const Self) -> *const K {
+    pub(crate) fn min_raw(pointer: *const Self) -> *const K {
         unsafe { &*pointer }.min()
     }
 
@@ -863,9 +863,9 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
         if count == 0 {
             return true;
         }
-        let mut lk: &K = unsafe { &*(&*pointer).key[0].as_ptr() };
+        let mut lk: &K = unsafe { &*(*pointer).key[0].as_ptr() };
         for work_idx in 1..count {
-            let rk: &K = unsafe { &*(&*pointer).key[work_idx].as_ptr() };
+            let rk: &K = unsafe { &*(*pointer).key[work_idx].as_ptr() };
             if lk >= rk {
                 // println!("{:?}", self);
                 if cfg!(test) {
@@ -964,7 +964,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         unsafe { (*self.nodes[0]).min() }
     }
 
-    pub(crate) fn min_raw<'a>(pointer: *const Self) -> *const K {
+    pub(crate) fn min_raw(pointer: *const Self) -> *const K {
         let this = unsafe { &*pointer };
         debug_assert_branch!(this);
         Node::min_raw(this.nodes[0])
