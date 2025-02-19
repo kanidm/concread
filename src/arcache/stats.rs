@@ -3,55 +3,91 @@ use std::fmt::Debug;
 /// Write statistics for ARCache
 pub trait ARCacheWriteStat<K> {
     // RW phase trackers
-    /// _
+    /// Record that a cache clear event occured.
+    ///
+    /// Phase - write transaction open
     fn cache_clear(&mut self) {}
 
-    /// _
+    /// Record a cache read event.
+    ///
+    /// Phase - write transaction open
     fn cache_read(&mut self) {}
 
-    /// _
+    /// Record a cache hit event.
+    ///
+    /// Phase - write transaction open
     fn cache_hit(&mut self) {}
 
     // Commit phase trackers
 
-    /// _
+    /// Record an include event from a reading transaction that was successfully added
+    /// to the cache.
+    ///
+    /// Phase - write transaction committing
     fn include(&mut self, _k: &K) {}
 
-    /// _
+    /// Record an include event to the haunted set - this indicates a reader included
+    /// an item that we already included.
+    ///
+    /// Phase - write transaction committing
     fn include_haunted(&mut self, k: &K) {
         self.include(k)
     }
 
-    /// _
+    /// Record an item was modified
+    ///
+    /// Phase - write transaction committing
     fn modify(&mut self, _k: &K) {}
 
-    /// _
+    /// Record that a member of the frequent ghost set was revived
+    ///
+    /// Phase - write transaction committing
     fn ghost_frequent_revive(&mut self, _k: &K) {}
 
-    /// _
+    /// Record that a member of the recent ghost set was revived
+    ///
+    /// Phase - write transaction committing
     fn ghost_recent_revive(&mut self, _k: &K) {}
 
-    /// _
+    /// Record items that are evicted from the recent set
+    ///
+    /// Phase - write transaction committing
     fn evict_from_recent(&mut self, _k: &K) {}
 
-    /// _
+    /// Record items that are evicted from the frequent set
+    ///
+    /// Phase - write transaction committing
     fn evict_from_frequent(&mut self, _k: &K) {}
 
     // Size of things after the operation.
 
-    /// _
+    /// Return the current p_weight of the cache - p_weight indicates the bias toward
+    /// the recent set. A p of 0 indicates that the cache is fully weighted to to the
+    /// frequent set. A p of `max` cache size indicates the cache is fully weighted
+    /// to the recent set.
+    ///
+    /// Phase - commit complete
     fn p_weight(&mut self, _p: u64) {}
 
-    /// _
+    /// The current maximum size of the cache
+    ///
+    /// Phase - commit complete
     fn shared_max(&mut self, _i: u64) {}
 
-    /// _
+    /// The current size of the frequent set
+    ///
+    /// Phase - commit complete
     fn freq(&mut self, _i: u64) {}
 
-    /// _
+    /// The current size of the recent set
+    ///
+    /// Phase - commit complete
     fn recent(&mut self, _i: u64) {}
 
-    /// _
+    /// The current number of all keys in the cache - this includes the frequent, recent,
+    /// and ghost data.
+    ///
+    /// Phase - commit complete
     fn all_seen_keys(&mut self, _i: u64) {}
 }
 
