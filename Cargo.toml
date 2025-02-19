@@ -44,29 +44,29 @@ simd_support = []
 
 [dependencies]
 ahash = { version = "0.8", optional = true }
-crossbeam-utils = { version = "0.8.12", optional = true }
+crossbeam-utils = { version = "0.8.21", optional = true }
 crossbeam-epoch = { version = "0.9.11", optional = true }
-crossbeam-queue = { version = "0.3.6", optional = true }
+crossbeam-queue = { version = "0.3.12", optional = true }
 dhat = { version = "0.3.3", optional = true }
-lru = { version = "0.12", optional = true }
+lru = { version = "0.13", optional = true }
 serde = { version = "1.0", optional = true }
-smallvec = { version = "1.4", optional = true }
+smallvec = { version = "1.14", optional = true }
 sptr = "0.3"
 arc-swap = "1.0"
 tokio = { version = "1", features = ["sync"], optional = true }
 tracing = "0.1"
 
 [dev-dependencies]
-criterion = { version = "0.3", features = ["html_reports"] }
-rand = "0.8"
+criterion = { version = "0.5", features = ["html_reports"] }
+rand = "0.9"
 tracing-subscriber = { version = "0.3", features = [
     "env-filter",
     "std",
     "fmt",
 ] }
-uuid = "1.0"
+uuid = "1"
 function_name = "0.3"
-serde_json = "1.0"
+serde_json = "1"
 tokio = { version = "1", features = ["rt", "macros"] }
 proptest = "1.0.0"
 
