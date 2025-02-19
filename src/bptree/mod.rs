@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_bptree2_map_from_iter_2() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut ins: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 

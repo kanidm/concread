@@ -1649,7 +1649,7 @@ mod tests {
     #[test]
     fn test_bptree2_cursor_insert_stress_3() {
         // Insert random
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
@@ -1718,7 +1718,7 @@ mod tests {
     #[test]
     fn test_bptree2_cursor_insert_stress_6() {
         // Insert random
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
@@ -2312,7 +2312,7 @@ mod tests {
     }
 
     fn tree_create_rand() -> (SuperBlock<usize, usize>, CursorRead<usize, usize>) {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
@@ -2373,7 +2373,7 @@ mod tests {
     #[test]
     fn test_bptree2_cursor_remove_stress_3() {
         // Insert random
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
@@ -2433,7 +2433,7 @@ mod tests {
     #[test]
     fn test_bptree2_cursor_remove_stress_6() {
         // Insert random
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
@@ -2456,7 +2456,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn test_bptree2_cursor_remove_stress_7() {
         // Insert random
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut ins: Vec<usize> = (1..10240).collect();
 
         let node: *mut Leaf<usize, usize> = Node::new_leaf(0);
