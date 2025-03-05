@@ -99,8 +99,8 @@ pub(crate) struct Ptr {
 
 impl PartialEq for Ptr {
     fn eq(&self, other: &Self) -> bool {
-        let s = self.p.map_addr(|a| a & UNTAG);
-        let o = other.p.map_addr(|a| a & UNTAG);
+        let s = self.untag_ptr();
+        let o = other.untag_ptr();
         s == o
     }
 }
@@ -115,8 +115,8 @@ impl PartialOrd for Ptr {
 
 impl Ord for Ptr {
     fn cmp(&self, other: &Self) -> Ordering {
-        let s = self.p.map_addr(|a| a & UNTAG);
-        let o = other.p.map_addr(|a| a & UNTAG);
+        let s = self.untag_ptr();
+        let o = other.untag_ptr();
         s.cmp(&o)
     }
 }
@@ -146,37 +146,42 @@ impl Ptr {
 
     #[inline(always)]
     pub(crate) fn is_bucket(&self) -> bool {
-        self.p.addr() & FLAG_BUCKET == FLAG_BUCKET
+        (self.p as usize) & FLAG_BUCKET == FLAG_BUCKET
     }
 
     #[inline(always)]
     pub(crate) fn is_branch(&self) -> bool {
-        self.p.addr() & FLAG_BUCKET != FLAG_BUCKET
+        (self.p as usize) & FLAG_BUCKET != FLAG_BUCKET
     }
 
     #[inline(always)]
     fn is_dirty(&self) -> bool {
-        self.p.addr() & FLAG_DIRTY == FLAG_DIRTY
+        (self.p as usize) & FLAG_DIRTY == FLAG_DIRTY
     }
 
     #[cfg(all(test, not(miri)))]
     fn untagged(&self) -> Self {
-        let p = self.p.map_addr(|a| a & UNTAG);
+        let p = self.untag_ptr();
         Ptr { p }
+    }
+
+    #[inline(always)]
+    fn untag_ptr(&self) -> *mut i32 {
+        ((self.p as usize) & UNTAG) as *mut i32
     }
 
     #[inline(always)]
     fn mark_dirty(&mut self) {
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         WRITE_LIST.with(|llist| assert!(llist.lock().unwrap().insert(self.untagged())));
-        self.p = self.p.map_addr(|a| a | FLAG_DIRTY)
+        self.p = ((self.p as usize) | FLAG_DIRTY) as *mut i32;
     }
 
     #[inline(always)]
     fn mark_clean(&mut self) {
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         WRITE_LIST.with(|llist| assert!(llist.lock().unwrap().remove(&(self.untagged()))));
-        self.p = self.p.map_addr(|a| a & MARK_CLEAN)
+        self.p = ((self.p as usize) & MARK_CLEAN) as *mut i32;
     }
 
     #[inline(always)]
@@ -184,7 +189,7 @@ impl Ptr {
         debug_assert!(self.is_bucket());
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
-        unsafe { &*(self.p.map_addr(|a| a & UNTAG) as *const Bucket<K, V>) }
+        unsafe { &*(self.untag_ptr() as *const Bucket<K, V>) }
     }
 
     #[inline(always)]
@@ -192,7 +197,7 @@ impl Ptr {
         debug_assert!(self.is_bucket());
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
-        self.p.map_addr(|a| a & UNTAG) as *mut Bucket<K, V>
+        self.untag_ptr() as *mut Bucket<K, V>
     }
 
     #[inline(always)]
@@ -207,7 +212,7 @@ impl Ptr {
             let wlist_guard = llist.lock().unwrap();
             assert!(wlist_guard.contains(&self.untagged()))
         });
-        unsafe { &mut *(self.p.map_addr(|a| a & UNTAG) as *mut Bucket<K, V>) }
+        unsafe { &mut *(self.untag_ptr() as *mut Bucket<K, V>) }
     }
 
     #[inline(always)]
@@ -215,7 +220,7 @@ impl Ptr {
         debug_assert!(self.is_branch());
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
-        unsafe { &*(self.p.map_addr(|a| a & UNTAG) as *const Branch<K, V>) }
+        unsafe { &*(self.untag_ptr() as *const Branch<K, V>) }
     }
 
     #[inline(always)]
@@ -223,7 +228,7 @@ impl Ptr {
         debug_assert!(self.is_branch());
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
-        self.p.map_addr(|a| a & UNTAG) as *mut Branch<K, V>
+        self.untag_ptr() as *mut Branch<K, V>
     }
 
     #[inline(always)]
@@ -238,7 +243,7 @@ impl Ptr {
             let wlist_guard = llist.lock().unwrap();
             assert!(wlist_guard.contains(&self.untagged()))
         });
-        unsafe { &mut *(self.p.map_addr(|a| a & UNTAG) as *mut Branch<K, V>) }
+        unsafe { &mut *(self.untag_ptr() as *mut Branch<K, V>) }
     }
 
     #[inline(always)]
@@ -249,7 +254,7 @@ impl Ptr {
         debug_assert!(self.is_branch());
         debug_assert!(self.is_dirty());
         // This is the same as above, but bypasses the wlist check.
-        &mut *(self.p.map_addr(|a| a & UNTAG) as *mut Branch<K, V>)
+        &mut *(self.untag_ptr() as *mut Branch<K, V>)
     }
 
     fn free<K: Hash + Eq + Clone + Debug, V: Clone>(&self) {
@@ -281,7 +286,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> From<Box<Branch<K, V>>> for Ptr {
         let rptr: *mut Branch<K, V> = Box::into_raw(b);
         #[allow(clippy::let_and_return)]
         let r = Self {
-            p: rptr.map_addr(|a| a | FLAG_BRANCH) as *mut i32,
+            p: ((rptr as usize) | FLAG_BRANCH) as *mut i32,
         };
         #[cfg(all(test, not(miri)))]
         ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(r.untagged()));
@@ -294,7 +299,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> From<Box<Bucket<K, V>>> for Ptr {
         let rptr: *mut Bucket<K, V> = Box::into_raw(b);
         #[allow(clippy::let_and_return)]
         let r = Self {
-            p: rptr.map_addr(|a| a | FLAG_BUCKET) as *mut i32,
+            p: ((rptr as usize) | FLAG_BUCKET) as *mut i32,
         };
         #[cfg(all(test, not(miri)))]
         ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(r.untagged()));
