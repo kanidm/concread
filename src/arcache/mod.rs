@@ -45,8 +45,19 @@ use std::time::Instant;
 
 use tracing::trace;
 
-// const READ_THREAD_MIN: usize = 8;
-const READ_THREAD_RATIO: usize = 16;
+const READ_THREAD_CACHE_RATIO: isize = 8;
+const WRITE_THREAD_CACHE_RATIO: isize = 4;
+
+const WRITE_THREAD_CHANNEL_SIZE: usize = 64;
+const READ_THREAD_CHANNEL_SIZE: usize = 64;
+
+const TXN_LOOKBACK_LIMIT_DEFAULT: u8 = 32;
+const TXN_LOOKBACK_LIMIT_ABS_MIN: u8 = 4;
+
+const WATERMARK_DISABLE_MIN: usize = 128;
+
+const WATERMARK_DISABLE_DIVISOR: usize = 20;
+const WATERMARK_DISABLE_RATIO: usize = 18;
 
 enum ThreadCacheItem<V> {
     Present(V, bool, usize),
@@ -359,14 +370,11 @@ impl ARCacheBuilder {
 
     /// Configure a new ARCache, that derives its size based on your expected workload.
     ///
-    /// The values are total number of items you want to have in memory, the number
-    /// of read threads you expect concurrently, the expected average number of cache
-    /// misses per read operation, and the expected average number of writes or write
-    /// cache misses per operation. The following formula is assumed:
-    ///
-    /// `max + (threads * (max/16))`
-    /// `    + (threads * avg number of misses per op)`
-    /// `    + avg number of writes per transaction`
+    /// The values are:
+    /// * Total number of items you want to have in memory (soft upper bound)
+    /// * Number of reading threads you expect concurrently (excluding write thread)
+    /// * Average expected number of cache misses per read transaction
+    /// * Average expected number of writes and/or misses per write transaction
     ///
     /// The cache may still exceed your provided total, and inaccurate tuning numbers
     /// will yield a situation where you may use too-little ram, or too much. This could
@@ -388,11 +396,29 @@ impl ARCacheBuilder {
         let threads = isize::try_from(threads).unwrap();
         let ro_miss = isize::try_from(ex_ro_miss).unwrap();
         let wr_miss = isize::try_from(ex_rw_miss).unwrap();
-        let ratio = isize::try_from(READ_THREAD_RATIO).unwrap();
-        // I'd like to thank wolfram alpha ... for this magic.
-        let max = -((ratio * ((ro_miss * threads) + wr_miss - total)) / (ratio + threads));
-        let read_max = if read_cache { max / ratio } else { 0 };
 
+        // We need to clamp the expected read-miss so that the calculation doesn't end up
+        // skewing the cache to all "read cache" allocation.
+        //
+        // We clamp the read-max to an 8th of total div thread. This is because 1/8th read
+        // cache is a pretty standard ratio for a shared to per thread cache.
+        let read_max = if read_cache {
+            let read_max_limit = total / READ_THREAD_CACHE_RATIO;
+            let read_max_thread_limit = read_max_limit / threads;
+            ro_miss.clamp(0, read_max_thread_limit)
+        } else {
+            // No read cache requested
+            0
+        };
+
+        // We have to clamp rw_miss, even though we could go over-size - this is because
+        // we need to ensure that rw_miss is always < total.
+        let wr_miss_thread_limit = total / WRITE_THREAD_CACHE_RATIO;
+        let wr_miss = wr_miss.clamp(0, wr_miss_thread_limit);
+
+        let max = total - (wr_miss + (read_max * threads));
+
+        // Now make them usize.
         let max = usize::try_from(max).unwrap();
         let read_max = usize::try_from(read_max).unwrap();
 
@@ -467,12 +493,18 @@ impl ARCacheBuilder {
 
         let (max, read_max) = max.zip(read_max)?;
 
-        let watermark = watermark.unwrap_or(if max < 128 { 0 } else { (max / 20) * 18 });
+        let watermark = watermark.unwrap_or(if max < WATERMARK_DISABLE_MIN {
+            0
+        } else {
+            (max / WATERMARK_DISABLE_DIVISOR) * WATERMARK_DISABLE_RATIO
+        });
         let watermark = watermark.clamp(0, max);
         // If the watermark is 0, always track from the start.
         let init_watermark = watermark == 0;
 
-        let look_back_limit = look_back_limit.unwrap_or(32).clamp(4, u8::MAX) as u64;
+        let look_back_limit = look_back_limit
+            .unwrap_or(TXN_LOOKBACK_LIMIT_DEFAULT)
+            .clamp(TXN_LOOKBACK_LIMIT_ABS_MIN, u8::MAX) as u64;
 
         // The hit queue is reasonably cheap, so we can let this grow a bit.
         /*
@@ -480,12 +512,12 @@ impl ARCacheBuilder {
         let chan_size = if chan_size < 16 { 16 } else { chan_size };
         let chan_size = chan_size.clamp(0, 128);
         */
-        let chan_size = 64;
+        let chan_size = WRITE_THREAD_CHANNEL_SIZE;
         let hit_queue = Arc::new(ArrayQueue::new(chan_size));
 
         // this can oversize and take a lot of time to drain and manage, so we keep this bounded.
         // let chan_size = chan_size.clamp(0, 64);
-        let chan_size = 32;
+        let chan_size = READ_THREAD_CHANNEL_SIZE;
         let inc_queue = Arc::new(ArrayQueue::new(chan_size));
 
         let shared = RwLock::new(ArcShared {
@@ -3185,5 +3217,15 @@ mod tests {
         }
 
         drop(arc);
+    }
+
+    #[test]
+    fn test_set_expected_workload_negative() {
+        let _arc: Arc<ARCache<Box<u32>, Box<u32>>> = Arc::new(
+            ARCacheBuilder::default()
+                .set_expected_workload(256, 31, 8, 16, true)
+                .build()
+                .expect("Invalid cache parameters!"),
+        );
     }
 }
