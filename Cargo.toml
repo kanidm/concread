@@ -23,10 +23,12 @@ name = "concread"
 path = "src/lib.rs"
 
 [features]
-default = ["asynch", "ahash", "ebr", "maps", "arcache-is-hashtrie"]
+default = ["asynch", "foldhash", "ebr", "maps", "arcache-is-hashtrie"]
 
 # Features to add/remove contents.
 ahash = ["dep:ahash"]
+foldhash = ["dep:foldhash"]
+
 arcache = ["maps", "lru", "crossbeam-queue"]
 asynch = ["tokio"]
 ebr = ["crossbeam-epoch"]
@@ -44,6 +46,7 @@ simd_support = []
 
 [dependencies]
 ahash = { version = "0.8", optional = true }
+foldhash = { version = "0.1.5", optional = true }
 crossbeam-utils = { version = "0.8.21", optional = true }
 crossbeam-epoch = { version = "0.9.11", optional = true }
 crossbeam-queue = { version = "0.3.12", optional = true }

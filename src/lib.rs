@@ -29,7 +29,6 @@
 //! * `ebr` - epoch based reclaim cell
 //! * `maps` - concurrently readable b+tree and hashmaps
 //! * `arcache` - concurrently readable ARC cache
-//! * `ahash` - use the cpu accelerated ahash crate
 //!
 //! By default all of these features are enabled. If you are planning to use this crate in a wasm
 //! context we recommend you use only `maps` as a feature.

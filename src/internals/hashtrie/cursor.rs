@@ -20,7 +20,11 @@ use super::iter::*;
 
 #[cfg(feature = "ahash")]
 use ahash::RandomState;
-#[cfg(not(feature = "ahash"))]
+
+#[cfg(feature = "foldhash")]
+use foldhash::fast::RandomState;
+
+#[cfg(all(not(feature = "ahash"), not(feature = "foldhash")))]
 use std::collections::hash_map::RandomState;
 
 use std::hash::{BuildHasher, Hash, Hasher};
@@ -425,7 +429,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
             root,
             length: 0,
             txid: 1,
-            build_hasher: RandomState::new(),
+            build_hasher: RandomState::default(),
             k: PhantomData,
             v: PhantomData,
         }
