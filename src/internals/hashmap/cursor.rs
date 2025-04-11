@@ -11,7 +11,11 @@ use std::mem;
 
 #[cfg(feature = "ahash")]
 use ahash::RandomState;
-#[cfg(not(feature = "ahash"))]
+
+#[cfg(feature = "foldhash")]
+use foldhash::fast::RandomState;
+
+#[cfg(all(not(feature = "ahash"), not(feature = "foldhash")))]
 use std::collections::hash_map::RandomState;
 
 use std::hash::{BuildHasher, Hash, Hasher};
@@ -101,7 +105,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
             root: leaf as *mut Node<K, V>,
             size: 0,
             txid: 1,
-            build_hasher: RandomState::new(),
+            build_hasher: RandomState::default(),
         }
     }
 
@@ -128,7 +132,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
             txid,
             size,
             root,
-            build_hasher: RandomState::new(),
+            build_hasher: RandomState::default(),
         }
     }
 }
