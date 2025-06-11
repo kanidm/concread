@@ -174,19 +174,21 @@ where
         } = write;
 
         // Get the previous generation.
-        let rwguard = self.active.load();
-        // Start to setup for the commit.
-        let newdata = guard.pre_commit(work, &rwguard.data);
+        let old_arc = self.active.load_full();
 
+        // Start to setup for the commit.
+        let newdata = guard.pre_commit(work, &old_arc.data);
         let new_inner = Arc::new(LinCowCellInner::new(newdata));
-        {
-            // This modifies the next pointer of the existing read txns
-            // Create the arc pointer to our new data
-            // add it to the last value
-            rwguard.pin.store(Some(new_inner.clone()));
-        }
-        // now over-write the last value in the mutex.
+
+        // Link the old generation to the new one for linear drop ordering.
+        old_arc.pin.store(Some(new_inner.clone()));
+
+        // Publish the new generation.
         self.active.store(new_inner);
+
+        // Drop our strong ref; old generation will be reclaimed only
+        // after all readers are done.
+        drop(old_arc);
     }
 }
 
