@@ -21,14 +21,14 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 {
     /// Initiate a read transaction for the tree, concurrent to any
     /// other readers or writers.
-    pub fn read(&self) -> BptreeMapReadTxn<K, V> {
+    pub fn read(&self) -> BptreeMapReadTxn<'_, K, V> {
         let inner = self.inner.read();
         BptreeMapReadTxn { inner }
     }
 
     /// Initiate a write transaction for the tree, exclusive to this
     /// writer, and concurrently to all existing reads.
-    pub fn write(&self) -> BptreeMapWriteTxn<K, V> {
+    pub fn write(&self) -> BptreeMapWriteTxn<'_, K, V> {
         let inner = self.inner.write();
         BptreeMapWriteTxn { inner }
     }

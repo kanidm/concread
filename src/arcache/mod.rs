@@ -596,7 +596,7 @@ impl<
     /// Begin a read operation on the cache. This reader has a thread-local cache for items
     /// that are localled included via `insert`, and can communicate back to the main cache
     /// to safely include items.
-    pub fn read_stats<S>(&self, stats: S) -> ARCacheReadTxn<K, V, S>
+    pub fn read_stats<S>(&self, stats: S) -> ARCacheReadTxn<'_, K, V, S>
     where
         S: ARCacheReadStat + Clone,
     {
@@ -627,19 +627,19 @@ impl<
     /// Begin a read operation on the cache. This reader has a thread-local cache for items
     /// that are localled included via `insert`, and can communicate back to the main cache
     /// to safely include items.
-    pub fn read(&self) -> ARCacheReadTxn<K, V, ()> {
+    pub fn read(&self) -> ARCacheReadTxn<'_, K, V, ()> {
         self.read_stats(())
     }
 
     /// Begin a write operation on the cache. This writer has a thread-local store
     /// for all items that have been included or dirtied in the transactions, items
     /// may be removed from this cache (ie deleted, invalidated).
-    pub fn write(&self) -> ARCacheWriteTxn<K, V, ()> {
+    pub fn write(&self) -> ARCacheWriteTxn<'_, K, V, ()> {
         self.write_stats(())
     }
 
     /// _
-    pub fn write_stats<S>(&self, stats: S) -> ARCacheWriteTxn<K, V, S>
+    pub fn write_stats<S>(&self, stats: S) -> ARCacheWriteTxn<'_, K, V, S>
     where
         S: ARCacheWriteStat<K>,
     {
@@ -656,7 +656,7 @@ impl<
         }
     }
 
-    fn try_write_stats<S>(&self, stats: S) -> Result<ARCacheWriteTxn<K, V, S>, S>
+    fn try_write_stats<S>(&self, stats: S) -> Result<ARCacheWriteTxn<'_, K, V, S>, S>
     where
         S: ARCacheWriteStat<K>,
     {

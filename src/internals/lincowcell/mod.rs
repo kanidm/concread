@@ -134,7 +134,7 @@ where
     }
 
     /// Begin a read txn
-    pub fn read(&self) -> LinCowCellReadTxn<T, R, U> {
+    pub fn read(&self) -> LinCowCellReadTxn<'_, T, R, U> {
         // inc the arc.
         let work = self.active.load_full();
         LinCowCellReadTxn {
@@ -144,7 +144,7 @@ where
     }
 
     /// Begin a write txn
-    pub fn write(&self) -> LinCowCellWriteTxn<T, R, U> {
+    pub fn write(&self) -> LinCowCellWriteTxn<'_, T, R, U> {
         /* Take the exclusive write lock first */
         let write_guard = self.write.lock().unwrap();
         /* Now take a ro-txn to get the data copied */
@@ -160,7 +160,7 @@ where
     }
 
     /// Attempt a write txn
-    pub fn try_write(&self) -> Option<LinCowCellWriteTxn<T, R, U>> {
+    pub fn try_write(&self) -> Option<LinCowCellWriteTxn<'_, T, R, U>> {
         self.write.try_lock().ok().map(|write_guard| {
             /* This copies the data */
             let work: U = (*write_guard).create_writer();

@@ -125,7 +125,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 
     /// Attempt to create a new write, returns None if another writer
     /// already exists.
-    pub fn try_write(&self) -> Option<BptreeMapWriteTxn<K, V>> {
+    pub fn try_write(&self) -> Option<BptreeMapWriteTxn<'_, K, V>> {
         self.inner
             .try_write()
             .map(|inner| BptreeMapWriteTxn { inner })
@@ -193,7 +193,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterate over a range of values
-    pub fn range<R, T>(&self, range: R) -> RangeIter<K, V>
+    pub fn range<R, T>(&self, range: R) -> RangeIter<'_, K, V>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
@@ -203,17 +203,17 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterator over `(&K, &V)` of the set
-    pub fn iter(&self) -> Iter<K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V> {
         self.inner.as_ref().kv_iter()
     }
 
     /// Iterator over &K
-    pub fn values(&self) -> ValueIter<K, V> {
+    pub fn values(&self) -> ValueIter<'_, K, V> {
         self.inner.as_ref().v_iter()
     }
 
     /// Iterator over &V
-    pub fn keys(&self) -> KeyIter<K, V> {
+    pub fn keys(&self) -> KeyIter<'_, K, V> {
         self.inner.as_ref().k_iter()
     }
 
@@ -279,7 +279,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterate over a mutable range of values
-    pub fn range_mut<R, T>(&mut self, range: R) -> RangeMutIter<K, V>
+    pub fn range_mut<R, T>(&mut self, range: R) -> RangeMutIter<'_, K, V>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
@@ -305,7 +305,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     /// Create a read-snapshot of the current tree. This does NOT guarantee the tree may
     /// not be mutated during the read, so you MUST guarantee that no functions of the
     /// write txn are called while this snapshot is active.
-    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<K, V> {
+    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V> {
         BptreeMapReadSnapshot {
             inner: SnapshotType::W(self.inner.as_ref()),
         }
@@ -350,7 +350,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterate over a range of values
-    pub fn range<R, T>(&self, range: R) -> RangeIter<K, V>
+    pub fn range<R, T>(&self, range: R) -> RangeIter<'_, K, V>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
@@ -360,17 +360,17 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterator over `(&K, &V)` of the set
-    pub fn iter(&self) -> Iter<K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V> {
         self.inner.as_ref().kv_iter()
     }
 
     /// Iterator over &K
-    pub fn values(&self) -> ValueIter<K, V> {
+    pub fn values(&self) -> ValueIter<'_, K, V> {
         self.inner.as_ref().v_iter()
     }
 
     /// Iterator over &V
-    pub fn keys(&self) -> KeyIter<K, V> {
+    pub fn keys(&self) -> KeyIter<'_, K, V> {
         self.inner.as_ref().k_iter()
     }
 
@@ -386,7 +386,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 
     /// Create a read-snapshot of the current tree.
     /// As this is the read variant, it IS safe, and guaranteed the tree will not change.
-    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<K, V> {
+    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V> {
         BptreeMapReadSnapshot {
             inner: SnapshotType::R(self.inner.as_ref()),
         }
@@ -441,7 +441,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterate over a range of values
-    pub fn range<R, T>(&self, range: R) -> RangeIter<K, V>
+    pub fn range<R, T>(&self, range: R) -> RangeIter<'_, K, V>
     where
         K: Borrow<T>,
         T: Ord + ?Sized,
@@ -454,7 +454,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterator over `(&K, &V)` of the set
-    pub fn iter(&self) -> Iter<K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V> {
         match self.inner {
             SnapshotType::R(inner) => inner.kv_iter(),
             SnapshotType::W(inner) => inner.kv_iter(),
@@ -462,7 +462,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterator over &K
-    pub fn values(&self) -> ValueIter<K, V> {
+    pub fn values(&self) -> ValueIter<'_, K, V> {
         match self.inner {
             SnapshotType::R(inner) => inner.v_iter(),
             SnapshotType::W(inner) => inner.v_iter(),
@@ -470,7 +470,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 
     /// Iterator over &V
-    pub fn keys(&self) -> KeyIter<K, V> {
+    pub fn keys(&self) -> KeyIter<'_, K, V> {
         match self.inner {
             SnapshotType::R(inner) => inner.k_iter(),
             SnapshotType::W(inner) => inner.k_iter(),
