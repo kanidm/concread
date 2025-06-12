@@ -16,8 +16,6 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::sync::{Mutex, MutexGuard};
 
-use arc_swap::ArcSwap;
-
 /// A conncurrently readable cell.
 ///
 /// This structure behaves in a similar manner to a `RwLock<T>`. However unlike
@@ -62,7 +60,7 @@ use arc_swap::ArcSwap;
 #[derive(Debug, Default)]
 pub struct CowCell<T> {
     write: Mutex<()>,
-    active: ArcSwap<T>,
+    active: Mutex<Arc<T>>,
 }
 
 /// A `CowCell` Write Transaction handle.
@@ -105,7 +103,7 @@ where
     pub fn new(data: T) -> Self {
         CowCell {
             write: Mutex::new(()),
-            active: ArcSwap::from_pointee(data),
+            active: Mutex::new(Arc::new(data)),
         }
     }
 
@@ -113,8 +111,8 @@ where
     /// the read guard is guaranteed to be consistent for the life time of the
     /// read - even if writers commit during.
     pub fn read(&self) -> CowCellReadTxn<T> {
-        let rwguard = self.active.load_full();
-        CowCellReadTxn(rwguard)
+        let rwguard = self.active.lock().unwrap();
+        CowCellReadTxn(rwguard.clone())
         // rwguard ends here
     }
 
@@ -125,7 +123,10 @@ where
         /* Take the exclusive write lock first */
         let mguard = self.write.lock().unwrap();
         // We delay copying until the first get_mut.
-        let read = self.active.load_full();
+        let read = {
+            let rwguard = self.active.lock().unwrap();
+            rwguard.clone()
+        };
         /* Now build the write struct */
         CowCellWriteTxn {
             work: None,
@@ -142,7 +143,10 @@ where
         /* Take the exclusive write lock first */
         self.write.try_lock().ok().map(|mguard| {
             // We delay copying until the first get_mut.
-            let read = self.active.load_full();
+            let read = {
+                let rwguard = self.active.lock().unwrap();
+                rwguard.clone()
+            };
             /* Now build the write struct */
             CowCellWriteTxn {
                 work: None,
@@ -155,8 +159,10 @@ where
 
     fn commit(&self, newdata: Option<T>) {
         if let Some(new_data) = newdata {
-            // now over-write the last value in the `ArcSwap`.
-            self.active.store(Arc::new(new_data));
+            let mut rwguard = self.active.lock().unwrap();
+            let new_inner = Arc::new(new_data);
+            // now over-write the last value in the mutex.
+            *rwguard = new_inner;
         }
         // If not some, we do nothing.
         // Done
