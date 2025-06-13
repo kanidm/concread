@@ -51,21 +51,21 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 
     /// Initiate a read transaction for the Hashmap, concurrent to any
     /// other readers or writers.
-    pub fn read(&self) -> HashMapReadTxn<K, V> {
+    pub fn read(&self) -> HashMapReadTxn<'_, K, V> {
         let inner = self.inner.read();
         HashMapReadTxn { inner }
     }
 
     /// Initiate a write transaction for the map, exclusive to this
     /// writer, and concurrently to all existing reads.
-    pub fn write(&self) -> HashMapWriteTxn<K, V> {
+    pub fn write(&self) -> HashMapWriteTxn<'_, K, V> {
         let inner = self.inner.write();
         HashMapWriteTxn { inner }
     }
 
     /// Attempt to create a new write, returns None if another writer
     /// already exists.
-    pub fn try_write(&self) -> Option<HashMapWriteTxn<K, V>> {
+    pub fn try_write(&self) -> Option<HashMapWriteTxn<'_, K, V>> {
         self.inner
             .try_write()
             .map(|inner| HashMapWriteTxn { inner })

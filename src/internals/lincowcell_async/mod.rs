@@ -122,7 +122,7 @@ where
     }
 
     /// Begin a read txn
-    pub fn read(&self) -> LinCowCellReadTxn<T, R, U> {
+    pub fn read(&self) -> LinCowCellReadTxn<'_, T, R, U> {
         // inc the arc.
         let work = self.active.load_full();
         LinCowCellReadTxn {
@@ -148,7 +148,7 @@ where
     }
 
     /// Attempt a write txn
-    pub fn try_write(&self) -> Option<LinCowCellWriteTxn<T, R, U>> {
+    pub fn try_write(&self) -> Option<LinCowCellWriteTxn<'_, T, R, U>> {
         self.write
             .try_lock()
             .map(|write_guard| {

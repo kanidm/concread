@@ -156,7 +156,7 @@ where
     }
 
     /// Begin a write transaction, returning a write guard.
-    pub fn write(&self) -> EbrCellWriteTxn<T> {
+    pub fn write(&self) -> EbrCellWriteTxn<'_, T> {
         /* Take the exclusive write lock first */
         let mguard = self.write.lock().unwrap();
         /* Do an atomic load of the current value */
@@ -173,7 +173,7 @@ where
 
     /// Attempt to begin a write transaction. If it's already held,
     /// `None` is returned.
-    pub fn try_write(&self) -> Option<EbrCellWriteTxn<T>> {
+    pub fn try_write(&self) -> Option<EbrCellWriteTxn<'_, T>> {
         self.write.try_lock().ok().map(|mguard| {
             let guard = epoch::pin();
             let cur_shared = self.active.load(Acquire, &guard);

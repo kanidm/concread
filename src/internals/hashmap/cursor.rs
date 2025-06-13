@@ -242,15 +242,15 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
         self.search(h, k).is_some()
     }
 
-    fn kv_iter(&self) -> Iter<K, V> {
+    fn kv_iter(&self) -> Iter<'_, K, V> {
         Iter::new(self.get_root(), self.len())
     }
 
-    fn k_iter(&self) -> KeyIter<K, V> {
+    fn k_iter(&self) -> KeyIter<'_, K, V> {
         KeyIter::new(self.get_root(), self.len())
     }
 
-    fn v_iter(&self) -> ValueIter<K, V> {
+    fn v_iter(&self) -> ValueIter<'_, K, V> {
         ValueIter::new(self.get_root(), self.len())
     }
 

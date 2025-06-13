@@ -121,7 +121,7 @@ where
     /// Begin a write transaction, returning a write guard. The content of the
     /// write is only visible to this thread, and is not visible to any reader
     /// until `commit()` is called.
-    pub fn write(&self) -> CowCellWriteTxn<T> {
+    pub fn write(&self) -> CowCellWriteTxn<'_, T> {
         /* Take the exclusive write lock first */
         let mguard = self.write.lock().unwrap();
         // We delay copying until the first get_mut.
@@ -138,7 +138,7 @@ where
     /// Attempt to create a write transaction. If it fails, and err
     /// is returned. On success the `Ok(guard)` is returned. See also
     /// `write(&self)`
-    pub fn try_write(&self) -> Option<CowCellWriteTxn<T>> {
+    pub fn try_write(&self) -> Option<CowCellWriteTxn<'_, T>> {
         /* Take the exclusive write lock first */
         self.write.try_lock().ok().map(|mguard| {
             // We delay copying until the first get_mut.

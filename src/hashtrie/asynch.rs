@@ -44,7 +44,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 
     /// Attempt to create a new write, returns None if another writer
     /// already exists.
-    pub fn try_write(&self) -> Option<HashTrieWriteTxn<K, V>> {
+    pub fn try_write(&self) -> Option<HashTrieWriteTxn<'_, K, V>> {
         self.inner
             .try_write()
             .map(|inner| HashTrieWriteTxn { inner })
