@@ -6,8 +6,6 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};
 
-use arc_swap::ArcSwap;
-
 /// A conncurrently readable async cell.
 ///
 /// This structure behaves in a similar manner to a `RwLock<T>`. However unlike
@@ -28,7 +26,7 @@ use arc_swap::ArcSwap;
 #[derive(Debug, Default)]
 pub struct CowCell<T> {
     write: Mutex<()>,
-    active: ArcSwap<T>,
+    active: Mutex<Arc<T>>,
 }
 
 /// A `CowCell` Write Transaction handle.
@@ -71,15 +69,16 @@ where
     pub fn new(data: T) -> Self {
         CowCell {
             write: Mutex::new(()),
-            active: ArcSwap::from_pointee(data),
+            active: Mutex::new(Arc::new(data)),
         }
     }
 
     /// Begin a read transaction, returning a read guard. The content of
     /// the read guard is guaranteed to be consistent for the life time of the
     /// read - even if writers commit during.
-    pub fn read<'x>(&'x self) -> CowCellReadTxn<T> {
-        CowCellReadTxn(self.active.load_full())
+    pub async fn read<'x>(&'x self) -> CowCellReadTxn<T> {
+        let rwguard = self.active.lock().await;
+        CowCellReadTxn(rwguard.clone())
         // rwguard ends here
     }
 
@@ -90,7 +89,10 @@ where
         /* Take the exclusive write lock first */
         let mguard = self.write.lock().await;
         // We delay copying until the first get_mut.
-        let read = self.active.load_full();
+        let read = {
+            let rwguard = self.active.lock().await;
+            rwguard.clone()
+        };
         /* Now build the write struct */
         CowCellWriteTxn {
             work: None,
@@ -107,7 +109,10 @@ where
         /* Take the exclusive write lock first */
         if let Ok(mguard) = self.write.try_lock() {
             // We delay copying until the first get_mut.
-            let read: Arc<_> = self.active.load_full();
+            let read: Arc<_> = {
+                let rwguard = self.active.lock().await;
+                rwguard.clone()
+            };
             /* Now build the write struct */
             Some(CowCellWriteTxn {
                 work: None,
@@ -120,10 +125,12 @@ where
         }
     }
 
-    fn commit(&self, newdata: Option<T>) {
+    async fn commit(&self, newdata: Option<T>) {
         if let Some(new_data) = newdata {
-            // now over-write the last value in the `ArcSwap`.
-            self.active.store(Arc::new(new_data));
+            let mut rwguard = self.active.lock().await;
+            let new_inner = Arc::new(new_data);
+            // now over-write the last value in the mutex.
+            *rwguard = new_inner;
         }
         // If not some, we do nothing.
         // Done
@@ -167,9 +174,9 @@ where
     /// This will consume the transaction so no further changes can be made
     /// after this is called. Not calling this in a block, is equivalent to
     /// an abort/rollback of the transaction.
-    pub fn commit(self) {
+    pub async fn commit(self) {
         /* Write our data back to the CowCell */
-        self.caller.commit(self.work);
+        self.caller.commit(self.work).await;
     }
 }
 
@@ -212,9 +219,9 @@ mod tests {
             /* Take a write txn */
             let mut cc_wrtxn = cc.write().await;
             *cc_wrtxn = 1;
-            cc_wrtxn.commit();
+            cc_wrtxn.commit().await;
         }
-        let cc_rotxn = cc.read();
+        let cc_rotxn = cc.read().await;
         assert_eq!(*cc_rotxn, 1);
     }
 
@@ -235,7 +242,7 @@ mod tests {
         let data: i64 = 0;
         let cc = CowCell::new(data);
 
-        let cc_rotxn_a = cc.read();
+        let cc_rotxn_a = cc.read().await;
         assert_eq!(*cc_rotxn_a, 0);
 
         {
@@ -251,14 +258,14 @@ mod tests {
             }
             assert_eq!(*cc_rotxn_a, 0);
 
-            let cc_rotxn_b = cc.read();
+            let cc_rotxn_b = cc.read().await;
             assert_eq!(*cc_rotxn_b, 0);
             /* The write txn and it's lock is dropped here */
-            cc_wrtxn.commit();
+            cc_wrtxn.commit().await;
         }
 
         /* Start a new txn and see it's still good */
-        let cc_rotxn_c = cc.read();
+        let cc_rotxn_c = cc.read().await;
         assert_eq!(*cc_rotxn_c, 1);
         assert_eq!(*cc_rotxn_a, 0);
     }
@@ -286,7 +293,7 @@ mod tests {
                     let mut_ptr = cc_wrtxn.get_mut();
                     mut_ptr.data += 1;
                 }
-                cc_wrtxn.commit();
+                cc_wrtxn.commit().await;
             }
         }
     }
