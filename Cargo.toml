@@ -37,7 +37,7 @@ tcache = []
 std = ["ahash/std", "ahash/runtime-rng", "crossbeam-epoch/std", "crossbeam-queue/std", "crossbeam-utils/std",  "tracing/std", "dep:parking_lot", "smallvec/write"]
 #serde = ["lock_api/serde"]
 
-no_std = ["crossbeam-epoch/alloc", "crossbeam-queue/alloc", "serde/alloc", "dep:spin", "ahash", "arc-swap/experimental-thread-local"]
+no_std = ["crossbeam-epoch/alloc", "crossbeam-queue/alloc", "serde/alloc", "dep:spin", "ahash"]
 
 # Internal features for tweaking some align/perf behaviours.
 dhat-heap = ["dep:dhat"]

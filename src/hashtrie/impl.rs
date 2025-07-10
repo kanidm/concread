@@ -27,7 +27,7 @@ use std::iter::FromIterator;
 ///
 /// Transactions can be rolled-back (aborted) without penalty by dropping
 /// the `HashTrieWriteTxn` without calling `commit()`.
-pub struct HashTrie<K, V, M>
+pub struct HashTrie<K, V, M = crate::utils::DefaultRawMutex>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
@@ -98,7 +98,7 @@ where
     inner: SnapshotType<'a, K, V, M>,
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex> Default
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static> Default
     for HashTrie<K, V, M>
 {
     fn default() -> Self {

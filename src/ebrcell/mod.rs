@@ -191,7 +191,7 @@ where
                 caller: self,
                 _guard: mguard,
             }
-        }).ok()
+        })
     }
 
     /// This is an internal component of the commit cycle. It takes ownership

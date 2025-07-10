@@ -177,7 +177,7 @@ mod tests {
     fn test_bptree2_map_from_iter_1() {
         let ins: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
 
-        let map = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
+        let map: BptreeMap<usize, usize> = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
 
         {
             let w = map.write();
@@ -195,7 +195,7 @@ mod tests {
         let mut ins: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
-        let map = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
+        let map: BptreeMap<usize, usize> = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
 
         {
             let w = map.write();
@@ -211,7 +211,7 @@ mod tests {
 
     fn bptree_map_basic_concurrency(lower: usize, upper: usize) {
         // Create a map
-        let map = BptreeMap::new();
+        let map: BptreeMap<usize, usize> = BptreeMap::new();
 
         // add values
         {
@@ -276,7 +276,7 @@ mod tests {
         // Need to ensure that txns are dropped in order.
 
         // Add data, enough to cause a split. All data should be *2
-        let map = BptreeMap::new();
+        let map: BptreeMap<usize, usize> = BptreeMap::new();
         // add values
         {
             let mut w = map.write();
@@ -346,7 +346,7 @@ mod tests {
     fn test_bptree2_map_rangeiter_1() {
         let ins: Vec<usize> = (0..100).collect();
 
-        let map = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
+        let map: BptreeMap<usize, usize, parking_lot::RawMutex> = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
 
         {
             let w = map.write();
@@ -362,7 +362,7 @@ mod tests {
 
     #[test]
     fn test_bptree2_map_rangeiter_2() {
-        let map = BptreeMap::from_iter([(3, ()), (4, ()), (0, ())]);
+        let map: BptreeMap<i32, (), parking_lot::RawMutex> = BptreeMap::from_iter([(3, ()), (4, ()), (0, ())]);
 
         let r = map.read();
         assert!(r.range(1..=2).count() == 0);
@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn test_bptree2_map_rangeiter_3() {
-        let map = BptreeMap::from_iter([0, 1, 2, 3, 4, 5, 6, 8].map(|v| (v, ())));
+        let map: BptreeMap<i32, (), parking_lot::RawMutex> = BptreeMap::from_iter([0, 1, 2, 3, 4, 5, 6, 8].map(|v| (v, ())));
 
         let r = map.read();
         assert!(r.range((Bound::Excluded(6), Bound::Included(7))).count() == 0);

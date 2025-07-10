@@ -29,21 +29,27 @@ use std::iter::FromIterator;
 ///
 /// Transactions can be rolled-back (aborted) without penalty by dropping
 /// the `HashMapWriteTxn` without calling `commit()`.
-pub struct HashMap<K, V, M>
+pub struct HashMap<K, V, M = crate::utils::DefaultRawMutex>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
-    M: RawMutex
+    M: RawMutex + 'static,
 {
     inner: LinCowCell<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
 
-unsafe impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + Send + 'static>
-    Send for HashMap<K, V, M>
+unsafe impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + Send + 'static,
+    > Send for HashMap<K, V, M>
 {
 }
-unsafe impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + Send + Sync + 'static>
-    Sync for HashMap<K, V, M>
+unsafe impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + Send + Sync + 'static,
+    > Sync for HashMap<K, V, M>
 {
 }
 
@@ -54,7 +60,7 @@ pub struct HashMapReadTxn<'a, K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
-    M: RawMutex
+    M: RawMutex,
 {
     inner: LinCowCellReadTxn<'a, SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
@@ -68,7 +74,7 @@ pub struct HashMapWriteTxn<'a, K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
-    M: RawMutex
+    M: RawMutex,
 {
     inner: LinCowCellWriteTxn<'a, SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
@@ -77,7 +83,7 @@ enum SnapshotType<'a, K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
-    M: RawMutex
+    M: RawMutex,
 {
     R(&'a CursorRead<K, V, M>),
     W(&'a CursorWrite<K, V>),
@@ -95,26 +101,35 @@ pub struct HashMapReadSnapshot<'a, K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
-    M: RawMutex
+    M: RawMutex,
 {
     inner: SnapshotType<'a, K, V, M>,
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static> Default
-    for HashMap<K, V, M>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + 'static,
+    > Default for HashMap<K, V, M>
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
-    FromIterator<(K, V)> for HashMap<K, V, M>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + 'static,
+    > FromIterator<(K, V)> for HashMap<K, V, M>
 {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let mut new_sblock = unsafe { SuperBlock::new() };
         let prev: CursorRead<K, V, M> = new_sblock.create_reader();
-        let mut cursor = <SuperBlock<K, V> as LinCowCellCapable<CursorRead<K, V, M>, CursorWrite<K, V>>>::create_writer(&new_sblock); //new_sblock.create_writer();
+        let mut cursor = <SuperBlock<K, V> as LinCowCellCapable<
+            CursorRead<K, V, M>,
+            CursorWrite<K, V>,
+        >>::create_writer(&new_sblock); //new_sblock.create_writer();
         cursor.extend(iter);
 
         let _ = new_sblock.pre_commit(cursor, &prev);
@@ -125,16 +140,22 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
-    Extend<(K, V)> for HashMapWriteTxn<'_, K, V, M>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + 'static,
+    > Extend<(K, V)> for HashMapWriteTxn<'_, K, V, M>
 {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         self.inner.as_mut().extend(iter);
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
-    HashMapWriteTxn<'_, K, V, M>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + 'static,
+    > HashMapWriteTxn<'_, K, V, M>
 {
     /*
     pub(crate) fn prehash<Q>(&self, k: &Q) -> u64
@@ -239,8 +260,11 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex>
-    HashMapReadTxn<'_, K, V, M>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex,
+    > HashMapReadTxn<'_, K, V, M>
 {
     pub(crate) fn get_prehashed<Q>(&self, k: &Q, k_hash: u64) -> Option<&V>
     where
@@ -267,7 +291,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.get(k).is_some()
+        self.get::<Q>(k).is_some()
     }
 
     /// Returns the current number of k:v pairs in the tree
@@ -277,7 +301,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 
     /// Determine if the set is currently empty
     pub fn is_empty(&self) -> bool {
-        self.inner.as_ref().len() == 0
+        0usize == self.inner.as_ref().len()
     }
 
     /// Iterator over `(&K, &V)` of the set
@@ -304,8 +328,11 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
-    HashMapReadSnapshot<'_, K, V, M>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + 'static,
+    > HashMapReadSnapshot<'_, K, V, M>
 {
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.

@@ -13,26 +13,26 @@ use crate::internals::lincowcell_async::{LinCowCell, LinCowCellReadTxn, LinCowCe
 
 include!("impl.rs");
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMap<K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, R: RawMutex + 'static>
+    BptreeMap<K, V, R>
 {
     /// Initiate a read transaction for the tree, concurrent to any
     /// other readers or writers.
-    pub fn read<'x>(&'x self) -> BptreeMapReadTxn<'x, K, V> {
+    pub fn read<'x>(&'x self) -> BptreeMapReadTxn<'x, K, V, R> {
         let inner = self.inner.read();
         BptreeMapReadTxn { inner }
     }
 
     /// Initiate a write transaction for the tree, exclusive to this
     /// writer, and concurrently to all existing reads.
-    pub async fn write<'x>(&'x self) -> BptreeMapWriteTxn<'x, K, V> {
+    pub async fn write<'x>(&'x self) -> BptreeMapWriteTxn<'x, K, V, R> {
         let inner = self.inner.write().await;
         BptreeMapWriteTxn { inner }
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapWriteTxn<'_, K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, R: RawMutex + 'static>
+    BptreeMapWriteTxn<'_, K, V, R>
 {
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to perceive these changes.
@@ -169,7 +169,7 @@ mod tests {
     async fn test_bptree2_map_from_iter_1() {
         let ins: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
 
-        let map = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
+        let map: BptreeMap<usize, usize> = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
 
         {
             let w = map.write().await;
@@ -187,7 +187,7 @@ mod tests {
         let mut ins: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
-        let map = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
+        let map: BptreeMap<usize, usize> = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
 
         {
             let w = map.write().await;
@@ -203,7 +203,7 @@ mod tests {
 
     async fn bptree_map_basic_concurrency(lower: usize, upper: usize) {
         // Create a map
-        let map = BptreeMap::new();
+        let map: BptreeMap<usize, usize> = BptreeMap::new();
 
         // add values
         {
@@ -268,10 +268,10 @@ mod tests {
         // Need to ensure that txns are dropped in order.
 
         // Add data, enough to cause a split. All data should be *2
-        let map = BptreeMap::new();
+        let map: BptreeMap<usize, usize> = BptreeMap::new();
         // add values
         {
-            let mut w: crate::bptree::asynch::BptreeMapWriteTxn<'_, usize, usize> = map.write().await;
+            let mut w = map.write().await;
             w.extend((0..(L_CAPACITY * 2)).map(|v| (v * 2, v * 2)));
             w.commit();
         }

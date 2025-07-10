@@ -50,7 +50,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     pub fn new() -> Self {
         // I acknowledge I understand what is required to make this safe.
         HashTrie {
-            inner: LinCowCell::new(unsafe { SuperBlock::new() }),
+            inner: LinCowCell::<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>::new(unsafe { SuperBlock::new() }),
         }
     }
 
@@ -70,7 +70,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 
     /// Attempt to create a new write, returns None if another writer
     /// already exists.
-    pub fn try_write(&self) -> Option<HashTrieWriteTxn<'_, K, V, M>> {
+    pub fn try_write(&self) -> Option<HashTrieWriteTxn<K, V, M>> {
         self.inner
             .try_write()
             .map(|inner| HashTrieWriteTxn { inner })

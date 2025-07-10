@@ -17,8 +17,8 @@ use crate::internals::lincowcell_async::{LinCowCell, LinCowCellReadTxn, LinCowCe
 
 include!("impl.rs");
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    HashTrie<K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
+    HashTrie<K, V, M>
 {
     /// Construct a new concurrent hashtrie
     pub fn new() -> Self {
@@ -30,29 +30,29 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 
     /// Initiate a read transaction for the Hashmap, concurrent to any
     /// other readers or writers.
-    pub fn read<'x>(&'x self) -> HashTrieReadTxn<'x, K, V> {
+    pub fn read<'x>(&'x self) -> HashTrieReadTxn<'x, K, V, M> {
         let inner = self.inner.read();
         HashTrieReadTxn { inner }
     }
 
     /// Initiate a write transaction for the map, exclusive to this
     /// writer, and concurrently to all existing reads.
-    pub async fn write<'x>(&'x self) -> HashTrieWriteTxn<'x, K, V> {
+    pub async fn write<'x>(&'x self) -> HashTrieWriteTxn<'x, K, V, M> {
         let inner = self.inner.write().await;
         HashTrieWriteTxn { inner }
     }
 
     /// Attempt to create a new write, returns None if another writer
     /// already exists.
-    pub fn try_write(&self) -> Option<HashTrieWriteTxn<'_, K, V>> {
+    pub fn try_write(&self) -> Option<HashTrieWriteTxn<'_, K, V, M>> {
         self.inner
             .try_write()
             .map(|inner| HashTrieWriteTxn { inner })
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    HashTrieWriteTxn<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
+    HashTrieWriteTxn<'_, K, V, M>
 {
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to perceieve these changes.

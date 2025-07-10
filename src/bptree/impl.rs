@@ -31,11 +31,11 @@ use std::ops::RangeBounds;
 ///
 /// Transactions can be rolled-back (aborted) without penalty by dropping
 /// the `BptreeMapWriteTxn` without calling `commit()`.
-pub struct BptreeMap<K, V, M>
+pub struct BptreeMap<K, V, M = crate::utils::DefaultRawMutex>
 where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
-    M: RawMutex
+    M: RawMutex + 'static
 {
     inner: LinCowCell<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
@@ -79,7 +79,7 @@ pub struct BptreeMapWriteTxn<'a, K, V, M>
 where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
-    M: RawMutex
+    M: RawMutex + 'static
 {
     inner: LinCowCellWriteTxn<'a, SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
@@ -119,8 +119,8 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex>
-    BptreeMap<K, V, M>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, R: RawMutex>
+    BptreeMap<K, V, R>
 {
     /// Construct a new concurrent tree
     pub fn new() -> Self {
@@ -132,7 +132,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 
     /// Attempt to create a new write, returns None if another writer
     /// already exists.
-    pub fn try_write(&self) -> Option<BptreeMapWriteTxn<'_, K, V>> {
+    pub fn try_write(&self) -> Option<BptreeMapWriteTxn<'_, K, V, R>> {
         self.inner
             .try_write()
             .map(|inner| BptreeMapWriteTxn { inner })
@@ -315,7 +315,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     /// Create a read-snapshot of the current tree. This does NOT guarantee the tree may
     /// not be mutated during the read, so you MUST guarantee that no functions of the
     /// write txn are called while this snapshot is active.
-    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V> {
+    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V, M> {
         BptreeMapReadSnapshot {
             inner: SnapshotType::W(self.inner.as_ref()),
         }
@@ -396,7 +396,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 
     /// Create a read-snapshot of the current tree.
     /// As this is the read variant, it IS safe, and guaranteed the tree will not change.
-    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V> {
+    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V, M> {
         BptreeMapReadSnapshot {
             inner: SnapshotType::R(self.inner.as_ref()),
         }

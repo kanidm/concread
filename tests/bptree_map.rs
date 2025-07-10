@@ -8,7 +8,7 @@ proptest::proptest! {
     fn bptree_range_iter_consistent(values: BTreeSet<u8>, left in 0..u8::MAX - 1, len in 1..u8::MAX, bounds: (Bound<()>, Bound<()>)) {
         let range = (bounds.0.map(|()| left), bounds.1.map(|()| left.saturating_add(len)));
         let btree_map = BTreeMap::from_iter(values.iter().cloned().map(|v| (v, ())));
-        let bptree_map = BptreeMap::from_iter(values.iter().cloned().map(|v| (v, ())));
+        let bptree_map: BptreeMap<u8, ()> = BptreeMap::from_iter(values.iter().cloned().map(|v| (v, ())));
         let bptree_map_read_tx = bptree_map.read();
 
         let btree_iter = btree_map.range(range);
@@ -22,7 +22,7 @@ proptest::proptest! {
     #[test]
     fn bptree_get_consistent(values: BTreeSet<u8>, key: u8) {
         let btree_map = BTreeMap::from_iter(values.iter().cloned().map(|v| (v, v)));
-        let bptree_map = BptreeMap::from_iter(values.iter().cloned().map(|v| (v, v)));
+        let bptree_map: BptreeMap<u8, u8> = BptreeMap::from_iter(values.iter().cloned().map(|v| (v, v)));
         let bptree_map_read_tx = bptree_map.read();
 
         let btree_value = btree_map.get(&key);
@@ -34,7 +34,7 @@ proptest::proptest! {
     #[test]
     fn bptree_remove_consistent(values in proptest::collection::btree_set(proptest::arbitrary::any::<u8>(), 1..256), indices: Vec<proptest::sample::Index> ) {
         let mut btree_map = BTreeMap::from_iter(values.iter().cloned().map(|v| (v.to_string(), v.to_string())));
-        let bptree_map = BptreeMap::from_iter(values.iter().cloned().map(|v| (v.to_string(), v.to_string())));
+        let bptree_map: BptreeMap<String, String> = BptreeMap::from_iter(values.iter().cloned().map(|v| (v.to_string(), v.to_string())));
         let mut bptree_map_write_tx = bptree_map.write();
 
         for index in indices {
@@ -66,7 +66,7 @@ fn bptree_remove_1() {
 
     let to_remove = [9u8, 27, 40, 4].map(|v| v.to_string());
 
-    let bptree_map = BptreeMap::from_iter(
+    let bptree_map: BptreeMap<String, String> = BptreeMap::from_iter(
         values
             .iter()
             .cloned()

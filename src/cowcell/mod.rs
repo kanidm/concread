@@ -12,8 +12,6 @@
 #[cfg(feature = "asynch")]
 pub mod asynch;
 
-
-
 use core::ops::{Deref, DerefMut};
 use lock_api::{Mutex, MutexGuard, RawMutex};
 
@@ -22,7 +20,6 @@ use alloc::sync::Arc;
 
 #[cfg(feature = "std")]
 use std::sync::Arc;
-
 
 /// A conncurrently readable cell.
 ///
@@ -65,10 +62,19 @@ use std::sync::Arc;
 /// // And a new read transaction has '1'
 /// assert_eq!(*new_read_txn, 1);
 /// ```
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CowCell<T, R: RawMutex = crate::utils::DefaultRawMutex> {
     write: Mutex<R, ()>,
     active: Mutex<R, Arc<T>>,
+}
+
+impl<T: Default, R: RawMutex> Default for CowCell<T, R> {
+    fn default() -> Self {
+        Self {
+            write: Mutex::new(()),
+            active: Mutex::new(Arc::new(Default::default())),
+        }
+    }
 }
 
 /// A `CowCell` Write Transaction handle.
@@ -105,7 +111,7 @@ impl<T> Clone for CowCellReadTxn<T> {
 impl<T, R> CowCell<T, R>
 where
     T: Clone,
-    R: RawMutex
+    R: RawMutex,
 {
     /// Create a new `CowCell` for storing type `T`. `T` must implement `Clone`
     /// to enable clone-on-write.
@@ -120,7 +126,7 @@ where
     /// the read guard is guaranteed to be consistent for the life time of the
     /// read - even if writers commit during.
     pub fn read(&self) -> CowCellReadTxn<T> {
-        let rwguard = self.active.lock().unwrap();
+        let rwguard = self.active.lock();
         CowCellReadTxn(rwguard.clone())
         // rwguard ends here
     }
@@ -133,7 +139,7 @@ where
         let mguard = self.write.lock();
         // We delay copying until the first get_mut.
         let read = {
-            let rwguard = self.active.lock().unwrap();
+            let rwguard = self.active.lock();
             rwguard.clone()
         };
         /* Now build the write struct */
@@ -153,7 +159,7 @@ where
         self.write.try_lock().map(|mguard| {
             // We delay copying until the first get_mut.
             let read = {
-                let rwguard = self.active.lock().unwrap();
+                let rwguard = self.active.lock();
                 rwguard.clone()
             };
             /* Now build the write struct */
@@ -168,7 +174,7 @@ where
 
     fn commit(&self, newdata: Option<T>) {
         if let Some(new_data) = newdata {
-            let mut rwguard = self.active.lock().unwrap();
+            let mut rwguard = self.active.lock();
             let new_inner = Arc::new(new_data);
             // now over-write the last value in the mutex.
             *rwguard = new_inner;
@@ -190,7 +196,7 @@ impl<T> Deref for CowCellReadTxn<T> {
 impl<T, R> CowCellWriteTxn<'_, T, R>
 where
     T: Clone,
-    R: RawMutex
+    R: RawMutex,
 {
     /// Access a mutable pointer of the data in the `CowCell`. This data is only
     /// visible to the write transaction object in this thread, until you call
@@ -224,7 +230,7 @@ where
 impl<T, R> Deref for CowCellWriteTxn<'_, T, R>
 where
     T: Clone,
-    R: RawMutex
+    R: RawMutex,
 {
     type Target = T;
 
@@ -240,7 +246,7 @@ where
 impl<T, R> DerefMut for CowCellWriteTxn<'_, T, R>
 where
     T: Clone,
-    R: RawMutex
+    R: RawMutex,
 {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut T {
@@ -259,7 +265,7 @@ mod tests {
     #[test]
     fn test_deref_mut() {
         let data: i64 = 0;
-        let cc = CowCell::new(data);
+        let cc: CowCell<i64> = CowCell::new(data);
         {
             /* Take a write txn */
             let mut cc_wrtxn = cc.write();
@@ -273,7 +279,7 @@ mod tests {
     #[test]
     fn test_try_write() {
         let data: i64 = 0;
-        let cc = CowCell::new(data);
+        let cc: CowCell<i64> = CowCell::new(data);
         /* Take a write txn */
         let cc_wrtxn_a = cc.try_write();
         assert!(cc_wrtxn_a.is_some());
@@ -285,7 +291,7 @@ mod tests {
     #[test]
     fn test_simple_create() {
         let data: i64 = 0;
-        let cc = CowCell::new(data);
+        let cc: CowCell<i64> = CowCell::new(data);
 
         let cc_rotxn_a = cc.read();
         assert_eq!(*cc_rotxn_a, 0);
@@ -323,7 +329,7 @@ mod tests {
         let start = Instant::now();
         // Create the new cowcell.
         let data: i64 = 0;
-        let cc = CowCell::new(data);
+        let cc: CowCell<i64> = CowCell::new(data);
 
         assert!(scope(|scope| {
             let cc_ref = &cc;

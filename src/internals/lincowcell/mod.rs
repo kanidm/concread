@@ -82,10 +82,10 @@ pub trait LinCowCellCapable<R, U> {
 
 #[derive(Debug)]
 /// A concurrently readable cell with linearised drop behaviour.
-pub struct LinCowCell<T, R, U, M: RawMutex> {
+pub struct LinCowCell<T, R, U, M: RawMutex = crate::utils::DefaultRawMutex> {
     updater: PhantomData<U>,
     write: Mutex<M, T>,
-    active: Mutex<M, Arc<LinCowCellInner<R>>>,
+    active: Mutex<M, Arc<LinCowCellInner<R, M>>>,
 }
 
 #[derive(Debug)]
@@ -98,9 +98,9 @@ pub struct LinCowCellWriteTxn<'a, T, R, U, M: RawMutex> {
 }
 
 #[derive(Debug)]
-struct LinCowCellInner<R> {
+struct LinCowCellInner<R, M: RawMutex> {
     // This gives the chain effect.
-    pin: Mutex<Option<Arc<LinCowCellInner<R>>>>,
+    pin: Mutex<M , Option<Arc<LinCowCellInner<R, M>>>>,
     data: R,
 }
 
@@ -110,10 +110,10 @@ pub struct LinCowCellReadTxn<'a, T, R, U, M: RawMutex> {
     // We must outlive the root
     _caller: &'a LinCowCell<T, R, U, M>,
     // We pin the current version.
-    work: Arc<LinCowCellInner<R>>,
+    work: Arc<LinCowCellInner<R, M>>,
 }
 
-impl<R> LinCowCellInner<R> {
+impl<R, M: RawMutex> LinCowCellInner<R, M> {
     pub fn new(data: R) -> Self {
         LinCowCellInner {
             pin: Mutex::new(None),
@@ -122,10 +122,10 @@ impl<R> LinCowCellInner<R> {
     }
 }
 
-impl<R> Drop for LinCowCellInner<R> {
+impl<R, M: RawMutex> Drop for LinCowCellInner<R, M> {
     fn drop(&mut self) {
         // Ensure the default drop won't recursively drop the chain
-        let mut current = self.pin.lock().unwrap().take();
+        let mut current: Option<Arc<LinCowCellInner<R, M>>> = self.pin.lock().deref_mut().take();
 
         // Drop the chain iteratively to avoid stack overflow
         while let Some(arc) = current {
@@ -133,29 +133,7 @@ impl<R> Drop for LinCowCellInner<R> {
             match Arc::try_unwrap(arc) {
                 Ok(inner) => {
                     // Continue with the next link.
-                    current = inner.pin.lock().unwrap().take();
-                }
-                Err(_) => {
-                    // Another reference exists, so we can safely let it drop normally without recursion
-                    break;
-                }
-            }
-        }
-    }
-}
-
-impl<R> Drop for LinCowCellInner<R> {
-    fn drop(&mut self) {
-        // Ensure the default drop won't recursively drop the chain
-        let mut current = self.pin.lock().unwrap().take();
-
-        // Drop the chain iteratively to avoid stack overflow
-        while let Some(arc) = current {
-            // Try to get exclusive ownership of the next link
-            match Arc::try_unwrap(arc) {
-                Ok(inner) => {
-                    // Continue with the next link.
-                    current = inner.pin.lock().unwrap().take();
+                    current = inner.pin.lock().deref_mut().take();
                 }
                 Err(_) => {
                     // Another reference exists, so we can safely let it drop normally without recursion
@@ -183,7 +161,7 @@ where
 
     /// Begin a read txn
     pub fn read(&self) -> LinCowCellReadTxn<'_, T, R, U, M> {
-        let rwguard = self.active.lock().unwrap();
+        let rwguard = self.active.lock();
         LinCowCellReadTxn {
             _caller: self,
             // inc the arc.
@@ -231,7 +209,7 @@ where
         } = write;
 
         // Get the previous generation.
-        let mut rwguard = self.active.lock().unwrap();
+        let mut rwguard = self.active.lock();
         // Start to setup for the commit.
         let newdata = guard.pre_commit(work, &rwguard.data);
 
@@ -239,7 +217,7 @@ where
         let new_inner = Arc::new(LinCowCellInner::new(newdata));
         {
             // This modifies the next pointer of the existing read txns
-            let mut rwguard_inner = rwguard.pin.lock().unwrap();
+            let mut rwguard_inner = rwguard.pin.lock();
             // Create the arc pointer to our new data
             // add it to the last value
             *rwguard_inner = Some(new_inner.clone());
@@ -360,9 +338,9 @@ mod tests {
     #[test]
     fn test_simple_create() {
         let data = TestData { x: 0 };
-        let cc = LinCowCell::new(data);
+        let cc: LinCowCell<TestData, TestDataReadTxn, TestDataWriteTxn> = LinCowCell::new(data);
 
-        let cc_rotxn_a = cc.read();
+        let cc_rotxn_a= cc.read();
         println!("cc_rotxn_a -> {:?}", cc_rotxn_a);
         assert_eq!(cc_rotxn_a.work.data.x, 0);
 
@@ -576,7 +554,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn test_long_chain_drop_no_stack_overflow() {
         let data = TestData { x: 0 };
-        let cc = LinCowCell::new(data);
+        let cc: LinCowCell<TestData, TestDataReadTxn, TestDataWriteTxn> = LinCowCell::new(data);
 
         // Simulate a read txn that is not dropped.
         let initial_read = cc.read();
@@ -664,7 +642,7 @@ mod tests_linear {
         GC_COUNT.store(0, Ordering::Release);
         assert!(GC_COUNT.load(Ordering::Acquire) == 0);
         let data = TestGcWrapper { data: 0 };
-        let cc = LinCowCell::new(data);
+        let cc: LinCowCell<TestGcWrapper<i32>, TestGcWrapperReadTxn<i32>, TestGcWrapperWriteTxn<i32>> = LinCowCell::new(data);
 
         // Open a read A.
         let cc_rotxn_a = cc.read();
