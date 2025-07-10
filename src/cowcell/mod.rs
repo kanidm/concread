@@ -44,7 +44,7 @@ use std::sync::Arc;
 /// use concread::cowcell::CowCell;
 ///
 /// let data: i64 = 0;
-/// let cowcell = CowCell::new(data);
+/// let cowcell = CowCell::<i64>::new(data);
 ///
 /// // Begin a read transaction
 /// let read_txn = cowcell.read();

@@ -55,14 +55,15 @@
  *
  */
 
-#[cfg(feature = "std")]
-use std::sync::Arc;
 #[cfg(not(feature = "std"))]
 use alloc::sync::Arc;
+#[cfg(feature = "std")]
+use std::sync::Arc;
 
-use std::marker::PhantomData;
-use std::ops::Deref;
-use std::ops::DerefMut;
+use core::fmt::Debug;
+use core::marker::PhantomData;
+use core::ops::Deref;
+use core::ops::DerefMut;
 use lock_api::RawMutex;
 use lock_api::{Mutex, MutexGuard};
 
@@ -80,7 +81,6 @@ pub trait LinCowCellCapable<R, U> {
     fn pre_commit(&mut self, new: U, prev: &R) -> R;
 }
 
-#[derive(Debug)]
 /// A concurrently readable cell with linearised drop behaviour.
 pub struct LinCowCell<T, R, U, M: RawMutex = crate::utils::DefaultRawMutex> {
     updater: PhantomData<U>,
@@ -88,29 +88,70 @@ pub struct LinCowCell<T, R, U, M: RawMutex = crate::utils::DefaultRawMutex> {
     active: Mutex<M, Arc<LinCowCellInner<R, M>>>,
 }
 
-#[derive(Debug)]
-/// A write txn over a linear cell.
-pub struct LinCowCellWriteTxn<'a, T, R, U, M: RawMutex> {
-    // This way we know who to contact for updating our data ....
-    caller: &'a LinCowCell<T, R, U, M>,
-    guard: MutexGuard<'a, M, T>,
-    work: U,
+impl<T: Debug, R: Debug, U, M: RawMutex> Debug for LinCowCell<T, R, U, M> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut f = f.debug_struct("LinCowCell");
+        match self.write.try_lock() {
+            Some(guard) => {
+                f.field("write", &&*guard);
+            }
+            None => {
+                struct LockedPlaceholder;
+                impl core::fmt::Debug for LockedPlaceholder {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        f.write_str("<locked>")
+                    }
+                }
+
+                f.field("write", &LockedPlaceholder);
+            }
+        }
+        match self.active.try_lock() {
+            Some(guard) => {
+                f.field("active", &&*guard);
+            }
+            None => {
+                struct LockedPlaceholder;
+                impl core::fmt::Debug for LockedPlaceholder {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        f.write_str("<locked>")
+                    }
+                }
+
+                f.field("active", &LockedPlaceholder);
+            }
+        }
+
+        f.finish()
+    }
 }
 
-#[derive(Debug)]
 struct LinCowCellInner<R, M: RawMutex> {
     // This gives the chain effect.
-    pin: Mutex<M , Option<Arc<LinCowCellInner<R, M>>>>,
+    pin: Mutex<M, Option<Arc<LinCowCellInner<R, M>>>>,
     data: R,
 }
 
-#[derive(Debug)]
-/// A read txn over a linear cell.
-pub struct LinCowCellReadTxn<'a, T, R, U, M: RawMutex> {
-    // We must outlive the root
-    _caller: &'a LinCowCell<T, R, U, M>,
-    // We pin the current version.
-    work: Arc<LinCowCellInner<R, M>>,
+impl<R: Debug, M: RawMutex> Debug for LinCowCellInner<R, M> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut f = f.debug_struct("LinCowCellInner");
+        match self.pin.try_lock() {
+            Some(guard) => {
+                f.field("pin", &&*guard);
+            }
+            None => {
+                struct LockedPlaceholder;
+                impl core::fmt::Debug for LockedPlaceholder {
+                    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        f.write_str("<locked>")
+                    }
+                }
+
+                f.field("pin", &LockedPlaceholder);
+            }
+        }
+        f.field("data", &self.data).finish()
+    }
 }
 
 impl<R, M: RawMutex> LinCowCellInner<R, M> {
@@ -144,10 +185,44 @@ impl<R, M: RawMutex> Drop for LinCowCellInner<R, M> {
     }
 }
 
+/// A read txn over a linear cell.
+pub struct LinCowCellReadTxn<'a, T, R, U, M: RawMutex> {
+    // We must outlive the root
+    _caller: &'a LinCowCell<T, R, U, M>,
+    // We pin the current version.
+    work: Arc<LinCowCellInner<R, M>>,
+}
+
+impl<T: Debug, R: Debug, U, M: RawMutex> Debug for LinCowCellReadTxn<'_, T, R, U, M> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("LinCowCellReadTxn")
+            .field("work", &self.work)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A write txn over a linear cell.
+pub struct LinCowCellWriteTxn<'a, T, R, U, M: RawMutex> {
+    // This way we know who to contact for updating our data ....
+    caller: &'a LinCowCell<T, R, U, M>,
+    guard: MutexGuard<'a, M, T>,
+    work: U,
+}
+
+impl<T: Debug, R: Debug, U: Debug, M: RawMutex> Debug for LinCowCellWriteTxn<'_, T, R, U, M> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("LinCowCellWriteTxn")
+            .field("caller", &self.caller)
+            .field("guard", &self.guard)
+            .field("work", &self.work)
+            .finish()
+    }
+}
+
 impl<T, R, U, M> LinCowCell<T, R, U, M>
 where
     T: LinCowCellCapable<R, U>,
-    M: RawMutex
+    M: RawMutex,
 {
     /// Create a new linear 🐄 cell.
     pub fn new(data: T) -> Self {
@@ -246,7 +321,7 @@ impl<T, R, U, M: RawMutex> AsRef<R> for LinCowCellReadTxn<'_, T, R, U, M> {
 impl<T, R, U, M> LinCowCellWriteTxn<'_, T, R, U, M>
 where
     T: LinCowCellCapable<R, U>,
-    M: RawMutex
+    M: RawMutex,
 {
     #[inline]
     /// Get the mutable inner of this type
@@ -340,7 +415,7 @@ mod tests {
         let data = TestData { x: 0 };
         let cc: LinCowCell<TestData, TestDataReadTxn, TestDataWriteTxn> = LinCowCell::new(data);
 
-        let cc_rotxn_a= cc.read();
+        let cc_rotxn_a = cc.read();
         println!("cc_rotxn_a -> {:?}", cc_rotxn_a);
         assert_eq!(cc_rotxn_a.work.data.x, 0);
 
@@ -364,7 +439,13 @@ mod tests {
         assert_eq!(cc_rotxn_a.work.data.x, 0);
         {
             /* Take a new write txn */
-            let mut cc_wrtxn = cc.write();
+            let mut cc_wrtxn: crate::internals::lincowcell::LinCowCellWriteTxn<
+                '_,
+                TestData,
+                TestDataReadTxn,
+                TestDataWriteTxn,
+                parking_lot::RawMutex,
+            > = cc.write();
             println!("cc_wrtxn -> {:?}", cc_wrtxn);
             assert_eq!(cc_wrtxn.work.x, 0);
             assert_eq!(cc_wrtxn.as_ref().x, 0);
@@ -642,7 +723,11 @@ mod tests_linear {
         GC_COUNT.store(0, Ordering::Release);
         assert!(GC_COUNT.load(Ordering::Acquire) == 0);
         let data = TestGcWrapper { data: 0 };
-        let cc: LinCowCell<TestGcWrapper<i32>, TestGcWrapperReadTxn<i32>, TestGcWrapperWriteTxn<i32>> = LinCowCell::new(data);
+        let cc: LinCowCell<
+            TestGcWrapper<i32>,
+            TestGcWrapperReadTxn<i32>,
+            TestGcWrapperWriteTxn<i32>,
+        > = LinCowCell::new(data);
 
         // Open a read A.
         let cc_rotxn_a = cc.read();
