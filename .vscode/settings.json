@@ -1,4 +1,0 @@
-{
-    "rust-analyzer.cargo.allTargets": true,
-    "rust-analyzer.check.features": ["default"]
-}
