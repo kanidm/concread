@@ -1,3 +1,5 @@
+use lock_api::RawMutex;
+
 use crate::internals::hashmap::cursor::CursorReadOps;
 use crate::internals::hashmap::cursor::{CursorRead, CursorWrite, SuperBlock};
 use crate::internals::hashmap::iter::*;
@@ -27,32 +29,34 @@ use std::iter::FromIterator;
 ///
 /// Transactions can be rolled-back (aborted) without penalty by dropping
 /// the `HashMapWriteTxn` without calling `commit()`.
-pub struct HashMap<K, V>
+pub struct HashMap<K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: RawMutex
 {
-    inner: LinCowCell<SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
+    inner: LinCowCell<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
 
-unsafe impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    Send for HashMap<K, V>
+unsafe impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + Send + 'static>
+    Send for HashMap<K, V, M>
 {
 }
-unsafe impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    Sync for HashMap<K, V>
+unsafe impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + Send + Sync + 'static>
+    Sync for HashMap<K, V, M>
 {
 }
 
 /// An active read transaction over a `HashMap`. The data in this tree
 /// is guaranteed to not change and will remain consistent for the life
 /// of this transaction.
-pub struct HashMapReadTxn<'a, K, V>
+pub struct HashMapReadTxn<'a, K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: RawMutex
 {
-    inner: LinCowCellReadTxn<'a, SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
+    inner: LinCowCellReadTxn<'a, SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
 
 /// An active write transaction for a `HashMap`. The data in this tree
@@ -60,20 +64,22 @@ where
 /// readers. The write may be rolledback/aborted by dropping this guard
 /// without calling `commit()`. Once `commit()` is called, readers will be
 /// able to access and perceive changes in new transactions.
-pub struct HashMapWriteTxn<'a, K, V>
+pub struct HashMapWriteTxn<'a, K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: RawMutex
 {
-    inner: LinCowCellWriteTxn<'a, SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
+    inner: LinCowCellWriteTxn<'a, SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
 
-enum SnapshotType<'a, K, V>
+enum SnapshotType<'a, K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: RawMutex
 {
-    R(&'a CursorRead<K, V>),
+    R(&'a CursorRead<K, V, M>),
     W(&'a CursorWrite<K, V>),
 }
 
@@ -85,29 +91,30 @@ where
 /// This snapshot IS safe within the read thread due to the nature of the
 /// implementation borrowing the inner tree to prevent mutations within the
 /// same thread while the read snapshot is open.
-pub struct HashMapReadSnapshot<'a, K, V>
+pub struct HashMapReadSnapshot<'a, K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: RawMutex
 {
-    inner: SnapshotType<'a, K, V>,
+    inner: SnapshotType<'a, K, V, M>,
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Default
-    for HashMap<K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static> Default
+    for HashMap<K, V, M>
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    FromIterator<(K, V)> for HashMap<K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
+    FromIterator<(K, V)> for HashMap<K, V, M>
 {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let mut new_sblock = unsafe { SuperBlock::new() };
-        let prev = new_sblock.create_reader();
-        let mut cursor = new_sblock.create_writer();
+        let prev: CursorRead<K, V, M> = new_sblock.create_reader();
+        let mut cursor = <SuperBlock<K, V> as LinCowCellCapable<CursorRead<K, V, M>, CursorWrite<K, V>>>::create_writer(&new_sblock); //new_sblock.create_writer();
         cursor.extend(iter);
 
         let _ = new_sblock.pre_commit(cursor, &prev);
@@ -118,16 +125,16 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    Extend<(K, V)> for HashMapWriteTxn<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
+    Extend<(K, V)> for HashMapWriteTxn<'_, K, V, M>
 {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         self.inner.as_mut().extend(iter);
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    HashMapWriteTxn<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
+    HashMapWriteTxn<'_, K, V, M>
 {
     /*
     pub(crate) fn prehash<Q>(&self, k: &Q) -> u64
@@ -225,15 +232,15 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     /// Create a read-snapshot of the current map. This does NOT guarantee the map may
     /// not be mutated during the read, so you MUST guarantee that no functions of the
     /// write txn are called while this snapshot is active.
-    pub fn to_snapshot(&self) -> HashMapReadSnapshot<K, V> {
+    pub fn to_snapshot(&self) -> HashMapReadSnapshot<K, V, M> {
         HashMapReadSnapshot {
             inner: SnapshotType::W(self.inner.as_ref()),
         }
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    HashMapReadTxn<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex>
+    HashMapReadTxn<'_, K, V, M>
 {
     pub(crate) fn get_prehashed<Q>(&self, k: &Q, k_hash: u64) -> Option<&V>
     where
@@ -290,15 +297,15 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 
     /// Create a read-snapshot of the current tree.
     /// As this is the read variant, it IS safe, and guaranteed the tree will not change.
-    pub fn to_snapshot(&self) -> HashMapReadSnapshot<K, V> {
+    pub fn to_snapshot(&self) -> HashMapReadSnapshot<K, V, M> {
         HashMapReadSnapshot {
             inner: SnapshotType::R(self.inner.as_ref()),
         }
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    HashMapReadSnapshot<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
+    HashMapReadSnapshot<'_, K, V, M>
 {
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.

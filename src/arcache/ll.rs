@@ -1,3 +1,10 @@
+
+
+#[cfg(feature = "std")]
+use std::boxed::Box;
+#[cfg(not(feature = "std"))]
+use alloc::boxed::Box;
+
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
@@ -309,10 +316,12 @@ where
             (*next).prev = prev;
             (*prev).next = next;
             // Null things for paranoia.
-            if cfg!(test) || cfg!(debug_assertions) {
+
+            cfg_if::cfg_if! { if #[cfg(any(test, debug_assertions))]
+            {
                 (*n.inner).prev = ptr::null_mut();
                 (*n.inner).next = ptr::null_mut();
-            }
+            }}
             // (*n).tag = 0;
         }
 

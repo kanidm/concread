@@ -14,7 +14,15 @@ use std::ptr;
 use smallvec::SmallVec;
 
 #[cfg(feature = "simd_support")]
-use core_simd::u64x8;
+use std::simd::u64x8;
+
+#[cfg(feature = "std")]
+use std::{boxed, vec};
+#[cfg(not(feature = "std"))]
+use alloc::{boxed, vec};
+
+use boxed::Box;
+use vec::Vec;
 
 #[cfg(test)]
 use std::collections::BTreeSet;
@@ -96,6 +104,7 @@ pub(crate) fn assert_released() {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub(crate) struct Meta(u64);
 
@@ -652,7 +661,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             for idx in 0..self.slots() {
                 unsafe {
                     let lvalue: Bucket<K, V> = (*self.values[idx].as_ptr()).clone();
-                    (*x).values[idx].as_mut_ptr().write(lvalue);
+                    x.as_mut().unwrap().values[idx].write(lvalue);
                 }
             }
 
@@ -903,11 +912,11 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             // Eq not ok as we have buckets.
             if lk >= rk {
                 // println!("{:?}", self);
-                if cfg!(test) {
+                cfg_if::cfg_if! { if #[cfg(test)] {
                     return false;
                 } else {
                     debug_assert!(false);
-                }
+                }}
             }
             lk = rk;
         }
@@ -1468,7 +1477,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         debug_assert!(!left.is_null());
         debug_assert!(!right.is_null());
 
-        match unsafe { (*left).ctrl.a.0 .0 & FLAG_MASK } {
+        match unsafe { left.as_ref().unwrap().ctrl.a.0 .0 & FLAG_MASK } {
             FLAG_HASH_LEAF => {
                 let lmut = leaf_ref!(left, K, V);
                 let rmut = leaf_ref!(right, K, V);
@@ -1781,7 +1790,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         let sib_ptr = self.nodes[idx];
         debug_assert!(!sib_ptr.is_null());
         // Do we need to clone?
-        let res = match unsafe { (*sib_ptr).ctrl.a.0 .0 } & FLAG_MASK {
+        let res = match unsafe { sib_ptr.as_ref().unwrap().ctrl.a.0 .0 } & FLAG_MASK {
             FLAG_HASH_LEAF => {
                 let lref = unsafe { &*(sib_ptr as *const _ as *const Leaf<K, V>) };
                 lref.req_clone(txid)
@@ -1938,6 +1947,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         // Check everything above slots is u64::max
         for work_idx in unsafe { self.ctrl.a.0.slots() }..H_CAPACITY {
             if unsafe { self.ctrl.a.1[work_idx] } != u64::MAX {
+                #[cfg(feature = "std")]
                 eprintln!("FAILED ARRAY -> {:?}", unsafe { self.ctrl.a.1 });
                 debug_assert!(false);
             }

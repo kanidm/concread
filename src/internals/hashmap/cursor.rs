@@ -9,16 +9,24 @@ use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::mem;
 
-#[cfg(feature = "ahash")]
+#[cfg(not(feature = "std"))]
+use alloc::vec;
+#[cfg(feature = "std")]
+use std::vec;
+
+use vec::Vec;
+
+#[cfg(any(feature = "ahash", not(feature = "std")))]
 use ahash::RandomState;
-#[cfg(not(feature = "ahash"))]
+
+#[cfg(all(not(feature = "ahash"), feature = "std"))]
 use std::collections::hash_map::RandomState;
 
 use std::hash::{BuildHasher, Hash, Hasher};
 
 use super::iter::{Iter, KeyIter, ValueIter};
 use super::states::*;
-use std::sync::Mutex;
+use lock_api::{Mutex, RawMutex};
 
 use crate::internals::lincowcell::LinCowCellCapable;
 
@@ -57,10 +65,10 @@ unsafe impl<K: Clone + Hash + Eq + Debug + Sync + Send + 'static, V: Clone + Syn
 {
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, CursorWrite<K, V>>
-    for SuperBlock<K, V>
+impl<K: Hash + Eq + Clone + Debug, V: Clone, M: RawMutex>
+    LinCowCellCapable<CursorRead<K, V, M>, CursorWrite<K, V>> for SuperBlock<K, V>
 {
-    fn create_reader(&self) -> CursorRead<K, V> {
+    fn create_reader(&self) -> CursorRead<K, V, M> {
         CursorRead::new(self)
     }
 
@@ -71,9 +79,9 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>,
     fn pre_commit(
         &mut self,
         mut new: CursorWrite<K, V>,
-        prev: &CursorRead<K, V>,
-    ) -> CursorRead<K, V> {
-        let mut prev_last_seen = prev.last_seen.lock().unwrap();
+        prev: &CursorRead<K, V, M>,
+    ) -> CursorRead<K, V, M> {
+        let mut prev_last_seen = prev.last_seen.lock();
         debug_assert!((*prev_last_seen).is_empty());
 
         let new_last_seen = &mut new.last_seen;
@@ -134,25 +142,32 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
 }
 
 #[derive(Debug)]
-pub(crate) struct CursorRead<K, V>
+pub(crate) struct CursorRead<K, V, M>
 where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
+    M: RawMutex,
 {
     #[allow(dead_code)]
     txid: u64,
     length: usize,
     root: *mut Node<K, V>,
-    last_seen: Mutex<Vec<*mut Node<K, V>>>,
+    last_seen: Mutex<M, Vec<*mut Node<K, V>>>,
     build_hasher: RandomState,
 }
 
-unsafe impl<K: Clone + Hash + Eq + Debug + Send + 'static, V: Clone + Send + 'static> Send
-    for CursorRead<K, V>
+unsafe impl<
+        K: Clone + Hash + Eq + Debug + Send + 'static,
+        V: Clone + Send + 'static,
+        M: RawMutex + Send + 'static,
+    > Send for CursorRead<K, V, M>
 {
 }
-unsafe impl<K: Clone + Hash + Eq + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    Sync for CursorRead<K, V>
+unsafe impl<
+        K: Clone + Hash + Eq + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + Send + Sync + 'static,
+    > Sync for CursorRead<K, V, M>
 {
 }
 
@@ -502,7 +517,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for CursorWrite<K, V> {
     }
 }
 
-impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for CursorRead<K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone, M: RawMutex> Drop for CursorRead<K, V, M> {
     fn drop(&mut self) {
         // If there is content in last_seen, a future generation wants us to remove it!
         let last_seen_guard = self
@@ -527,7 +542,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for SuperBlock<K, V> {
     }
 }
 
-impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorRead<K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone, M: RawMutex> CursorRead<K, V, M> {
     pub(crate) fn new(sblock: &SuperBlock<K, V>) -> Self {
         // println!("starting rd txid -> {:?}", sblock.txid);
         let build_hasher = sblock.build_hasher.clone();
@@ -549,7 +564,9 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for CursorRead<K, V> {
 }
 */
 
-impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone, M: RawMutex> CursorReadOps<K, V>
+    for CursorRead<K, V, M>
+{
     fn get_root_ref(&self) -> &Node<K, V> {
         unsafe { &*(self.root) }
     }

@@ -4,6 +4,13 @@
 // Additionally, the cursor also is responsible for general movement
 // throughout the structure and how to handle that effectively
 
+#[cfg(not(feature = "std"))]
+use alloc::vec;
+#[cfg(feature = "std")]
+use std::vec;
+
+use vec::Vec;
+
 use super::node::*;
 use crate::internals::lincowcell::LinCowCellCapable;
 use std::borrow::Borrow;
@@ -15,7 +22,7 @@ use super::mutiter::RangeMutIter;
 use super::states::*;
 use std::ops::RangeBounds;
 
-use std::sync::Mutex;
+use lock_api::{Mutex, RawMutex};
 
 /// The internal root of the tree, with associated garbage lists etc.
 #[derive(Debug)]
@@ -38,10 +45,10 @@ unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Se
 {
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, CursorWrite<K, V>>
-    for SuperBlock<K, V>
+impl<K: Clone + Ord + Debug, V: Clone, M: RawMutex>
+    LinCowCellCapable<CursorRead<K, V, M>, CursorWrite<K, V>> for SuperBlock<K, V>
 {
-    fn create_reader(&self) -> CursorRead<K, V> {
+    fn create_reader(&self) -> CursorRead<K, V, M> {
         // This sets up the first reader.
         CursorRead::new(self)
     }
@@ -54,9 +61,9 @@ impl<K: Clone + Ord + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, Curso
     fn pre_commit(
         &mut self,
         mut new: CursorWrite<K, V>,
-        prev: &CursorRead<K, V>,
-    ) -> CursorRead<K, V> {
-        let mut prev_last_seen = prev.last_seen.lock().unwrap();
+        prev: &CursorRead<K, V, M>,
+    ) -> CursorRead<K, V, M> {
+        let mut prev_last_seen = prev.last_seen.lock();
         debug_assert!((*prev_last_seen).is_empty());
 
         let new_last_seen = &mut new.last_seen;
@@ -129,7 +136,7 @@ impl<K: Clone + Ord + Debug, V: Clone> SuperBlock<K, V> {
 }
 
 #[derive(Debug)]
-pub(crate) struct CursorRead<K, V>
+pub(crate) struct CursorRead<K, V, R: RawMutex>
 where
     K: Ord + Clone + Debug,
     V: Clone,
@@ -137,15 +144,21 @@ where
     txid: u64,
     length: usize,
     root: *mut Node<K, V>,
-    last_seen: Mutex<Vec<*mut Node<K, V>>>,
+    last_seen: Mutex<R, Vec<*mut Node<K, V>>>,
 }
 
-unsafe impl<K: Clone + Ord + Debug + Send + 'static, V: Clone + Send + 'static> Send
-    for CursorRead<K, V>
+unsafe impl<
+        K: Clone + Ord + Debug + Send + 'static,
+        V: Clone + Send + 'static,
+        R: RawMutex + Send + 'static,
+    > Send for CursorRead<K, V, R>
 {
 }
-unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync
-    for CursorRead<K, V>
+unsafe impl<
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        R: RawMutex + Send + Sync + 'static,
+    > Sync for CursorRead<K, V, R>
 {
 }
 
@@ -584,7 +597,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Drop for CursorWrite<K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> Drop for CursorRead<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone, R: RawMutex> Drop for CursorRead<K, V, R> {
     fn drop(&mut self) {
         // If there is content in last_seen, a future generation wants us to remove it!
         let last_seen_guard = self
@@ -609,7 +622,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Drop for SuperBlock<K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> CursorRead<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone, R: RawMutex> CursorRead<K, V, R> {
     pub(crate) fn new(sblock: &SuperBlock<K, V>) -> Self {
         // println!("starting rd txid -> {:?}", sblock.txid);
         CursorRead {
@@ -621,7 +634,7 @@ impl<K: Clone + Ord + Debug, V: Clone> CursorRead<K, V> {
     }
 }
 
-impl<K: Clone + Ord + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<K, V> {
+impl<K: Clone + Ord + Debug, V: Clone, R: RawMutex> CursorReadOps<K, V> for CursorRead<K, V, R> {
     fn get_root_ref(&self) -> &Node<K, V> {
         unsafe { &*(self.root) }
     }

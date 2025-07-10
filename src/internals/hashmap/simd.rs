@@ -1,5 +1,5 @@
 #[cfg(feature = "simd_support")]
-use core_simd::u64x8;
+use std::simd::u64x8;
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::hash::Hash;

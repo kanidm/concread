@@ -271,7 +271,7 @@ mod tests {
         let map = BptreeMap::new();
         // add values
         {
-            let mut w = map.write().await;
+            let mut w: crate::bptree::asynch::BptreeMapWriteTxn<'_, usize, usize> = map.write().await;
             w.extend((0..(L_CAPACITY * 2)).map(|v| (v * 2, v * 2)));
             w.commit();
         }

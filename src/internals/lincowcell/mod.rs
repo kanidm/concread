@@ -55,11 +55,16 @@
  *
  */
 
+#[cfg(feature = "std")]
+use std::sync::Arc;
+#[cfg(not(feature = "std"))]
+use alloc::sync::Arc;
+
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::sync::Arc;
-use std::sync::{Mutex, MutexGuard};
+use lock_api::RawMutex;
+use lock_api::{Mutex, MutexGuard};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
 
@@ -79,18 +84,18 @@ pub trait LinCowCellCapable<R, U> {
 
 #[derive(Debug)]
 /// A concurrently readable cell with linearised drop behaviour.
-pub struct LinCowCell<T, R, U> {
+pub struct LinCowCell<T, R, U, M: RawMutex> {
     updater: PhantomData<U>,
-    write: Mutex<T>,
+    write: Mutex<M, T>,
     active: ArcSwap<LinCowCellInner<R>>,
 }
 
 #[derive(Debug)]
 /// A write txn over a linear cell.
-pub struct LinCowCellWriteTxn<'a, T, R, U> {
+pub struct LinCowCellWriteTxn<'a, T, R, U, M: RawMutex> {
     // This way we know who to contact for updating our data ....
-    caller: &'a LinCowCell<T, R, U>,
-    guard: MutexGuard<'a, T>,
+    caller: &'a LinCowCell<T, R, U, M>,
+    guard: MutexGuard<'a, M, T>,
     work: U,
 }
 
@@ -103,9 +108,9 @@ struct LinCowCellInner<R> {
 
 #[derive(Debug)]
 /// A read txn over a linear cell.
-pub struct LinCowCellReadTxn<'a, T, R, U> {
+pub struct LinCowCellReadTxn<'a, T, R, U, M: RawMutex> {
     // We must outlive the root
-    _caller: &'a LinCowCell<T, R, U>,
+    _caller: &'a LinCowCell<T, R, U, M>,
     // We pin the current version.
     work: Arc<LinCowCellInner<R>>,
 }
@@ -119,9 +124,10 @@ impl<R> LinCowCellInner<R> {
     }
 }
 
-impl<T, R, U> LinCowCell<T, R, U>
+impl<T, R, U, M> LinCowCell<T, R, U, M>
 where
     T: LinCowCellCapable<R, U>,
+    M: RawMutex
 {
     /// Create a new linear 🐄 cell.
     pub fn new(data: T) -> Self {
@@ -134,7 +140,7 @@ where
     }
 
     /// Begin a read txn
-    pub fn read(&self) -> LinCowCellReadTxn<T, R, U> {
+    pub fn read(&self) -> LinCowCellReadTxn<T, R, U, M> {
         // inc the arc.
         let work = self.active.load_full();
         LinCowCellReadTxn {
@@ -144,9 +150,9 @@ where
     }
 
     /// Begin a write txn
-    pub fn write(&self) -> LinCowCellWriteTxn<T, R, U> {
+    pub fn write(&self) -> LinCowCellWriteTxn<T, R, U, M> {
         /* Take the exclusive write lock first */
-        let write_guard = self.write.lock().unwrap();
+        let write_guard = self.write.lock();
         /* Now take a ro-txn to get the data copied */
         // let active_guard = self.active.lock();
         /* This copies the data */
@@ -160,8 +166,8 @@ where
     }
 
     /// Attempt a write txn
-    pub fn try_write(&self) -> Option<LinCowCellWriteTxn<T, R, U>> {
-        self.write.try_lock().ok().map(|write_guard| {
+    pub fn try_write(&self) -> Option<LinCowCellWriteTxn<T, R, U, M>> {
+        self.write.try_lock().map(|write_guard| {
             /* This copies the data */
             let work: U = (*write_guard).create_writer();
             /* Now build the write struct */
@@ -173,7 +179,7 @@ where
         })
     }
 
-    fn commit(&self, write: LinCowCellWriteTxn<T, R, U>) {
+    fn commit(&self, write: LinCowCellWriteTxn<T, R, U, M>) {
         // Destructure our writer.
         let LinCowCellWriteTxn {
             // This is self.
@@ -199,7 +205,7 @@ where
     }
 }
 
-impl<T, R, U> Deref for LinCowCellReadTxn<'_, T, R, U> {
+impl<T, R, U, M: RawMutex> Deref for LinCowCellReadTxn<'_, T, R, U, M> {
     type Target = R;
 
     #[inline]
@@ -208,16 +214,17 @@ impl<T, R, U> Deref for LinCowCellReadTxn<'_, T, R, U> {
     }
 }
 
-impl<T, R, U> AsRef<R> for LinCowCellReadTxn<'_, T, R, U> {
+impl<T, R, U, M: RawMutex> AsRef<R> for LinCowCellReadTxn<'_, T, R, U, M> {
     #[inline]
     fn as_ref(&self) -> &R {
         &self.work.data
     }
 }
 
-impl<T, R, U> LinCowCellWriteTxn<'_, T, R, U>
+impl<T, R, U, M> LinCowCellWriteTxn<'_, T, R, U, M>
 where
     T: LinCowCellCapable<R, U>,
+    M: RawMutex
 {
     #[inline]
     /// Get the mutable inner of this type
@@ -232,7 +239,7 @@ where
     }
 }
 
-impl<T, R, U> Deref for LinCowCellWriteTxn<'_, T, R, U> {
+impl<T, R, U, M: RawMutex> Deref for LinCowCellWriteTxn<'_, T, R, U, M> {
     type Target = U;
 
     #[inline]
@@ -241,21 +248,21 @@ impl<T, R, U> Deref for LinCowCellWriteTxn<'_, T, R, U> {
     }
 }
 
-impl<T, R, U> DerefMut for LinCowCellWriteTxn<'_, T, R, U> {
+impl<T, R, U, M: RawMutex> DerefMut for LinCowCellWriteTxn<'_, T, R, U, M> {
     #[inline]
     fn deref_mut(&mut self) -> &mut U {
         &mut self.work
     }
 }
 
-impl<T, R, U> AsRef<U> for LinCowCellWriteTxn<'_, T, R, U> {
+impl<T, R, U, M: RawMutex> AsRef<U> for LinCowCellWriteTxn<'_, T, R, U, M> {
     #[inline]
     fn as_ref(&self) -> &U {
         &self.work
     }
 }
 
-impl<T, R, U> AsMut<U> for LinCowCellWriteTxn<'_, T, R, U> {
+impl<T, R, U, M: RawMutex> AsMut<U> for LinCowCellWriteTxn<'_, T, R, U, M> {
     #[inline]
     fn as_mut(&mut self) -> &mut U {
         &mut self.work

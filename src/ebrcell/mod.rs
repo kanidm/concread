@@ -15,12 +15,13 @@
 //! or crossbeam library components.
 //! If you need accurate memory reclaim, use the Arc (`CowCell`) implementation.
 
+use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use crossbeam_epoch as epoch;
 use crossbeam_epoch::{Atomic, Guard, Owned};
-use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use std::mem;
 use std::ops::{Deref, DerefMut};
+
 use std::sync::{Mutex, MutexGuard};
 
 /// An `EbrCell` Write Transaction handle.
@@ -32,7 +33,10 @@ use std::sync::{Mutex, MutexGuard};
 /// abort a change, don't call commit and allow the write transaction to
 /// go out of scope. This causes the `EbrCell` to unlock allowing other
 /// writes to proceed.
-pub struct EbrCellWriteTxn<'a, T: 'static + Clone + Send + Sync> {
+pub struct EbrCellWriteTxn<
+    'a,
+    T: 'static + Clone + Send + Sync
+> {
     data: Option<T>,
     // This way we know who to contact for updating our data ....
     caller: &'a EbrCell<T>,
@@ -129,7 +133,10 @@ where
 /// assert_eq!(*new_read_txn, 1);
 /// ```
 #[derive(Debug)]
-pub struct EbrCell<T: Clone + Sync + Send + 'static> {
+pub struct EbrCell<T: Clone + Sync + Send + 'static>
+where
+    T: Clone + Sync + Send + 'static
+{
     write: Mutex<()>,
     active: Atomic<T>,
 }
@@ -150,7 +157,7 @@ where
     /// Create a new `EbrCell` storing type `T`. `T` must implement `Clone`.
     pub fn new(data: T) -> Self {
         EbrCell {
-            write: Mutex::new(()),
+            write: Mutex::<()>::new(()),
             active: Atomic::new(data),
         }
     }
@@ -174,7 +181,7 @@ where
     /// Attempt to begin a write transaction. If it's already held,
     /// `None` is returned.
     pub fn try_write(&self) -> Option<EbrCellWriteTxn<T>> {
-        self.write.try_lock().ok().map(|mguard| {
+        self.write.try_lock().map(|mguard| {
             let guard = epoch::pin();
             let cur_shared = self.active.load(Acquire, &guard);
             /* Now build the write struct, we'll discard the pin shortly! */
@@ -184,7 +191,7 @@ where
                 caller: self,
                 _guard: mguard,
             }
-        })
+        }).ok()
     }
 
     /// This is an internal component of the commit cycle. It takes ownership

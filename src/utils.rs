@@ -1,13 +1,13 @@
-use std::borrow::Borrow;
-use std::cmp::Ordering;
-// use std::mem::MaybeUninit;
+use core::borrow::Borrow;
+use core::cmp::{Ordering, PartialOrd};
+// use core::mem::MaybeUninit;
 #[cfg(feature = "serde")]
-use std::fmt;
+use core::fmt;
 #[cfg(feature = "serde")]
-use std::iter;
+use core::iter;
 #[cfg(feature = "serde")]
-use std::marker::PhantomData;
-use std::ptr;
+use core::marker::PhantomData;
+use core::ptr;
 
 #[cfg(feature = "serde")]
 use serde::de::{Deserialize, MapAccess, Visitor};
@@ -86,17 +86,17 @@ where
     Err(slice.len())
 }
 
-#[cfg(feature = "serde")]
+#[cfg(all(feature = "serde", feature = "maps"))]
 pub struct MapCollector<T, K, V>(PhantomData<(T, K, V)>);
 
-#[cfg(feature = "serde")]
+#[cfg(all(feature = "serde", feature = "maps"))]
 impl<T, K, V> MapCollector<T, K, V> {
     pub fn new() -> Self {
         Self(PhantomData)
     }
 }
 
-#[cfg(feature = "serde")]
+#[cfg(all(feature = "serde", feature = "maps"))]
 impl<'de, T, K, V> Visitor<'de> for MapCollector<T, K, V>
 where
     T: FromIterator<(K, V)>,
@@ -116,3 +116,36 @@ where
         iter::from_fn(|| access.next_entry().transpose()).collect()
     }
 }
+
+
+/// This is intended for comparing the insertion times of items into the ArCache type.
+/// This would Default to an implementation over the Instant type on std, but could be an atomic counter with a caller-defined bit width in no_std environments.
+/// 
+/// SAFETY: This has been marked unsafe as there is a behaviour contract on the `next` function that will not be checked by the caller. Subsequent calls to `next` should
+/// ALWAYS return an equal or greater value (based on the type's impl of PartialOrd)
+pub unsafe trait Monotonic {
+    type Output: PartialOrd + Copy;
+    /// Create a new instance, taking no arguments - this type shoud be instantiated without runtime generated inputs.
+    fn new() -> Self;
+    /// Gets the current value - provides an option for introspection where the value can change without calls to `next`,
+    /// but they don't _have_ to changed without `next`.
+    fn current(&self) -> Self::Output;
+    fn next(&self) -> Self::Output; 
+}
+
+
+
+// provide default locking types
+#[cfg(feature = "std")]
+#[allow(unused)]
+pub type DefaultRawMutex = parking_lot::RawMutex;
+/// Provide a defaulkt raw mutex implementation for no_std environments via spinning
+#[cfg(not(feature = "std"))]
+#[allow(unused)]
+pub type DefaultRawMutex = spin::mutex::SpinMutex<()>;
+
+#[cfg(feature = "std")]
+pub type DefaultRawRwLock = parking_lot::RawRwLock;
+#[cfg(not(feature = "std"))]
+/// Provide a defaulkt raw mutex implementation for no_std environments via spinning
+pub type DefaultRawRwLock = spin::RwLock<()>;

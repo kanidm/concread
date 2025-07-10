@@ -1,3 +1,5 @@
+use lock_api::RawMutex;
+
 use crate::internals::bptree::cursor::CursorReadOps;
 use crate::internals::bptree::cursor::{CursorRead, CursorWrite, SuperBlock};
 use crate::internals::bptree::iter::{Iter, KeyIter, RangeIter, ValueIter};
@@ -29,40 +31,42 @@ use std::ops::RangeBounds;
 ///
 /// Transactions can be rolled-back (aborted) without penalty by dropping
 /// the `BptreeMapWriteTxn` without calling `commit()`.
-pub struct BptreeMap<K, V>
+pub struct BptreeMap<K, V, M>
 where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: RawMutex
 {
-    inner: LinCowCell<SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
+    inner: LinCowCell<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
 
-unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Send
-    for BptreeMap<K, V>
+unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, R: RawMutex + Send + 'static> Send
+    for BptreeMap<K, V, R>
 {
 }
-unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync
-    for BptreeMap<K, V>
+unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, R: RawMutex + Send + Sync + 'static> Sync
+    for BptreeMap<K, V, R>
 {
 }
 
 /// An active read transaction over a [BptreeMap]. The data in this tree
 /// is guaranteed to not change and will remain consistent for the life
 /// of this transaction.
-pub struct BptreeMapReadTxn<'a, K, V>
+pub struct BptreeMapReadTxn<'a, K, V, M>
 where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: RawMutex
 {
-    inner: LinCowCellReadTxn<'a, SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
+    inner: LinCowCellReadTxn<'a, SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
 
-unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Send
-    for BptreeMapReadTxn<'_, K, V>
+unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, R: RawMutex> Send
+    for BptreeMapReadTxn<'_, K, V, R>
 {
 }
-unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Sync
-    for BptreeMapReadTxn<'_, K, V>
+unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, R: RawMutex> Sync
+    for BptreeMapReadTxn<'_, K, V, R>
 {
 }
 
@@ -71,20 +75,22 @@ unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Se
 /// readers. The write may be rolledback/aborted by dropping this guard
 /// without calling `commit()`. Once `commit()` is called, readers will be
 /// able to access and perceive changes in new transactions.
-pub struct BptreeMapWriteTxn<'a, K, V>
+pub struct BptreeMapWriteTxn<'a, K, V, M>
 where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: RawMutex
 {
-    inner: LinCowCellWriteTxn<'a, SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
+    inner: LinCowCellWriteTxn<'a, SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
 
-enum SnapshotType<'a, K, V>
+enum SnapshotType<'a, K, V, M>
 where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: RawMutex
 {
-    R(&'a CursorRead<K, V>),
+    R(&'a CursorRead<K, V, M>),
     W(&'a CursorWrite<K, V>),
 }
 
@@ -96,24 +102,25 @@ where
 /// This snapshot IS safe within the read thread due to the nature of the
 /// implementation borrowing the inner tree to prevent mutations within the
 /// same thread while the read snapshot is open.
-pub struct BptreeMapReadSnapshot<'a, K, V>
+pub struct BptreeMapReadSnapshot<'a, K, V, M>
 where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: RawMutex
 {
-    inner: SnapshotType<'a, K, V>,
+    inner: SnapshotType<'a, K, V, M>,
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Default
-    for BptreeMap<K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, R: RawMutex> Default
+    for BptreeMap<K, V, R>
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMap<K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex>
+    BptreeMap<K, V, M>
 {
     /// Construct a new concurrent tree
     pub fn new() -> Self {
@@ -125,20 +132,23 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 
     /// Attempt to create a new write, returns None if another writer
     /// already exists.
-    pub fn try_write(&self) -> Option<BptreeMapWriteTxn<K, V>> {
+    pub fn try_write(&self) -> Option<BptreeMapWriteTxn<K, V, M>> {
         self.inner
             .try_write()
             .map(|inner| BptreeMapWriteTxn { inner })
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    FromIterator<(K, V)> for BptreeMap<K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex>
+    FromIterator<(K, V)> for BptreeMap<K, V, M>
 {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let mut new_sblock = unsafe { SuperBlock::new() };
-        let prev = new_sblock.create_reader();
-        let mut cursor = new_sblock.create_writer();
+        let prev: CursorRead<K, V, M> = new_sblock.create_reader();
+
+        // TODO - fix this?
+    
+        let mut cursor =  <SuperBlock<K, V> as LinCowCellCapable<CursorRead<K, V, M>, CursorWrite<K, V>>>::create_writer(&new_sblock); //new_sblock.create_writer();
 
         cursor.extend(iter);
 
@@ -150,16 +160,16 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    Extend<(K, V)> for BptreeMapWriteTxn<'_, K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, R: RawMutex>
+    Extend<(K, V)> for BptreeMapWriteTxn<'_, K, V, R>
 {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         self.inner.as_mut().extend(iter);
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapWriteTxn<'_, K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex>
+    BptreeMapWriteTxn<'_, K, V, M>
 {
     // == RO methods
 
@@ -305,15 +315,15 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     /// Create a read-snapshot of the current tree. This does NOT guarantee the tree may
     /// not be mutated during the read, so you MUST guarantee that no functions of the
     /// write txn are called while this snapshot is active.
-    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<K, V> {
+    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<K, V, M> {
         BptreeMapReadSnapshot {
             inner: SnapshotType::W(self.inner.as_ref()),
         }
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapReadTxn<'_, K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex>
+    BptreeMapReadTxn<'_, K, V, M>
 {
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.
@@ -386,7 +396,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 
     /// Create a read-snapshot of the current tree.
     /// As this is the read variant, it IS safe, and guaranteed the tree will not change.
-    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<K, V> {
+    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<K, V, M> {
         BptreeMapReadSnapshot {
             inner: SnapshotType::R(self.inner.as_ref()),
         }
@@ -399,8 +409,8 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapReadSnapshot<'_, K, V>
+impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
+    BptreeMapReadSnapshot<'_, K, V, M>
 {
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.

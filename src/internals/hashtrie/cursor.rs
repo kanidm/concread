@@ -4,23 +4,33 @@
 //! Additionally, the cursor also is responsible for general movement
 //! throughout the structure and how to handle that effectively
 
+
+#[cfg(feature = "std")]
+use std::{boxed, vec, collections};
+#[cfg(not(feature = "std"))]
+use alloc::{boxed, vec, collections};
+
+use boxed::Box;
+use vec::Vec;
+
 use crate::internals::lincowcell::LinCowCellCapable;
 
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, VecDeque};
-use std::fmt::{self, Debug};
+use collections::{BTreeSet, VecDeque};
+use std::fmt;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ptr;
-use std::sync::Mutex;
+use lock_api::{Mutex, RawMutex};
 
 use smallvec::SmallVec;
 
 use super::iter::*;
 
-#[cfg(feature = "ahash")]
+#[cfg(any(feature = "ahash", not(feature = "std")))]
 use ahash::RandomState;
-#[cfg(not(feature = "ahash"))]
+#[cfg(all(not(feature = "ahash"), feature = "std"))]
 use std::collections::hash_map::RandomState;
 
 use std::hash::{BuildHasher, Hash, Hasher};
@@ -432,10 +442,10 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, CursorWrite<K, V>>
+impl<K: Hash + Eq + Clone + Debug, V: Clone, M: RawMutex> LinCowCellCapable<CursorRead<K, V, M>, CursorWrite<K, V>>
     for SuperBlock<K, V>
 {
-    fn create_reader(&self) -> CursorRead<K, V> {
+    fn create_reader(&self) -> CursorRead<K, V, M> {
         CursorRead::new(self)
     }
 
@@ -446,9 +456,9 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>,
     fn pre_commit(
         &mut self,
         mut new: CursorWrite<K, V>,
-        prev: &CursorRead<K, V>,
-    ) -> CursorRead<K, V> {
-        let mut prev_last_seen = prev.last_seen.lock().unwrap();
+        prev: &CursorRead<K, V, M>,
+    ) -> CursorRead<K, V, M> {
+        let mut prev_last_seen = prev.last_seen.lock();
         debug_assert!((*prev_last_seen).is_empty());
 
         let new_last_seen = &mut new.last_seen;
@@ -670,11 +680,11 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
                 }
             }
 
-            if cfg!(debug_assertions) {
+            cfg_if::cfg_if! {if #[cfg(debug_assertions)] {
                 for n in tgt_ptr.as_branch::<K, V>().nodes.iter() {
                     assert!(n.is_null() || !n.is_dirty());
                 }
-            }
+            }}
         }
     }
 
@@ -850,7 +860,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
                             let tgt_bkt_mut = tgt_ptr.as_bucket_mut::<K, V>();
                             let Datum { v, .. } = tgt_bkt_mut.remove(0);
                             // Keep any pointer that ISN'T the one we are oob freeing.
-                            self.first_seen.retain(|e| *e != tgt_ptr);
+                            self.first_seen.retain(|e: &Ptr| *e != tgt_ptr);
                             tgt_ptr.free::<K, V>();
                             v
                         } else {
@@ -1042,7 +1052,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite
 }
 
 #[derive(Debug)]
-pub(crate) struct CursorRead<K, V>
+pub(crate) struct CursorRead<K, V, R: RawMutex>
 where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
@@ -1050,13 +1060,13 @@ where
     txid: u64,
     length: usize,
     root: Ptr,
-    last_seen: Mutex<Vec<Ptr>>,
+    last_seen: Mutex<R, Vec<Ptr>>,
     build_hasher: RandomState,
     k: PhantomData<K>,
     v: PhantomData<V>,
 }
 
-impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorRead<K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone, R: RawMutex> CursorRead<K, V, R> {
     pub(crate) fn new(sblock: &SuperBlock<K, V>) -> Self {
         let build_hasher = sblock.build_hasher.clone();
         CursorRead {
@@ -1071,7 +1081,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorRead<K, V> {
     }
 }
 
-impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for CursorRead<K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone, R: RawMutex> Drop for CursorRead<K, V, R> {
     fn drop(&mut self) {
         let last_seen_guard = self
             .last_seen
@@ -1082,7 +1092,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for CursorRead<K, V> {
     }
 }
 
-impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone, R: RawMutex> CursorReadOps<K, V> for CursorRead<K, V, R> {
     fn get_root_ptr(&self) -> Ptr {
         self.root
     }

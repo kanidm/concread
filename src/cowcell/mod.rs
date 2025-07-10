@@ -12,9 +12,16 @@
 #[cfg(feature = "asynch")]
 pub mod asynch;
 
-use std::ops::{Deref, DerefMut};
+
+
+use core::ops::{Deref, DerefMut};
+use lock_api::{Mutex, MutexGuard, RawMutex};
+
+#[cfg(not(feature = "std"))]
+use alloc::sync::Arc;
+
+#[cfg(feature = "std")]
 use std::sync::Arc;
-use std::sync::{Mutex, MutexGuard};
 
 use arc_swap::ArcSwap;
 
@@ -60,8 +67,8 @@ use arc_swap::ArcSwap;
 /// assert_eq!(*new_read_txn, 1);
 /// ```
 #[derive(Debug, Default)]
-pub struct CowCell<T> {
-    write: Mutex<()>,
+pub struct CowCell<T, R: RawMutex = crate::utils::DefaultRawMutex> {
+    write: Mutex<R, ()>,
     active: ArcSwap<T>,
 }
 
@@ -74,13 +81,13 @@ pub struct CowCell<T> {
 /// rollback a change, don't call commit and allow the write transaction to
 /// be dropped. This causes the `CowCell` to unlock allowing the next writer
 /// to proceed.
-pub struct CowCellWriteTxn<'a, T> {
+pub struct CowCellWriteTxn<'a, T, R: RawMutex> {
     // Hold open the guard, and initiate the copy to here.
     work: Option<T>,
     read: Arc<T>,
     // This way we know who to contact for updating our data ....
-    caller: &'a CowCell<T>,
-    _guard: MutexGuard<'a, ()>,
+    caller: &'a CowCell<T, R>,
+    _guard: MutexGuard<'a, R, ()>,
 }
 
 /// A `CowCell` Read Transaction handle.
@@ -96,9 +103,10 @@ impl<T> Clone for CowCellReadTxn<T> {
     }
 }
 
-impl<T> CowCell<T>
+impl<T, R> CowCell<T, R>
 where
     T: Clone,
+    R: RawMutex
 {
     /// Create a new `CowCell` for storing type `T`. `T` must implement `Clone`
     /// to enable clone-on-write.
@@ -121,9 +129,9 @@ where
     /// Begin a write transaction, returning a write guard. The content of the
     /// write is only visible to this thread, and is not visible to any reader
     /// until `commit()` is called.
-    pub fn write(&self) -> CowCellWriteTxn<T> {
+    pub fn write(&self) -> CowCellWriteTxn<'_, T, R> {
         /* Take the exclusive write lock first */
-        let mguard = self.write.lock().unwrap();
+        let mguard = self.write.lock();
         // We delay copying until the first get_mut.
         let read = self.active.load_full();
         /* Now build the write struct */
@@ -138,9 +146,9 @@ where
     /// Attempt to create a write transaction. If it fails, and err
     /// is returned. On success the `Ok(guard)` is returned. See also
     /// `write(&self)`
-    pub fn try_write(&self) -> Option<CowCellWriteTxn<T>> {
+    pub fn try_write(&self) -> Option<CowCellWriteTxn<'_, T, R>> {
         /* Take the exclusive write lock first */
-        self.write.try_lock().ok().map(|mguard| {
+        self.write.try_lock().map(|mguard| {
             // We delay copying until the first get_mut.
             let read = self.active.load_full();
             /* Now build the write struct */
@@ -172,9 +180,10 @@ impl<T> Deref for CowCellReadTxn<T> {
     }
 }
 
-impl<T> CowCellWriteTxn<'_, T>
+impl<T, R> CowCellWriteTxn<'_, T, R>
 where
     T: Clone,
+    R: RawMutex
 {
     /// Access a mutable pointer of the data in the `CowCell`. This data is only
     /// visible to the write transaction object in this thread, until you call
@@ -182,7 +191,7 @@ where
     pub fn get_mut(&mut self) -> &mut T {
         if self.work.is_none() {
             let mut data: Option<T> = Some((*self.read).clone());
-            std::mem::swap(&mut data, &mut self.work);
+            core::mem::swap(&mut data, &mut self.work);
             // Should be the none we previously had.
             debug_assert!(data.is_none())
         }
@@ -205,9 +214,10 @@ where
     }
 }
 
-impl<T> Deref for CowCellWriteTxn<'_, T>
+impl<T, R> Deref for CowCellWriteTxn<'_, T, R>
 where
     T: Clone,
+    R: RawMutex
 {
     type Target = T;
 
@@ -220,9 +230,10 @@ where
     }
 }
 
-impl<T> DerefMut for CowCellWriteTxn<'_, T>
+impl<T, R> DerefMut for CowCellWriteTxn<'_, T, R>
 where
     T: Clone,
+    R: RawMutex
 {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut T {

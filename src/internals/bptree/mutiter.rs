@@ -81,8 +81,7 @@ mod tests {
     use super::super::cursor::SuperBlock;
     use super::super::node::{Leaf, Node, L_CAPACITY};
     use super::RangeMutIter;
-    use std::ops::Bound;
-    use std::ops::Bound::*;
+    use std::ops::Bound::{self, *};
 
     use crate::internals::lincowcell::LinCowCellCapable;
 
