@@ -56,21 +56,21 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 
     /// Initiate a read transaction for the Hashmap, concurrent to any
     /// other readers or writers.
-    pub fn read(&self) -> HashTrieReadTxn<K, V, M> {
+    pub fn read(&self) -> HashTrieReadTxn<'_, K, V, M> {
         let inner = self.inner.read();
         HashTrieReadTxn { inner }
     }
 
     /// Initiate a write transaction for the map, exclusive to this
     /// writer, and concurrently to all existing reads.
-    pub fn write(&self) -> HashTrieWriteTxn<K, V, M> {
+    pub fn write(&self) -> HashTrieWriteTxn<'_, K, V, M> {
         let inner = self.inner.write();
         HashTrieWriteTxn { inner }
     }
 
     /// Attempt to create a new write, returns None if another writer
     /// already exists.
-    pub fn try_write(&self) -> Option<HashTrieWriteTxn<K, V, M>> {
+    pub fn try_write(&self) -> Option<HashTrieWriteTxn<'_, K, V, M>> {
         self.inner
             .try_write()
             .map(|inner| HashTrieWriteTxn { inner })

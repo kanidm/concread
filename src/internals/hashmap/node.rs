@@ -661,7 +661,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             for idx in 0..self.slots() {
                 unsafe {
                     let lvalue: Bucket<K, V> = (*self.values[idx].as_ptr()).clone();
-                    x.as_mut().unwrap().values[idx].write(lvalue);
+                    (&mut (*x)).values[idx].write(lvalue);
                 }
             }
 
@@ -1477,7 +1477,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         debug_assert!(!left.is_null());
         debug_assert!(!right.is_null());
 
-        match unsafe { left.as_ref().unwrap().ctrl.a.0 .0 & FLAG_MASK } {
+        match unsafe { (&(*left).ctrl.a).0 .0 & FLAG_MASK } {
             FLAG_HASH_LEAF => {
                 let lmut = leaf_ref!(left, K, V);
                 let rmut = leaf_ref!(right, K, V);
@@ -1790,7 +1790,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         let sib_ptr = self.nodes[idx];
         debug_assert!(!sib_ptr.is_null());
         // Do we need to clone?
-        let res = match unsafe { sib_ptr.as_ref().unwrap().ctrl.a.0 .0 } & FLAG_MASK {
+        let res = match unsafe { (&(*sib_ptr).ctrl.a).0 .0 } & FLAG_MASK {
             FLAG_HASH_LEAF => {
                 let lref = unsafe { &*(sib_ptr as *const _ as *const Leaf<K, V>) };
                 lref.req_clone(txid)

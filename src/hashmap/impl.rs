@@ -185,17 +185,17 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 
     /// Iterator over `(&K, &V)` of the set
-    pub fn iter(&self) -> Iter<K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V> {
         self.inner.as_ref().kv_iter()
     }
 
     /// Iterator over &K
-    pub fn values(&self) -> ValueIter<K, V> {
+    pub fn values(&self) -> ValueIter<'_, K, V> {
         self.inner.as_ref().v_iter()
     }
 
     /// Iterator over &V
-    pub fn keys(&self) -> KeyIter<K, V> {
+    pub fn keys(&self) -> KeyIter<'_, K, V> {
         self.inner.as_ref().k_iter()
     }
 
@@ -232,7 +232,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     /// Create a read-snapshot of the current map. This does NOT guarantee the map may
     /// not be mutated during the read, so you MUST guarantee that no functions of the
     /// write txn are called while this snapshot is active.
-    pub fn to_snapshot(&self) -> HashMapReadSnapshot<K, V, M> {
+    pub fn to_snapshot(&self) -> HashMapReadSnapshot<'_, K, V, M> {
         HashMapReadSnapshot {
             inner: SnapshotType::W(self.inner.as_ref()),
         }
@@ -281,23 +281,23 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 
     /// Iterator over `(&K, &V)` of the set
-    pub fn iter(&self) -> Iter<K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V> {
         self.inner.as_ref().kv_iter()
     }
 
     /// Iterator over &K
-    pub fn values(&self) -> ValueIter<K, V> {
+    pub fn values(&self) -> ValueIter<'_, K, V> {
         self.inner.as_ref().v_iter()
     }
 
     /// Iterator over &V
-    pub fn keys(&self) -> KeyIter<K, V> {
+    pub fn keys(&self) -> KeyIter<'_, K, V> {
         self.inner.as_ref().k_iter()
     }
 
     /// Create a read-snapshot of the current tree.
     /// As this is the read variant, it IS safe, and guaranteed the tree will not change.
-    pub fn to_snapshot(&self) -> HashMapReadSnapshot<K, V, M> {
+    pub fn to_snapshot(&self) -> HashMapReadSnapshot<'_, K, V, M> {
         HashMapReadSnapshot {
             inner: SnapshotType::R(self.inner.as_ref()),
         }
@@ -351,7 +351,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     // (adv) range
 
     /// Iterator over `(&K, &V)` of the set
-    pub fn iter(&self) -> Iter<K, V> {
+    pub fn iter(&self) -> Iter<'_, K, V> {
         match self.inner {
             SnapshotType::R(inner) => inner.kv_iter(),
             SnapshotType::W(inner) => inner.kv_iter(),
@@ -359,7 +359,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 
     /// Iterator over &K
-    pub fn values(&self) -> ValueIter<K, V> {
+    pub fn values(&self) -> ValueIter<'_, K, V> {
         match self.inner {
             SnapshotType::R(inner) => inner.v_iter(),
             SnapshotType::W(inner) => inner.v_iter(),
@@ -367,7 +367,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 
     /// Iterator over &V
-    pub fn keys(&self) -> KeyIter<K, V> {
+    pub fn keys(&self) -> KeyIter<'_, K, V> {
         match self.inner {
             SnapshotType::R(inner) => inner.k_iter(),
             SnapshotType::W(inner) => inner.k_iter(),

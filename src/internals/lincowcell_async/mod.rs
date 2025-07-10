@@ -58,10 +58,8 @@
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as SyncMutex};
 use tokio::sync::{Mutex, MutexGuard};
-
-use arc_swap::{ArcSwap, ArcSwapOption};
 
 use crate::internals::lincowcell::LinCowCellCapable;
 
@@ -70,7 +68,7 @@ use crate::internals::lincowcell::LinCowCellCapable;
 pub struct LinCowCell<T, R, U> {
     updater: PhantomData<U>,
     write: Mutex<T>,
-    active: ArcSwap<LinCowCellInner<R>>,
+    active: SyncMutex<Arc<LinCowCellInner<R>>>,
 }
 
 #[derive(Debug)]
@@ -85,7 +83,7 @@ pub struct LinCowCellWriteTxn<'a, T, R, U> {
 #[derive(Debug)]
 struct LinCowCellInner<R> {
     // This gives the chain effect.
-    pin: ArcSwapOption<LinCowCellInner<R>>,
+    pin: SyncMutex<Option<Arc<LinCowCellInner<R>>>>,
     data: R,
 }
 
@@ -101,8 +99,30 @@ pub struct LinCowCellReadTxn<'a, T, R, U> {
 impl<R> LinCowCellInner<R> {
     pub fn new(data: R) -> Self {
         LinCowCellInner {
-            pin: ArcSwapOption::empty(),
+            pin: SyncMutex::new(None),
             data,
+        }
+    }
+}
+
+impl<R> Drop for LinCowCellInner<R> {
+    fn drop(&mut self) {
+        // Ensure the default drop won't recursively drop the chain
+        let mut current = self.pin.lock().unwrap().take();
+
+        // Drop the chain iteratively to avoid stack overflow
+        while let Some(arc) = current {
+            // Try to get exclusive ownership of the next link
+            match Arc::try_unwrap(arc) {
+                Ok(inner) => {
+                    // Continue with the next link.
+                    current = inner.pin.lock().unwrap().take();
+                }
+                Err(_) => {
+                    // Another reference exists, so we can safely let it drop normally without recursion
+                    break;
+                }
+            }
         }
     }
 }
@@ -117,17 +137,17 @@ where
         LinCowCell {
             updater: PhantomData,
             write: Mutex::new(data),
-            active: ArcSwap::from_pointee(LinCowCellInner::new(r)),
+            active: SyncMutex::new(Arc::new(LinCowCellInner::new(r))),
         }
     }
 
     /// Begin a read txn
-    pub fn read(&self) -> LinCowCellReadTxn<T, R, U> {
-        // inc the arc.
-        let work = self.active.load_full();
+    pub fn read(&self) -> LinCowCellReadTxn<'_, T, R, U> {
+        let rwguard = self.active.lock().unwrap();
         LinCowCellReadTxn {
             _caller: self,
-            work,
+            // inc the arc.
+            work: rwguard.clone(),
         }
     }
 
@@ -148,7 +168,7 @@ where
     }
 
     /// Attempt a write txn
-    pub fn try_write(&self) -> Option<LinCowCellWriteTxn<T, R, U>> {
+    pub fn try_write(&self) -> Option<LinCowCellWriteTxn<'_, T, R, U>> {
         self.write
             .try_lock()
             .map(|write_guard| {
@@ -174,19 +194,21 @@ where
         } = write;
 
         // Get the previous generation.
-        let rwguard = self.active.load();
+        let mut rwguard = self.active.lock().unwrap();
         // Start to setup for the commit.
         let newdata = guard.pre_commit(work, &rwguard.data);
 
+        // Start to setup for the commit.
         let new_inner = Arc::new(LinCowCellInner::new(newdata));
         {
             // This modifies the next pointer of the existing read txns
+            let mut rwguard_inner = rwguard.pin.lock().unwrap();
             // Create the arc pointer to our new data
             // add it to the last value
-            rwguard.pin.store(Some(new_inner.clone()));
+            *rwguard_inner = Some(new_inner.clone());
         }
         // now over-write the last value in the mutex.
-        self.active.store(new_inner);
+        *rwguard = new_inner;
     }
 }
 
@@ -496,6 +518,29 @@ mod tests {
         );
 
         assert!(GC_COUNT.load(Ordering::Acquire) >= 50);
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)]
+    async fn test_long_chain_drop_no_stack_overflow() {
+        let data = TestData { x: 0 };
+        let cc = LinCowCell::new(data);
+
+        // Simulate a read txn that is not dropped.
+        let initial_read = cc.read();
+
+        // Create a long chain of versions by committing many writes.
+        for i in 0..10000 {
+            let mut write_txn = cc.write().await;
+            write_txn.get_mut().x = i;
+            write_txn.commit();
+        }
+
+        drop(initial_read);
+
+        // Verify the final state is correct.
+        let final_read = cc.read();
+        assert_eq!(final_read.work.data.x, 9999);
     }
 }
 

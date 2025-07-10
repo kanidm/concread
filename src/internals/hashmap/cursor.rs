@@ -19,7 +19,10 @@ use vec::Vec;
 #[cfg(any(feature = "ahash", not(feature = "std")))]
 use ahash::RandomState;
 
-#[cfg(all(not(feature = "ahash"), feature = "std"))]
+#[cfg(feature = "foldhash")]
+use foldhash::fast::RandomState;
+
+#[cfg(all(not(feature = "ahash"), not(feature = "foldhash")))]
 use std::collections::hash_map::RandomState;
 
 use std::hash::{BuildHasher, Hash, Hasher};
@@ -109,7 +112,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
             root: leaf as *mut Node<K, V>,
             size: 0,
             txid: 1,
-            build_hasher: RandomState::new(),
+            build_hasher: RandomState::default(),
         }
     }
 
@@ -136,7 +139,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
             txid,
             size,
             root,
-            build_hasher: RandomState::new(),
+            build_hasher: RandomState::default(),
         }
     }
 }
@@ -253,15 +256,15 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
         self.search(h, k).is_some()
     }
 
-    fn kv_iter(&self) -> Iter<K, V> {
+    fn kv_iter(&self) -> Iter<'_, K, V> {
         Iter::new(self.get_root(), self.len())
     }
 
-    fn k_iter(&self) -> KeyIter<K, V> {
+    fn k_iter(&self) -> KeyIter<'_, K, V> {
         KeyIter::new(self.get_root(), self.len())
     }
 
-    fn v_iter(&self) -> ValueIter<K, V> {
+    fn v_iter(&self) -> ValueIter<'_, K, V> {
         ValueIter::new(self.get_root(), self.len())
     }
 

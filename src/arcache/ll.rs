@@ -226,7 +226,7 @@ where
     }
 
     #[allow(dead_code)]
-    pub(crate) fn iter_mut(&self) -> LLIterMut<K> {
+    pub(crate) fn iter_mut(&self) -> LLIterMut<'_, K> {
         LLIterMut {
             next: unsafe { (*self.head).next },
             end: self.tail,

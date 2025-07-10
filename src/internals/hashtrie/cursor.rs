@@ -30,10 +30,14 @@ use super::iter::*;
 
 #[cfg(any(feature = "ahash", not(feature = "std")))]
 use ahash::RandomState;
-#[cfg(all(not(feature = "ahash"), feature = "std"))]
+
+#[cfg(feature = "foldhash")]
+use foldhash::fast::RandomState;
+
+#[cfg(all(not(feature = "ahash"), not(feature = "foldhash")))]
 use std::collections::hash_map::RandomState;
 
-use std::hash::{BuildHasher, Hash, Hasher};
+use core::hash::{BuildHasher, Hash, Hasher};
 
 // This defines the max height of our tree. Gives 16777216.0 entries
 // This only consumes 16KB if fully populated
@@ -435,7 +439,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
             root,
             length: 0,
             txid: 1,
-            build_hasher: RandomState::new(),
+            build_hasher: RandomState::default(),
             k: PhantomData,
             v: PhantomData,
         }
@@ -556,15 +560,15 @@ pub(crate) trait CursorReadOps<K: Clone + Hash + Eq + Debug, V: Clone> {
         unreachable!();
     }
 
-    fn kv_iter(&self) -> Iter<K, V> {
+    fn kv_iter(&self) -> Iter<'_, K, V> {
         Iter::new(self.get_root_ptr(), self.len())
     }
 
-    fn k_iter(&self) -> KeyIter<K, V> {
+    fn k_iter(&self) -> KeyIter<'_, K, V> {
         KeyIter::new(self.get_root_ptr(), self.len())
     }
 
-    fn v_iter(&self) -> ValueIter<K, V> {
+    fn v_iter(&self) -> ValueIter<'_, K, V> {
         ValueIter::new(self.get_root_ptr(), self.len())
     }
 
