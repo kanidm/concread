@@ -16,8 +16,11 @@ use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWrit
 
 include!("impl.rs");
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex>
-    BptreeMap<K, V, M>
+impl<
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex,
+    > BptreeMap<K, V, M>
 {
     /// Initiate a read transaction for the tree, concurrent to any
     /// other readers or writers.
@@ -34,8 +37,11 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex>
-    BptreeMapWriteTxn<'_, K, V, M>
+impl<
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex,
+    > BptreeMapWriteTxn<'_, K, V, M>
 {
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to perceive these changes.
@@ -51,7 +57,7 @@ impl<K, V, M> Serialize for BptreeMapReadTxn<'_, K, V, M>
 where
     K: Serialize + Clone + Ord + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
-    M: RawMutex + 'static
+    M: RawMutex + 'static,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -72,7 +78,7 @@ impl<K, V, M> Serialize for BptreeMap<K, V, M>
 where
     K: Serialize + Clone + Ord + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
-    M: RawMutex + 'static
+    M: RawMutex + 'static,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -87,7 +93,7 @@ impl<'de, K, V, M> Deserialize<'de> for BptreeMap<K, V, M>
 where
     K: Deserialize<'de> + Clone + Ord + Debug + Sync + Send + 'static,
     V: Deserialize<'de> + Clone + Sync + Send + 'static,
-    M: RawMutex + 'static
+    M: RawMutex + 'static,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -346,7 +352,8 @@ mod tests {
     fn test_bptree2_map_rangeiter_1() {
         let ins: Vec<usize> = (0..100).collect();
 
-        let map: BptreeMap<usize, usize, parking_lot::RawMutex> = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
+        let map: BptreeMap<usize, usize, parking_lot::RawMutex> =
+            BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
 
         {
             let w = map.write();
@@ -362,7 +369,8 @@ mod tests {
 
     #[test]
     fn test_bptree2_map_rangeiter_2() {
-        let map: BptreeMap<i32, (), parking_lot::RawMutex> = BptreeMap::from_iter([(3, ()), (4, ()), (0, ())]);
+        let map: BptreeMap<i32, (), parking_lot::RawMutex> =
+            BptreeMap::from_iter([(3, ()), (4, ()), (0, ())]);
 
         let r = map.read();
         assert!(r.range(1..=2).count() == 0);
@@ -370,7 +378,8 @@ mod tests {
 
     #[test]
     fn test_bptree2_map_rangeiter_3() {
-        let map: BptreeMap<i32, (), parking_lot::RawMutex> = BptreeMap::from_iter([0, 1, 2, 3, 4, 5, 6, 8].map(|v| (v, ())));
+        let map: BptreeMap<i32, (), parking_lot::RawMutex> =
+            BptreeMap::from_iter([0, 1, 2, 3, 4, 5, 6, 8].map(|v| (v, ())));
 
         let r = map.read();
         assert!(r.range((Bound::Excluded(6), Bound::Included(7))).count() == 0);

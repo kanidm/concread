@@ -19,7 +19,6 @@
 
 #![allow(clippy::implicit_hasher)]
 
-
 #[cfg(feature = "asynch")]
 pub mod asynch;
 
@@ -39,8 +38,11 @@ use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWrit
 
 include!("impl.rs");
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
-    HashMap<K, V, M>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + 'static,
+    > HashMap<K, V, M>
 {
     /// Construct a new concurrent hashmap
     pub fn new() -> Self {
@@ -73,8 +75,11 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
-    HashMapWriteTxn<'_, K, V, M>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + 'static,
+    > HashMapWriteTxn<'_, K, V, M>
 {
     #[cfg(all(feature = "arcache", feature = "arcache-is-hashmap"))]
     pub(crate) fn get_txid(&self) -> u64 {
@@ -108,8 +113,11 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex>
-    HashMapReadTxn<'_, K, V, M>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex,
+    > HashMapReadTxn<'_, K, V, M>
 {
     #[cfg(all(feature = "arcache", feature = "arcache-is-hashmap"))]
     pub(crate) fn get_txid(&self) -> u64 {
@@ -131,7 +139,7 @@ impl<K, V, M> Serialize for HashMapReadTxn<'_, K, V, M>
 where
     K: Serialize + Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
-    M: RawMutex
+    M: RawMutex,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -152,7 +160,7 @@ impl<K, V, M> Serialize for HashMap<K, V, M>
 where
     K: Serialize + Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
-    M: RawMutex + 'static
+    M: RawMutex + 'static,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -167,7 +175,7 @@ impl<'de, K, V, M> Deserialize<'de> for HashMap<K, V, M>
 where
     K: Deserialize<'de> + Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Deserialize<'de> + Clone + Sync + Send + 'static,
-    M: RawMutex + 'static
+    M: RawMutex + 'static,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

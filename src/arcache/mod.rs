@@ -10,11 +10,10 @@
 //! writers that are serialised. This formally means that this is an ACID
 //! compliant Cache.
 
-
-#[cfg(feature = "std")]
-use std::{vec::Vec, borrow::ToOwned, sync::Arc};
 #[cfg(not(feature = "std"))]
-use alloc::{vec::Vec, borrow::ToOwned, sync::Arc};
+use alloc::{borrow::ToOwned, sync::Arc, vec::Vec};
+#[cfg(feature = "std")]
+use std::{borrow::ToOwned, sync::Arc, vec::Vec};
 
 mod ll;
 /// Stats collection for [ARCache]
@@ -36,8 +35,8 @@ use crate::utils::{self, Monotonic};
 
 use crossbeam_queue::ArrayQueue;
 use hashbrown::HashMap as Map;
-use std::sync::atomic::{AtomicBool, Ordering};
 use lock_api::{Mutex, RawMutex, RawRwLock, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -68,7 +67,7 @@ const WATERMARK_DISABLE_RATIO: usize = 18;
 mod monotonic_timer {
     pub struct MonotonicTimer;
 
-    unsafe impl crate::utils::Monotonic for MonotonicTimer{
+    unsafe impl crate::utils::Monotonic for MonotonicTimer {
         type Output = std::time::Instant;
 
         fn new() -> Self {
@@ -89,9 +88,9 @@ mod monotonic_timer {
 mod monotonic_timer {
     use std::sync::atomic::{AtomicUsize, Ordering};
     /// This provides a mnonotonic generation counter, with the bit width equal to the pointer width of the platform.
-    /// 
+    ///
     /// # SAFETY
-    /// 
+    ///
     /// This wraps around on overflow, so the result becomes invalid if you call it more than `usize::MAX`.
     /// Overflow will panic on debug, and continue on release mode.
     pub struct MonotonicTimer(AtomicUsize);
@@ -113,7 +112,10 @@ mod monotonic_timer {
             // we can use relaxed ordering here as it still guarantees that each value will only be observed once.
             // the downside is that close calls may have re-ordered insertion do the relaxed ordering on the read.
             let counter = self.0.fetch_add(1, Ordering::Relaxed);
-            debug_assert!(counter != usize::MAX, "The default monotonic counter reached the maximum number of valid calls");
+            debug_assert!(
+                counter != usize::MAX,
+                "The default monotonic counter reached the maximum number of valid calls"
+            );
             counter
         }
     }
@@ -211,7 +213,7 @@ struct ArcInner<K, V, M>
 where
     K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Debug + Sync + Send + 'static,
-    M: Monotonic
+    M: Monotonic,
 {
     /// Weight of items between the two caches.
     p: usize,
@@ -229,7 +231,7 @@ struct ArcShared<K, V, M>
 where
     K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Debug + Sync + Send + 'static,
-    M: Monotonic
+    M: Monotonic,
 {
     // Max number of elements to cache.
     max: usize,
@@ -246,13 +248,18 @@ where
 
 /// A concurrently readable adaptive replacement cache. Operations are performed on the
 /// cache via read and write operations.
-pub struct ARCache<K, V, M = monotonic_timer::MonotonicTimer, RawMutexImpl = utils::DefaultRawMutex , RawRwLockImpl = utils::DefaultRawRwLock>
-where
+pub struct ARCache<
+    K,
+    V,
+    M = monotonic_timer::MonotonicTimer,
+    RawMutexImpl = utils::DefaultRawMutex,
+    RawRwLockImpl = utils::DefaultRawRwLock,
+> where
     K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Debug + Sync + Send + 'static,
     M: Monotonic + 'static,
     RawMutexImpl: RawMutex + 'static,
-    RawRwLockImpl: RawRwLock + 'static
+    RawRwLockImpl: RawRwLock + 'static,
 {
     // Use a unified tree, allows simpler movement of items between the
     // cache types.
@@ -265,7 +272,7 @@ where
     // stats: CowCell<CacheStats>,
     above_watermark: AtomicBool,
     look_back_limit: u64,
-    monotonic: M
+    monotonic: M,
 }
 
 unsafe impl<
@@ -273,7 +280,7 @@ unsafe impl<
         V: Clone + Debug + Sync + Send + 'static,
         M: Monotonic + Send + Send + 'static,
         Mutex: RawMutex + Sync + Send + 'static,
-        RwLock: RawRwLock + Sync + Send + 'static
+        RwLock: RawRwLock + Sync + Send + 'static,
     > Send for ARCache<K, V, M, Mutex, RwLock>
 {
 }
@@ -282,7 +289,7 @@ unsafe impl<
         V: Clone + Debug + Sync + Send + 'static,
         M: Monotonic + Send + 'static,
         Mutex: RawMutex + Sync + 'static,
-        RwLock: RawRwLock + Sync + 'static
+        RwLock: RawRwLock + Sync + 'static,
     > Sync for ARCache<K, V, M, Mutex, RwLock>
 {
 }
@@ -331,7 +338,7 @@ where
     S: ARCacheReadStat + Clone,
     M: Monotonic + 'static,
     Mutex: RawMutex + 'static,
-    RwLock: RawRwLock + 'static
+    RwLock: RawRwLock + 'static,
 {
     caller: &'a ARCache<K, V, M, Mutex, RwLock>,
     // ro_txn to cache
@@ -350,7 +357,7 @@ unsafe impl<
         S: ARCacheReadStat + Clone + Sync + Send + 'static,
         M: Monotonic + Sync + Send + 'static,
         Mutex: RawMutex + Sync + Send + 'static,
-        RwLock: RawRwLock + Sync + Send + 'static
+        RwLock: RawRwLock + Sync + Send + 'static,
     > Send for ARCacheReadTxn<'_, K, V, S, M, Mutex, RwLock>
 {
 }
@@ -360,7 +367,7 @@ unsafe impl<
         S: ARCacheReadStat + Clone + Sync + Send + 'static,
         M: Monotonic + Sync + 'static,
         Mutex: RawMutex + Sync + 'static,
-        RwLock: RawRwLock + Sync+ 'static
+        RwLock: RawRwLock + Sync + 'static,
     > Sync for ARCacheReadTxn<'_, K, V, S, M, Mutex, RwLock>
 {
 }
@@ -375,8 +382,8 @@ where
     V: Clone + Debug + Sync + Send + 'static,
     S: ARCacheWriteStat<K>,
     M: Monotonic + 'static,
-    Mutex: RawMutex + 'static, 
-    RwLock: RawRwLock + 'static
+    Mutex: RawMutex + 'static,
+    RwLock: RawRwLock + 'static,
 {
     caller: &'a ARCache<K, V, M, Mutex, RwLock>,
     // wr_txn to cache
@@ -432,7 +439,7 @@ pub struct ARCacheBuilder<M: utils::Monotonic> {
     watermark: Option<usize>,
     reader_quiesce: bool,
     look_back_limit: Option<u8>,
-    monotonic: Option<M>
+    monotonic: Option<M>,
 }
 
 impl<M: utils::Monotonic> Default for ARCacheBuilder<M> {
@@ -443,14 +450,14 @@ impl<M: utils::Monotonic> Default for ARCacheBuilder<M> {
             watermark: None,
             reader_quiesce: true,
             look_back_limit: None,
-            monotonic: None
+            monotonic: None,
         }
     }
 }
 
 impl<M> ARCacheBuilder<M>
 where
-    M: Monotonic
+    M: Monotonic,
 {
     /// Create a new ARCache builder that you can configure before creation.
     pub fn new() -> Self {
@@ -567,7 +574,9 @@ where
 
     /// Consume this builder, returning a cache if successful. If configured parameters are
     /// missing or incorrect, a None will be returned.
-    pub fn build<K, V, RawMutexImpl: RawMutex, RawRwLockImpl: RawRwLock>(self) -> Option<ARCache<K, V, M, RawMutexImpl, RawRwLockImpl>>
+    pub fn build<K, V, RawMutexImpl: RawMutex, RawRwLockImpl: RawRwLock>(
+        self,
+    ) -> Option<ARCache<K, V, M, RawMutexImpl, RawRwLockImpl>>
     where
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
         V: Clone + Debug + Sync + Send + 'static,
@@ -579,7 +588,7 @@ where
             watermark,
             reader_quiesce,
             look_back_limit,
-            monotonic
+            monotonic,
         } = self;
 
         let (max, read_max) = max.zip(read_max)?;
@@ -611,7 +620,7 @@ where
         let chan_size = READ_THREAD_CHANNEL_SIZE;
         let inc_queue = Arc::new(ArrayQueue::new(chan_size));
 
-        let shared = RwLock::<RawRwLockImpl, ArcShared<K,V, M>>::new(ArcShared {
+        let shared = RwLock::<RawRwLockImpl, ArcShared<K, V, M>>::new(ArcShared {
             max,
             read_max,
             // stat_tx,
@@ -641,7 +650,7 @@ where
             // stats: CowCell::new(stats),
             above_watermark: AtomicBool::new(init_watermark),
             look_back_limit,
-            monotonic: monotonic.unwrap_or(M::new())
+            monotonic: monotonic.unwrap_or(M::new()),
         })
     }
 }
@@ -651,7 +660,7 @@ impl<
         V: Clone + Debug + Sync + Send + 'static,
         M: Monotonic + 'static,
         Mutex: RawMutex + 'static,
-        RwLock: RawRwLock + 'static
+        RwLock: RawRwLock + 'static,
     > ARCache<K, V, M, Mutex, RwLock>
 {
     /// Use ARCacheBuilder instead
@@ -751,7 +760,10 @@ impl<
         }
     }
 
-    fn try_write_stats<S>(&self, stats: S) -> Result<ARCacheWriteTxn<'_, K, V, S, M, Mutex, RwLock>, S>
+    fn try_write_stats<S>(
+        &self,
+        stats: S,
+    ) -> Result<ARCacheWriteTxn<'_, K, V, S, M, Mutex, RwLock>, S>
     where
         S: ARCacheWriteStat<K>,
     {
@@ -1679,7 +1691,7 @@ impl<
         S: ARCacheWriteStat<K>,
         M: Monotonic + 'static,
         Mutex: RawMutex + 'static,
-        RwLock: RawRwLock + 'static
+        RwLock: RawRwLock + 'static,
     > ARCacheWriteTxn<'_, K, V, S, M, Mutex, RwLock>
 {
     /// Commit the changes of this writer, making them globally visible. This causes
@@ -2074,7 +2086,7 @@ impl<
         S: ARCacheReadStat + Clone,
         M: Monotonic + 'static,
         Mutex: RawMutex,
-        RwLock: RawRwLock
+        RwLock: RawRwLock,
     > ARCacheReadTxn<'_, K, V, S, M, Mutex, RwLock>
 {
     /// Attempt to retrieve a k-v pair from the cache. If it is present in the main cache OR
@@ -2232,7 +2244,7 @@ impl<
         S: ARCacheReadStat + Clone,
         M: Monotonic + 'static,
         Mutex: RawMutex,
-        RwLock: RawRwLock
+        RwLock: RawRwLock,
     > Drop for ARCacheReadTxn<'_, K, V, S, M, Mutex, RwLock>
 {
     fn drop(&mut self) {

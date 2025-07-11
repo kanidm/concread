@@ -4,25 +4,24 @@
 //! Additionally, the cursor also is responsible for general movement
 //! throughout the structure and how to handle that effectively
 
-
-#[cfg(feature = "std")]
-use std::{boxed, vec, collections};
 #[cfg(not(feature = "std"))]
-use alloc::{boxed, vec, collections};
+use alloc::{boxed, collections, vec};
+#[cfg(feature = "std")]
+use std::{boxed, collections, vec};
 
 use boxed::Box;
 use vec::Vec;
 
 use crate::internals::lincowcell::LinCowCellCapable;
 
+use collections::{BTreeSet, VecDeque};
+use lock_api::{Mutex, RawMutex};
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use collections::{BTreeSet, VecDeque};
 use std::fmt;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ptr;
-use lock_api::{Mutex, RawMutex};
 
 use smallvec::SmallVec;
 
@@ -446,8 +445,8 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Clone, M: RawMutex> LinCowCellCapable<CursorRead<K, V, M>, CursorWrite<K, V>>
-    for SuperBlock<K, V>
+impl<K: Hash + Eq + Clone + Debug, V: Clone, M: RawMutex>
+    LinCowCellCapable<CursorRead<K, V, M>, CursorWrite<K, V>> for SuperBlock<K, V>
 {
     fn create_reader(&self) -> CursorRead<K, V, M> {
         CursorRead::new(self)
@@ -1060,7 +1059,7 @@ pub(crate) struct CursorRead<K, V, R = crate::utils::DefaultRawMutex>
 where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
-    R: RawMutex
+    R: RawMutex,
 {
     txid: u64,
     length: usize,
@@ -1097,7 +1096,9 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone, R: RawMutex> Drop for CursorRead<K,
     }
 }
 
-impl<K: Clone + Hash + Eq + Debug, V: Clone, R: RawMutex> CursorReadOps<K, V> for CursorRead<K, V, R> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone, R: RawMutex> CursorReadOps<K, V>
+    for CursorRead<K, V, R>
+{
     fn get_root_ptr(&self) -> Ptr {
         self.root
     }
@@ -1131,7 +1132,10 @@ mod tests {
     fn test_hashtrie_cursor_basic() {
         let sb: SuperBlock<u64, u64> = unsafe { SuperBlock::new() };
 
-        let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<CursorRead<u64, u64>, CursorWrite<u64, u64>>>::create_writer(&sb);
+        let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<
+            CursorRead<u64, u64>,
+            CursorWrite<u64, u64>,
+        >>::create_writer(&sb);
 
         assert!(wr.len() == 0);
         assert!(wr.search(0, &0).is_none());
@@ -1153,7 +1157,10 @@ mod tests {
     fn test_hashtrie_cursor_insert_max_depth() {
         let mut sb: SuperBlock<u64, u64> = unsafe { SuperBlock::new() };
         let rdr: CursorRead<u64, u64> = sb.create_reader();
-        let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<CursorRead<u64, u64>, CursorWrite<u64, u64>>>::create_writer(&sb);
+        let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<
+            CursorRead<u64, u64>,
+            CursorWrite<u64, u64>,
+        >>::create_writer(&sb);
 
         assert!(wr.len() == 0);
         for i in 0..(ABS_MAX_HEIGHT * 2) {
@@ -1189,7 +1196,10 @@ mod tests {
     fn test_hashtrie_cursor_insert_broad() {
         let mut sb: SuperBlock<u64, u64> = unsafe { SuperBlock::new() };
         let rdr: CursorRead<u64, u64> = sb.create_reader();
-        let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<CursorRead<u64, u64>, CursorWrite<u64, u64>>>::create_writer(&sb);
+        let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<
+            CursorRead<u64, u64>,
+            CursorWrite<u64, u64>,
+        >>::create_writer(&sb);
 
         assert!(wr.len() == 0);
         for i in 0..(ABS_MAX_HEIGHT * ABS_MAX_HEIGHT) {
@@ -1229,7 +1239,10 @@ mod tests {
         assert!(rdr.len() == 0);
 
         for i in 0..(ABS_MAX_HEIGHT * ABS_MAX_HEIGHT) {
-            let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<CursorRead<u64, u64>, CursorWrite<u64, u64>>>::create_writer(&sb);
+            let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<
+                CursorRead<u64, u64>,
+                CursorWrite<u64, u64>,
+            >>::create_writer(&sb);
             assert!(wr.insert(i, i, i).is_none());
             wr.verify();
             rdr = sb.pre_commit(wr, &rdr);
@@ -1244,7 +1257,10 @@ mod tests {
         }
 
         for i in 0..(ABS_MAX_HEIGHT * ABS_MAX_HEIGHT) {
-            let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<CursorRead<u64, u64>, CursorWrite<u64, u64>>>::create_writer(&sb);
+            let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<
+                CursorRead<u64, u64>,
+                CursorWrite<u64, u64>,
+            >>::create_writer(&sb);
             assert!(wr.remove(i, &i).is_some());
             wr.verify();
             rdr = sb.pre_commit(wr, &rdr);

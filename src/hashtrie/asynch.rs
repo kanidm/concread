@@ -17,8 +17,11 @@ use crate::internals::lincowcell_async::{LinCowCell, LinCowCellReadTxn, LinCowCe
 
 include!("impl.rs");
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
-    HashTrie<K, V, M>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + 'static,
+    > HashTrie<K, V, M>
 {
     /// Construct a new concurrent hashtrie
     pub fn new() -> Self {
@@ -51,8 +54,11 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
-    HashTrieWriteTxn<'_, K, V, M>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + 'static,
+    > HashTrieWriteTxn<'_, K, V, M>
 {
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to perceieve these changes.

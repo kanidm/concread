@@ -16,7 +16,7 @@ use core::ops::{Deref, DerefMut};
 use lock_api::{Mutex, MutexGuard, RawMutex};
 
 #[cfg(not(feature = "std"))]
-use alloc::sync::Arc;
+use ::alloc::sync::Arc;
 
 #[cfg(feature = "std")]
 use std::sync::Arc;
@@ -257,10 +257,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::CowCell;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Instant;
-
-    use std::thread::scope;
 
     #[test]
     fn test_deref_mut() {
@@ -320,6 +316,14 @@ mod tests {
         assert_eq!(*cc_rotxn_c, 1);
         assert_eq!(*cc_rotxn_a, 0);
     }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests_std {
+    use super::CowCell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread::scope;
+    use std::time::Instant;
 
     const MAX_TARGET: i64 = 2000;
 

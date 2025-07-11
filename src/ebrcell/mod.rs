@@ -15,9 +15,9 @@
 //! or crossbeam library components.
 //! If you need accurate memory reclaim, use the Arc (`CowCell`) implementation.
 
-use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use crossbeam_epoch as epoch;
 use crossbeam_epoch::{Atomic, Guard, Owned};
+use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use std::mem;
 use std::ops::{Deref, DerefMut};
@@ -33,10 +33,7 @@ use std::sync::{Mutex, MutexGuard};
 /// abort a change, don't call commit and allow the write transaction to
 /// go out of scope. This causes the `EbrCell` to unlock allowing other
 /// writes to proceed.
-pub struct EbrCellWriteTxn<
-    'a,
-    T: 'static + Clone + Send + Sync
-> {
+pub struct EbrCellWriteTxn<'a, T: 'static + Clone + Send + Sync> {
     data: Option<T>,
     // This way we know who to contact for updating our data ....
     caller: &'a EbrCell<T>,
@@ -135,7 +132,7 @@ where
 #[derive(Debug)]
 pub struct EbrCell<T: Clone + Sync + Send + 'static>
 where
-    T: Clone + Sync + Send + 'static
+    T: Clone + Sync + Send + 'static,
 {
     write: Mutex<()>,
     active: Atomic<T>,

@@ -43,14 +43,19 @@ use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWrit
 
 include!("impl.rs");
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
-    HashTrie<K, V, M>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + 'static,
+    > HashTrie<K, V, M>
 {
     /// Construct a new concurrent hashtrie
     pub fn new() -> Self {
         // I acknowledge I understand what is required to make this safe.
         HashTrie {
-            inner: LinCowCell::<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>::new(unsafe { SuperBlock::new() }),
+            inner: LinCowCell::<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>::new(
+                unsafe { SuperBlock::new() },
+            ),
         }
     }
 
@@ -77,8 +82,11 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
-    HashTrieWriteTxn<'_, K, V, M>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + 'static,
+    > HashTrieWriteTxn<'_, K, V, M>
 {
     /// View the current transaction ID for this cache. This is a monotonically increasing
     /// value. If two transactions have the same txid, they are the same data generation.
@@ -113,8 +121,11 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
-    HashTrieReadTxn<'_, K, V, M>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + 'static,
+    > HashTrieReadTxn<'_, K, V, M>
 {
     /// View the current transaction ID for this cache. This is a monotonically increasing
     /// value. If two transactions have the same txid, they are the same data generation.
@@ -137,7 +148,7 @@ impl<K, V, M> Serialize for HashTrieReadTxn<'_, K, V, M>
 where
     K: Serialize + Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
-    M: RawMutex + 'static
+    M: RawMutex + 'static,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -158,7 +169,7 @@ impl<K, V, M> Serialize for HashTrie<K, V, M>
 where
     K: Serialize + Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
-    M: RawMutex + 'static
+    M: RawMutex + 'static,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -173,7 +184,7 @@ impl<'de, K, V, M> Deserialize<'de> for HashTrie<K, V, M>
 where
     K: Deserialize<'de> + Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Deserialize<'de> + Clone + Sync + Send + 'static,
-    M: RawMutex + 'static
+    M: RawMutex + 'static,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

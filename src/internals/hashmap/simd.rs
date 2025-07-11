@@ -1,8 +1,8 @@
-#[cfg(feature = "simd_support")]
-use std::simd::u64x8;
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::hash::Hash;
+#[cfg(feature = "simd_support")]
+use std::simd::u64x8;
 
 use super::node::{Branch, Leaf};
 

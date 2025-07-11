@@ -1,9 +1,7 @@
-
-
-#[cfg(feature = "std")]
-use std::boxed::Box;
 #[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
+#[cfg(feature = "std")]
+use std::boxed::Box;
 
 use std::fmt::Debug;
 use std::marker::PhantomData;

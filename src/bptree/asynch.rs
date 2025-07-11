@@ -13,8 +13,11 @@ use crate::internals::lincowcell_async::{LinCowCell, LinCowCellReadTxn, LinCowCe
 
 include!("impl.rs");
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, R: RawMutex + 'static>
-    BptreeMap<K, V, R>
+impl<
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        R: RawMutex + 'static,
+    > BptreeMap<K, V, R>
 {
     /// Initiate a read transaction for the tree, concurrent to any
     /// other readers or writers.
@@ -31,8 +34,11 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, R: RawMutex + 'static>
-    BptreeMapWriteTxn<'_, K, V, R>
+impl<
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        R: RawMutex + 'static,
+    > BptreeMapWriteTxn<'_, K, V, R>
 {
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to perceive these changes.

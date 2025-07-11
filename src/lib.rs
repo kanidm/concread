@@ -33,18 +33,13 @@
 //! By default all of these features are enabled. If you are planning to use this crate in a wasm
 //! context we recommend you use only `maps` as a feature.
 
-
 //#![no_std]
 #![cfg_attr(not(feature = "std"), no_std)]
-
 #![deny(warnings)]
 #![warn(unused_extern_crates)]
 #![warn(missing_docs)]
 #![allow(clippy::needless_lifetimes)]
 #![cfg_attr(feature = "simd_support", feature(portable_simd))]
-
-// TODO - can I remove this? Need a backup to tell if we can use AtomicUsize
-//#![feature(cfg_target_has_atomic)]
 
 #[cfg(not(any(test, feature = "std")))]
 extern crate alloc;
@@ -78,7 +73,7 @@ pub mod threadcache;
 pub mod internals;
 
 // This is where the good rust lives.
-// We're allowing unuzed here since we may or may not use all items based on enabled features
+// We're allowing unused here since we may or may not use all items based on enabled features
 // All potentially incompatible features must be feature gated internally.
 #[allow(unused)]
 mod utils;
@@ -90,5 +85,5 @@ pub mod hashmap;
 #[cfg(feature = "maps")]
 pub mod hashtrie;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "maps"))]
 mod lc_tests;

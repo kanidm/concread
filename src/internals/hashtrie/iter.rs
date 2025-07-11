@@ -1,9 +1,9 @@
 //! Iterators for the hashtrie
 
-#[cfg(feature = "std")]
-use std::collections::VecDeque;
 #[cfg(not(feature = "std"))]
 use alloc::collections::VecDeque;
+#[cfg(feature = "std")]
+use std::collections::VecDeque;
 
 use super::cursor::{Ptr, HT_CAPACITY, MAX_HEIGHT};
 use core::fmt::Debug;

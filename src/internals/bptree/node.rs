@@ -1,27 +1,26 @@
 use super::states::*;
 use crate::utils::*;
 // use libc::{c_void, mprotect, PROT_READ, PROT_WRITE};
+use crossbeam_utils::CachePadded;
 use std::borrow::Borrow;
 use std::fmt::{self, Debug, Error};
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ptr;
 use std::slice;
-use crossbeam_utils::CachePadded;
 
-#[cfg(feature = "std")]
-use std::{boxed, vec};
 #[cfg(not(feature = "std"))]
 use alloc::{boxed, vec};
+#[cfg(feature = "std")]
+use std::{boxed, vec};
 
 use boxed::Box;
 use vec::Vec;
 
-
-#[cfg(all(test, not(miri)))]
-use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 use std::collections::BTreeSet;
+#[cfg(all(test, not(miri)))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(all(test, not(miri)))]
 use std::sync::Mutex;
 
@@ -877,7 +876,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
             let rk: &K = unsafe { &*(*pointer).key[work_idx].as_ptr() };
             if lk >= rk {
                 // println!("{:?}", self);
-                cfg_if::cfg_if!{ if #[cfg(test)] {
+                cfg_if::cfg_if! { if #[cfg(test)] {
                     return false;
                 } else {
                     debug_assert!(false);

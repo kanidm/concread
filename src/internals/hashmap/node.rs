@@ -16,10 +16,10 @@ use smallvec::SmallVec;
 #[cfg(feature = "simd_support")]
 use std::simd::u64x8;
 
-#[cfg(feature = "std")]
-use std::{boxed, vec};
 #[cfg(not(feature = "std"))]
 use alloc::{boxed, vec};
+#[cfg(feature = "std")]
+use std::{boxed, vec};
 
 use boxed::Box;
 use vec::Vec;

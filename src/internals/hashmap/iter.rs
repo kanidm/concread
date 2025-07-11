@@ -1,9 +1,9 @@
 //! Iterators for the map.
 
-#[cfg(feature = "std")]
-use std::collections::VecDeque;
 #[cfg(not(feature = "std"))]
 use alloc::collections::VecDeque;
+#[cfg(feature = "std")]
+use std::collections::VecDeque;
 
 // Iterators for the bptree
 use super::node::{Branch, Leaf, Meta, Node};

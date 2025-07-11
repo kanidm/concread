@@ -69,7 +69,7 @@ pub struct LinCowCell<T, R, U, M = ()> {
     updater: PhantomData<U>,
     write: Mutex<T>,
     active: SyncMutex<Arc<LinCowCellInner<R>>>,
-    _phantom: PhantomData<M>
+    _phantom: PhantomData<M>,
 }
 
 #[derive(Debug)]
@@ -79,7 +79,7 @@ pub struct LinCowCellWriteTxn<'a, T, R, U, M> {
     caller: &'a LinCowCell<T, R, U, M>,
     guard: MutexGuard<'a, T>,
     work: U,
-    _phantom: PhantomData<M>
+    _phantom: PhantomData<M>,
 }
 
 #[derive(Debug)]
@@ -140,7 +140,7 @@ where
             updater: PhantomData,
             write: Mutex::new(data),
             active: SyncMutex::new(Arc::new(LinCowCellInner::new(r))),
-            _phantom: PhantomData
+            _phantom: PhantomData,
         }
     }
 
@@ -167,7 +167,7 @@ where
             caller: self,
             guard: write_guard,
             work,
-            _phantom: PhantomData
+            _phantom: PhantomData,
         }
     }
 
@@ -183,7 +183,7 @@ where
                     caller: self,
                     guard: write_guard,
                     work,
-                    _phantom: PhantomData
+                    _phantom: PhantomData,
                 }
             })
             .ok()
@@ -196,7 +196,7 @@ where
             caller: _caller,
             mut guard,
             work,
-            _phantom: PhantomData
+            _phantom: PhantomData,
         } = write;
 
         // Get the previous generation.
@@ -411,7 +411,8 @@ mod tests {
         let start = Instant::now();
         // Create the new cowcell.
         let data = TestData { x: 0 };
-        let cc: Arc<LinCowCell<TestData, TestDataReadTxn, TestDataWriteTxn>> = Arc::new(LinCowCell::new(data));
+        let cc: Arc<LinCowCell<TestData, TestDataReadTxn, TestDataWriteTxn>> =
+            Arc::new(LinCowCell::new(data));
 
         let _ = tokio::join!(
             tokio::task::spawn_blocking({
@@ -514,7 +515,9 @@ mod tests {
     async fn test_gc_operation() {
         GC_COUNT.store(0, Ordering::Release);
         let data = TestGcWrapper { data: 0 };
-        let cc: Arc<LinCowCell<TestGcWrapper<i64>, TestGcWrapperReadTxn<i64>, TestGcWrapperWriteTxn<i64>>> = Arc::new(LinCowCell::new(data));
+        let cc: Arc<
+            LinCowCell<TestGcWrapper<i64>, TestGcWrapperReadTxn<i64>, TestGcWrapperWriteTxn<i64>>,
+        > = Arc::new(LinCowCell::new(data));
 
         let _ = tokio::join!(
             tokio::task::spawn(test_gc_operation_thread(cc.clone())),
@@ -618,7 +621,11 @@ mod tests_linear {
         GC_COUNT.store(0, Ordering::Release);
         assert!(GC_COUNT.load(Ordering::Acquire) == 0);
         let data = TestGcWrapper { data: 0 };
-        let cc: LinCowCell<TestGcWrapper<i32>, TestGcWrapperReadTxn<i32>, TestGcWrapperWriteTxn<i32>> = LinCowCell::new(data);
+        let cc: LinCowCell<
+            TestGcWrapper<i32>,
+            TestGcWrapperReadTxn<i32>,
+            TestGcWrapperWriteTxn<i32>,
+        > = LinCowCell::new(data);
 
         // Open a read A.
         let cc_rotxn_a = cc.read();
