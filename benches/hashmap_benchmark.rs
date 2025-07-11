@@ -20,6 +20,7 @@ extern crate rand;
 
 use concread::hashmap::*;
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use lock_api::RawMutex;
 use rand::{thread_rng, Rng};
 
 // ranges of counts for different benchmarks (MINs are inclusive, MAXes exclusive):
@@ -165,10 +166,10 @@ criterion_main!(insert, remove, search);
 
 // Utility functions:
 
-fn insert_vec<V: Clone + Sync + Send + 'static>(
-    map: &mut HashMap<u32, V>,
+fn insert_vec<V: Clone + Sync + Send + 'static, M: RawMutex + 'static>(
+    map: &mut HashMap<u32, V, M>,
     list: Vec<(u32, V)>,
-) -> HashMapWriteTxn<u32, V> {
+) -> HashMapWriteTxn<u32, V, M> {
     let mut write_txn = map.write();
     for (key, val) in list.into_iter() {
         write_txn.insert(key, val);
@@ -176,10 +177,10 @@ fn insert_vec<V: Clone + Sync + Send + 'static>(
     write_txn
 }
 
-fn remove_vec<'a, V: Clone + Sync + Send + 'static>(
-    map: &'a mut HashMap<u32, V>,
+fn remove_vec<'a, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>(
+    map: &'a mut HashMap<u32, V, M>,
     list: &Vec<u32>,
-) -> HashMapWriteTxn<'a, u32, V> {
+) -> HashMapWriteTxn<'a, u32, V, M> {
     let mut write_txn = map.write();
     for i in list.iter() {
         write_txn.remove(i);

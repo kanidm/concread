@@ -2,6 +2,7 @@
 //!
 //! See `CowCell` for more details.
 
+// We can use std here as the `asynch` feature requires the `std` feature
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};

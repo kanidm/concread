@@ -16,26 +16,32 @@ use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWrit
 
 include!("impl.rs");
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMap<K, V>
+impl<
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex,
+    > BptreeMap<K, V, M>
 {
     /// Initiate a read transaction for the tree, concurrent to any
     /// other readers or writers.
-    pub fn read(&self) -> BptreeMapReadTxn<'_, K, V> {
+    pub fn read(&self) -> BptreeMapReadTxn<'_, K, V, M> {
         let inner = self.inner.read();
         BptreeMapReadTxn { inner }
     }
 
     /// Initiate a write transaction for the tree, exclusive to this
     /// writer, and concurrently to all existing reads.
-    pub fn write(&self) -> BptreeMapWriteTxn<'_, K, V> {
+    pub fn write(&self) -> BptreeMapWriteTxn<'_, K, V, M> {
         let inner = self.inner.write();
         BptreeMapWriteTxn { inner }
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapWriteTxn<'_, K, V>
+impl<
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex,
+    > BptreeMapWriteTxn<'_, K, V, M>
 {
     /// Commit the changes from this write transaction. Readers after this point
     /// will be able to perceive these changes.
@@ -47,10 +53,11 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 }
 
 #[cfg(feature = "serde")]
-impl<K, V> Serialize for BptreeMapReadTxn<'_, K, V>
+impl<K, V, M> Serialize for BptreeMapReadTxn<'_, K, V, M>
 where
     K: Serialize + Clone + Ord + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
+    M: RawMutex + 'static,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -67,10 +74,11 @@ where
 }
 
 #[cfg(feature = "serde")]
-impl<K, V> Serialize for BptreeMap<K, V>
+impl<K, V, M> Serialize for BptreeMap<K, V, M>
 where
     K: Serialize + Clone + Ord + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
+    M: RawMutex + 'static,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -81,10 +89,11 @@ where
 }
 
 #[cfg(feature = "serde")]
-impl<'de, K, V> Deserialize<'de> for BptreeMap<K, V>
+impl<'de, K, V, M> Deserialize<'de> for BptreeMap<K, V, M>
 where
     K: Deserialize<'de> + Clone + Ord + Debug + Sync + Send + 'static,
     V: Deserialize<'de> + Clone + Sync + Send + 'static,
+    M: RawMutex + 'static,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -174,7 +183,7 @@ mod tests {
     fn test_bptree2_map_from_iter_1() {
         let ins: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
 
-        let map = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
+        let map: BptreeMap<usize, usize> = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
 
         {
             let w = map.write();
@@ -192,7 +201,7 @@ mod tests {
         let mut ins: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
 
-        let map = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
+        let map: BptreeMap<usize, usize> = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
 
         {
             let w = map.write();
@@ -208,7 +217,7 @@ mod tests {
 
     fn bptree_map_basic_concurrency(lower: usize, upper: usize) {
         // Create a map
-        let map = BptreeMap::new();
+        let map: BptreeMap<usize, usize> = BptreeMap::new();
 
         // add values
         {
@@ -273,7 +282,7 @@ mod tests {
         // Need to ensure that txns are dropped in order.
 
         // Add data, enough to cause a split. All data should be *2
-        let map = BptreeMap::new();
+        let map: BptreeMap<usize, usize> = BptreeMap::new();
         // add values
         {
             let mut w = map.write();
@@ -343,7 +352,8 @@ mod tests {
     fn test_bptree2_map_rangeiter_1() {
         let ins: Vec<usize> = (0..100).collect();
 
-        let map = BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
+        let map: BptreeMap<usize, usize, parking_lot::RawMutex> =
+            BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
 
         {
             let w = map.write();
@@ -359,7 +369,8 @@ mod tests {
 
     #[test]
     fn test_bptree2_map_rangeiter_2() {
-        let map = BptreeMap::from_iter([(3, ()), (4, ()), (0, ())]);
+        let map: BptreeMap<i32, (), parking_lot::RawMutex> =
+            BptreeMap::from_iter([(3, ()), (4, ()), (0, ())]);
 
         let r = map.read();
         assert!(r.range(1..=2).count() == 0);
@@ -367,7 +378,8 @@ mod tests {
 
     #[test]
     fn test_bptree2_map_rangeiter_3() {
-        let map = BptreeMap::from_iter([0, 1, 2, 3, 4, 5, 6, 8].map(|v| (v, ())));
+        let map: BptreeMap<i32, (), parking_lot::RawMutex> =
+            BptreeMap::from_iter([0, 1, 2, 3, 4, 5, 6, 8].map(|v| (v, ())));
 
         let r = map.read();
         assert!(r.range((Bound::Excluded(6), Bound::Included(7))).count() == 0);

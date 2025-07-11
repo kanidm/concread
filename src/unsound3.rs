@@ -13,7 +13,7 @@ enum RefOrInt<'a> {
     Int(u64),
 }
 
-#[cfg(feature = "unsoundness")]
+#[cfg(all(feature = "unsoundness", feature = "std"))]
 fn main() {
     use concread::arcache::ARCache;
     use std::cell::Cell;

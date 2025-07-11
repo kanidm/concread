@@ -1,11 +1,15 @@
 //! Iterators for the map.
 
+#[cfg(not(feature = "std"))]
+use alloc::collections::VecDeque;
+#[cfg(feature = "std")]
+use std::collections::VecDeque;
+
 // Iterators for the bptree
 use super::node::{Branch, Leaf, Meta, Node};
-use std::collections::VecDeque;
-use std::fmt::Debug;
-use std::hash::Hash;
-use std::marker::PhantomData;
+use core::fmt::Debug;
+use core::hash::Hash;
+use core::marker::PhantomData;
 
 pub(crate) struct LeafIter<'a, K, V>
 where
