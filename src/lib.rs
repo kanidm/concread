@@ -41,7 +41,7 @@
 #![allow(clippy::needless_lifetimes)]
 #![cfg_attr(feature = "simd_support", feature(portable_simd))]
 
-#[cfg(not(any(test, feature = "std")))]
+#[cfg(not(feature = "std"))]
 extern crate alloc;
 
 #[cfg(any(test, feature = "std"))]

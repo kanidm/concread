@@ -260,7 +260,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::CowCell;
+    use super::CowCellRaw;
+
+    type CowCell<T> = CowCellRaw<T, spin::Mutex<()>>;
 
     #[test]
     fn test_deref_mut() {
@@ -281,10 +283,10 @@ mod tests {
         let data: i64 = 0;
         let cc: CowCell<i64> = CowCell::new(data);
         /* Take a write txn */
-        let cc_wrtxn_a = cc.try_write();
+        let cc_wrtxn_a: Option<crate::cowcell::CowCellWriteTxn<'_, i64, spin::mutex::Mutex<()>>> = cc.try_write();
         assert!(cc_wrtxn_a.is_some());
         /* Because we already hold the writ, the second is guaranteed to fail */
-        let cc_wrtxn_a = cc.try_write();
+        let cc_wrtxn_a: Option<crate::cowcell::CowCellWriteTxn<'_, i64, spin::mutex::Mutex<()>>> = cc.try_write();
         assert!(cc_wrtxn_a.is_none());
     }
 
@@ -293,12 +295,12 @@ mod tests {
         let data: i64 = 0;
         let cc: CowCell<i64> = CowCell::new(data);
 
-        let cc_rotxn_a = cc.read();
+        let cc_rotxn_a: crate::cowcell::CowCellReadTxn<i64> = cc.read();
         assert_eq!(*cc_rotxn_a, 0);
 
         {
             /* Take a write txn */
-            let mut cc_wrtxn = cc.write();
+            let mut cc_wrtxn: crate::cowcell::CowCellWriteTxn<'_, i64, spin::mutex::Mutex<()>> = cc.write();
             /* Get the data ... */
             {
                 let mut_ptr = cc_wrtxn.get_mut();
