@@ -24,12 +24,12 @@ use self::stats::{ARCacheReadStat, ARCacheWriteStat};
 
 #[cfg(feature = "arcache-is-hashmap")]
 use crate::hashmap::{
-    HashMap as DataMap, HashMapReadTxn as DataMapReadTxn, HashMapWriteTxn as DataMapWriteTxn,
+    HashMapRaw as DataMap, HashMapReadTxn as DataMapReadTxn, HashMapWriteTxn as DataMapWriteTxn,
 };
 
 #[cfg(feature = "arcache-is-hashtrie")]
 use crate::hashtrie::{
-    HashTrie as DataMap, HashTrieReadTxn as DataMapReadTxn, HashTrieWriteTxn as DataMapWriteTxn,
+    HashTrieRaw as DataMap, HashTrieReadTxn as DataMapReadTxn, HashTrieWriteTxn as DataMapWriteTxn,
 };
 use crate::utils::{self, Monotonic};
 
@@ -246,18 +246,22 @@ where
     reader_quiesce: bool,
 }
 
+/// ARCache structure with default sychronisation primitives for write transaction locking.
+#[cfg(feature = "std")]
+pub type ARCache<K, V> = ARCacheRaw<K,V, monotonic_timer::MonotonicTimer, parking_lot::RawMutex, parking_lot::RawRwLock>;
+
 /// A concurrently readable adaptive replacement cache. Operations are performed on the
 /// cache via read and write operations.
-pub struct ARCache<
+pub struct ARCacheRaw<
     K,
     V,
-    M = monotonic_timer::MonotonicTimer,
-    RawMutexImpl = utils::DefaultRawMutex,
-    RawRwLockImpl = utils::DefaultRawRwLock,
+    MonotonicCounter,
+    RawMutexImpl,
+    RawRwLockImpl,
 > where
     K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Debug + Sync + Send + 'static,
-    M: Monotonic + 'static,
+    MonotonicCounter: Monotonic + 'static,
     RawMutexImpl: RawMutex + 'static,
     RawRwLockImpl: RawRwLock + 'static,
 {
@@ -266,13 +270,13 @@ pub struct ARCache<
     cache: DataMap<K, CacheItem<K, V>, RawMutexImpl>,
     // This is normally only ever taken in "read" mode, so it's effectively
     // an uncontended barrier.
-    shared: RwLock<RawRwLockImpl, ArcShared<K, V, M>>,
+    shared: RwLock<RawRwLockImpl, ArcShared<K, V, MonotonicCounter>>,
     // These are only taken during a quiesce
-    inner: Mutex<RawMutexImpl, ArcInner<K, V, M>>,
+    inner: Mutex<RawMutexImpl, ArcInner<K, V, MonotonicCounter>>,
     // stats: CowCell<CacheStats>,
     above_watermark: AtomicBool,
     look_back_limit: u64,
-    monotonic: M,
+    monotonic: MonotonicCounter,
 }
 
 unsafe impl<
@@ -281,7 +285,7 @@ unsafe impl<
         M: Monotonic + Send + Send + 'static,
         Mutex: RawMutex + Sync + Send + 'static,
         RwLock: RawRwLock + Sync + Send + 'static,
-    > Send for ARCache<K, V, M, Mutex, RwLock>
+    > Send for ARCacheRaw<K, V, M, Mutex, RwLock>
 {
 }
 unsafe impl<
@@ -290,7 +294,7 @@ unsafe impl<
         M: Monotonic + Send + 'static,
         Mutex: RawMutex + Sync + 'static,
         RwLock: RawRwLock + Sync + 'static,
-    > Sync for ARCache<K, V, M, Mutex, RwLock>
+    > Sync for ARCacheRaw<K, V, M, Mutex, RwLock>
 {
 }
 
@@ -340,7 +344,7 @@ where
     Mutex: RawMutex + 'static,
     RwLock: RawRwLock + 'static,
 {
-    caller: &'a ARCache<K, V, M, Mutex, RwLock>,
+    caller: &'a ARCacheRaw<K, V, M, Mutex, RwLock>,
     // ro_txn to cache
     cache: DataMapReadTxn<'a, K, CacheItem<K, V>, Mutex>,
     tlocal: Option<ReadCache<K, V>>,
@@ -385,7 +389,7 @@ where
     Mutex: RawMutex + 'static,
     RwLock: RawRwLock + 'static,
 {
-    caller: &'a ARCache<K, V, M, Mutex, RwLock>,
+    caller: &'a ARCacheRaw<K, V, M, Mutex, RwLock>,
     // wr_txn to cache
     cache: DataMapWriteTxn<'a, K, CacheItem<K, V>, Mutex>,
     // Cache of missed items (w_ dirty/clean)
@@ -576,7 +580,7 @@ where
     /// missing or incorrect, a None will be returned.
     pub fn build<K, V, RawMutexImpl: RawMutex, RawRwLockImpl: RawRwLock>(
         self,
-    ) -> Option<ARCache<K, V, M, RawMutexImpl, RawRwLockImpl>>
+    ) -> Option<ARCacheRaw<K, V, M, RawMutexImpl, RawRwLockImpl>>
     where
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
         V: Clone + Debug + Sync + Send + 'static,
@@ -643,7 +647,7 @@ where
             min_txid: 0,
         });
 
-        Some(ARCache {
+        Some(ARCacheRaw {
             cache: DataMap::new(),
             shared,
             inner,
@@ -661,7 +665,7 @@ impl<
         M: Monotonic + 'static,
         Mutex: RawMutex + 'static,
         RwLock: RawRwLock + 'static,
-    > ARCache<K, V, M, Mutex, RwLock>
+    > ARCacheRaw<K, V, M, Mutex, RwLock>
 {
     /// Use ARCacheBuilder instead
     #[deprecated(since = "0.2.20", note = "please use`ARCacheBuilder` instead")]

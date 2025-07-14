@@ -86,10 +86,10 @@ macro_rules! hash_key {
 }
 
 #[cfg(all(test, not(miri)))]
-thread_local!(static ALLOC_LIST: Mutex<crate::utils::DefaultRawMutex, BTreeSet<Ptr>> = const { Mutex::new(BTreeSet::new()) });
+thread_local!(static ALLOC_LIST: Mutex<parking_lot::RawMutex, BTreeSet<Ptr>> = const { Mutex::new(BTreeSet::new()) });
 
 #[cfg(all(test, not(miri)))]
-thread_local!(static WRITE_LIST: Mutex<crate::utils::DefaultRawMutex, BTreeSet<Ptr>> = const { Mutex::new(BTreeSet::new()) });
+thread_local!(static WRITE_LIST: Mutex<parking_lot::RawMutex, BTreeSet<Ptr>> = const { Mutex::new(BTreeSet::new()) });
 
 #[cfg(test)]
 fn assert_released() {
@@ -1055,7 +1055,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite
 }
 
 #[derive(Debug)]
-pub(crate) struct CursorRead<K, V, R = crate::utils::DefaultRawMutex>
+pub(crate) struct CursorRead<K, V, R>
 where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
@@ -1133,7 +1133,7 @@ mod tests {
         let sb: SuperBlock<u64, u64> = unsafe { SuperBlock::new() };
 
         let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<
-            CursorRead<u64, u64>,
+            CursorRead<u64, u64, parking_lot::RawMutex>,
             CursorWrite<u64, u64>,
         >>::create_writer(&sb);
 
@@ -1156,9 +1156,9 @@ mod tests {
     #[test]
     fn test_hashtrie_cursor_insert_max_depth() {
         let mut sb: SuperBlock<u64, u64> = unsafe { SuperBlock::new() };
-        let rdr: CursorRead<u64, u64> = sb.create_reader();
+        let rdr: CursorRead<u64, u64, parking_lot::RawMutex> = sb.create_reader();
         let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<
-            CursorRead<u64, u64>,
+            CursorRead<u64, u64, parking_lot::RawMutex>,
             CursorWrite<u64, u64>,
         >>::create_writer(&sb);
 
@@ -1195,9 +1195,9 @@ mod tests {
     #[test]
     fn test_hashtrie_cursor_insert_broad() {
         let mut sb: SuperBlock<u64, u64> = unsafe { SuperBlock::new() };
-        let rdr: CursorRead<u64, u64> = sb.create_reader();
+        let rdr: CursorRead<u64, u64, parking_lot::RawMutex> = sb.create_reader();
         let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<
-            CursorRead<u64, u64>,
+            CursorRead<u64, u64, parking_lot::RawMutex>,
             CursorWrite<u64, u64>,
         >>::create_writer(&sb);
 
@@ -1233,14 +1233,14 @@ mod tests {
     #[test]
     fn test_hashtrie_cursor_insert_multiple_txns() {
         let mut sb: SuperBlock<u64, u64> = unsafe { SuperBlock::new() };
-        let mut rdr: CursorRead<u64, u64> = sb.create_reader();
+        let mut rdr: CursorRead<u64, u64, parking_lot::RawMutex> = sb.create_reader();
 
         // Do thing
         assert!(rdr.len() == 0);
 
         for i in 0..(ABS_MAX_HEIGHT * ABS_MAX_HEIGHT) {
             let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<
-                CursorRead<u64, u64>,
+                CursorRead<u64, u64, parking_lot::RawMutex>,
                 CursorWrite<u64, u64>,
             >>::create_writer(&sb);
             assert!(wr.insert(i, i, i).is_none());
@@ -1249,7 +1249,7 @@ mod tests {
         }
 
         {
-            let rdr2: CursorRead<u64, u64> = sb.create_reader();
+            let rdr2: CursorRead<u64, u64, parking_lot::RawMutex> = sb.create_reader();
             assert!(rdr2.len() == (ABS_MAX_HEIGHT * ABS_MAX_HEIGHT) as usize);
             for i in 0..(ABS_MAX_HEIGHT * ABS_MAX_HEIGHT) {
                 assert!(rdr2.search(i, &i).is_some());
@@ -1258,7 +1258,7 @@ mod tests {
 
         for i in 0..(ABS_MAX_HEIGHT * ABS_MAX_HEIGHT) {
             let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<
-                CursorRead<u64, u64>,
+                CursorRead<u64, u64, parking_lot::RawMutex>,
                 CursorWrite<u64, u64>,
             >>::create_writer(&sb);
             assert!(wr.remove(i, &i).is_some());

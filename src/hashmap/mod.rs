@@ -34,7 +34,7 @@ use crate::utils::MapCollector;
 #[cfg(all(feature = "arcache", feature = "arcache-is-hashmap"))]
 use crate::internals::hashmap::cursor::Datum;
 
-use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
+use crate::internals::lincowcell::{LinCowCellRaw, LinCowCellReadTxn, LinCowCellWriteTxn};
 
 include!("impl.rs");
 
@@ -42,13 +42,13 @@ impl<
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
         M: RawMutex + 'static,
-    > HashMap<K, V, M>
+    > HashMapRaw<K, V, M>
 {
     /// Construct a new concurrent hashmap
     pub fn new() -> Self {
         // I acknowledge I understand what is required to make this safe.
-        HashMap {
-            inner: LinCowCell::new(unsafe { SuperBlock::new() }),
+        HashMapRaw {
+            inner: LinCowCellRaw::new(unsafe { SuperBlock::new() }),
         }
     }
 

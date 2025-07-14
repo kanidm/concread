@@ -12,7 +12,7 @@ use serde::{
 #[cfg(feature = "serde")]
 use crate::utils::MapCollector;
 
-use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
+use crate::internals::lincowcell::{LinCowCellRaw, LinCowCellReadTxn, LinCowCellWriteTxn};
 
 include!("impl.rs");
 
@@ -20,7 +20,7 @@ impl<
         K: Clone + Ord + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
         M: RawMutex,
-    > BptreeMap<K, V, M>
+    > BptreeMapRaw<K, V, M>
 {
     /// Initiate a read transaction for the tree, concurrent to any
     /// other readers or writers.
@@ -352,7 +352,7 @@ mod tests {
     fn test_bptree2_map_rangeiter_1() {
         let ins: Vec<usize> = (0..100).collect();
 
-        let map: BptreeMap<usize, usize, parking_lot::RawMutex> =
+        let map: BptreeMap<usize, usize> =
             BptreeMap::from_iter(ins.into_iter().map(|v| (v, v)));
 
         {
@@ -369,7 +369,7 @@ mod tests {
 
     #[test]
     fn test_bptree2_map_rangeiter_2() {
-        let map: BptreeMap<i32, (), parking_lot::RawMutex> =
+        let map: BptreeMap<i32, ()> =
             BptreeMap::from_iter([(3, ()), (4, ()), (0, ())]);
 
         let r = map.read();
@@ -378,7 +378,7 @@ mod tests {
 
     #[test]
     fn test_bptree2_map_rangeiter_3() {
-        let map: BptreeMap<i32, (), parking_lot::RawMutex> =
+        let map: BptreeMap<i32, ()> =
             BptreeMap::from_iter([0, 1, 2, 3, 4, 5, 6, 8].map(|v| (v, ())));
 
         let r = map.read();

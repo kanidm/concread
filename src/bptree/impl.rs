@@ -10,6 +10,11 @@ use std::fmt::Debug;
 use std::iter::FromIterator;
 use std::ops::RangeBounds;
 
+
+/// B+Tree structure with a default mutex type for write transaction locking.
+#[cfg(feature = "std")]
+pub type BptreeMap<K, V> =  BptreeMapRaw<K, V, parking_lot::RawMutex>;
+
 /// A concurrently readable map based on a modified B+Tree structure.
 ///
 /// This structure can be used in locations where you would otherwise us
@@ -31,21 +36,21 @@ use std::ops::RangeBounds;
 ///
 /// Transactions can be rolled-back (aborted) without penalty by dropping
 /// the `BptreeMapWriteTxn` without calling `commit()`.
-pub struct BptreeMap<K, V, M = crate::utils::DefaultRawMutex>
+pub struct BptreeMapRaw<K, V, M>
 where
     K: Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
     M: RawMutex + 'static
 {
-    inner: LinCowCell<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
+    inner: LinCowCellRaw<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
 
 unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, R: RawMutex + Send + 'static> Send
-    for BptreeMap<K, V, R>
+    for BptreeMapRaw<K, V, R>
 {
 }
 unsafe impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, R: RawMutex + Send + Sync + 'static> Sync
-    for BptreeMap<K, V, R>
+    for BptreeMapRaw<K, V, R>
 {
 }
 
@@ -112,7 +117,7 @@ where
 }
 
 impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, R: RawMutex> Default
-    for BptreeMap<K, V, R>
+    for BptreeMapRaw<K, V, R>
 {
     fn default() -> Self {
         Self::new()
@@ -120,13 +125,13 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 }
 
 impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, R: RawMutex>
-    BptreeMap<K, V, R>
+    BptreeMapRaw<K, V, R>
 {
     /// Construct a new concurrent tree
     pub fn new() -> Self {
         // I acknowledge I understand what is required to make this safe.
-        BptreeMap {
-            inner: LinCowCell::new(unsafe { SuperBlock::new() }),
+        BptreeMapRaw {
+            inner: LinCowCellRaw::new(unsafe { SuperBlock::new() }),
         }
     }
 
@@ -140,7 +145,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 }
 
 impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex>
-    FromIterator<(K, V)> for BptreeMap<K, V, M>
+    FromIterator<(K, V)> for BptreeMapRaw<K, V, M>
 {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let mut new_sblock = unsafe { SuperBlock::new() };
@@ -154,8 +159,8 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 
         let _ = new_sblock.pre_commit(cursor, &prev);
 
-        BptreeMap {
-            inner: LinCowCell::new(new_sblock),
+        BptreeMapRaw {
+            inner: LinCowCellRaw::new(new_sblock),
         }
     }
 }

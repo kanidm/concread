@@ -11,6 +11,10 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::iter::FromIterator;
 
+/// B+Tree-based map with a default mutex type provided.
+#[cfg(feature = "std")]
+pub type HashMap<K, V> = HashMapRaw<K, V, parking_lot::RawMutex>;
+
 /// A concurrently readable map based on a modified B+Tree structured with fast
 /// parallel hashed key lookup.
 ///
@@ -29,27 +33,27 @@ use std::iter::FromIterator;
 ///
 /// Transactions can be rolled-back (aborted) without penalty by dropping
 /// the `HashMapWriteTxn` without calling `commit()`.
-pub struct HashMap<K, V, M = crate::utils::DefaultRawMutex>
+pub struct HashMapRaw<K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
     M: RawMutex + 'static,
 {
-    inner: LinCowCell<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
+    inner: LinCowCellRaw<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
 
 unsafe impl<
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
         M: RawMutex + Send + 'static,
-    > Send for HashMap<K, V, M>
+    > Send for HashMapRaw<K, V, M>
 {
 }
 unsafe impl<
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
         M: RawMutex + Send + Sync + 'static,
-    > Sync for HashMap<K, V, M>
+    > Sync for HashMapRaw<K, V, M>
 {
 }
 
@@ -110,7 +114,7 @@ impl<
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
         M: RawMutex + 'static,
-    > Default for HashMap<K, V, M>
+    > Default for HashMapRaw<K, V, M>
 {
     fn default() -> Self {
         Self::new()
@@ -121,7 +125,7 @@ impl<
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
         M: RawMutex + 'static,
-    > FromIterator<(K, V)> for HashMap<K, V, M>
+    > FromIterator<(K, V)> for HashMapRaw<K, V, M>
 {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let mut new_sblock = unsafe { SuperBlock::new() };
@@ -134,8 +138,8 @@ impl<
 
         let _ = new_sblock.pre_commit(cursor, &prev);
 
-        HashMap {
-            inner: LinCowCell::new(new_sblock),
+        HashMapRaw {
+            inner: LinCowCellRaw::new(new_sblock),
         }
     }
 }

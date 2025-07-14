@@ -11,7 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 // use uuid::Uuid;
 
-use concread::arcache::{ARCache, ARCacheBuilder};
+use concread::arcache::{ARCacheRaw, ARCacheBuilder};
 use concread::threadcache::ThreadLocal;
 use criterion::measurement::{Measurement, ValueFormatter};
 
@@ -261,7 +261,7 @@ where
 }
 
 fn multi_thread_worker<K, V>(
-    arc: Arc<ARCache<K, V>>,
+    arc: Arc<ARCacheRaw<K, V>>,
     backing_set: Arc<HashMap<K, V>>,
     backing_set_delay: Option<Duration>,
     access_pattern: AccessPattern<K>,
@@ -311,7 +311,7 @@ where
         csize = 1;
     }
 
-    let arc: Arc<ARCache<K, V>> = Arc::new(
+    let arc: Arc<ARCacheRaw<K, V>> = Arc::new(
         ARCacheBuilder::new()
             .set_size(csize, 0)
             .set_watermark(0)
@@ -420,7 +420,7 @@ where
         csize = 1;
     }
 
-    let arc: ARCache<K, V> = ARCacheBuilder::new()
+    let arc: ARCacheRaw<K, V> = ARCacheBuilder::new()
         .set_size(csize, 0)
         .set_watermark(0)
         .set_reader_quiesce(false)

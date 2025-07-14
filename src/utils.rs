@@ -131,18 +131,3 @@ pub unsafe trait Monotonic {
     fn current(&self) -> Self::Output;
     fn next(&self) -> Self::Output;
 }
-
-// provide default locking types
-#[cfg(feature = "std")]
-#[allow(unused)]
-pub type DefaultRawMutex = parking_lot::RawMutex;
-/// Provide a defaulkt raw mutex implementation for no_std environments via spinning
-#[cfg(not(feature = "std"))]
-#[allow(unused)]
-pub type DefaultRawMutex = spin::mutex::SpinMutex<()>;
-
-#[cfg(feature = "std")]
-pub type DefaultRawRwLock = parking_lot::RawRwLock;
-#[cfg(not(feature = "std"))]
-/// Provide a defaulkt raw mutex implementation for no_std environments via spinning
-pub type DefaultRawRwLock = spin::RwLock<()>;

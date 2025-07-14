@@ -39,7 +39,7 @@ use crate::internals::hashtrie::cursor::Datum;
 #[cfg(feature = "serde")]
 use crate::utils::MapCollector;
 
-use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
+use crate::internals::lincowcell::{LinCowCellRaw, LinCowCellReadTxn, LinCowCellWriteTxn};
 
 include!("impl.rs");
 
@@ -47,13 +47,13 @@ impl<
         K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
         M: RawMutex + 'static,
-    > HashTrie<K, V, M>
+    > HashTrieRaw<K, V, M>
 {
     /// Construct a new concurrent hashtrie
     pub fn new() -> Self {
         // I acknowledge I understand what is required to make this safe.
-        HashTrie {
-            inner: LinCowCell::<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>::new(
+        HashTrieRaw {
+            inner: LinCowCellRaw::<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>::new(
                 unsafe { SuperBlock::new() },
             ),
         }

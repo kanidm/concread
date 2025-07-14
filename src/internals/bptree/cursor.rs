@@ -136,7 +136,7 @@ impl<K: Clone + Ord + Debug, V: Clone> SuperBlock<K, V> {
 }
 
 #[derive(Debug)]
-pub(crate) struct CursorRead<K, V, R = crate::utils::DefaultRawMutex>
+pub(crate) struct CursorRead<K, V, R>
 where
     K: Ord + Clone + Debug,
     V: Clone,
@@ -1350,7 +1350,7 @@ mod tests {
         let node = create_leaf_node(0);
         let sb = SuperBlock::new_test(1, node);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -1394,7 +1394,7 @@ mod tests {
         let node = create_leaf_node_full(10);
         let sb = SuperBlock::new_test(1, node);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         let prev_txid = wcurs.root_txid();
@@ -1419,7 +1419,7 @@ mod tests {
         let node = create_leaf_node(0);
         let sb = SuperBlock::new_test(1, node);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -1450,7 +1450,7 @@ mod tests {
         let root = Node::new_branch(0, lnode, rnode);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -1483,7 +1483,7 @@ mod tests {
         let root = Node::new_branch(0, lnode, rnode);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -1514,7 +1514,7 @@ mod tests {
         let root = Node::new_branch(0, lnode, rnode);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -1551,7 +1551,7 @@ mod tests {
         let root = Node::new_branch(0, lnode, rnode);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -1585,7 +1585,7 @@ mod tests {
         let root = Node::new_branch(0, lnode, rnode);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -1623,7 +1623,7 @@ mod tests {
         let root = Node::new_branch(0, lnode, rnode);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -1651,7 +1651,7 @@ mod tests {
         let node = create_leaf_node(0);
         let sb = SuperBlock::new_test(1, node);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -1675,7 +1675,7 @@ mod tests {
         let node = create_leaf_node(0);
         let sb = SuperBlock::new_test(1, node);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -1703,7 +1703,7 @@ mod tests {
         let node = create_leaf_node(0);
         let sb = SuperBlock::new_test(1, node);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -1726,11 +1726,11 @@ mod tests {
         // Insert ascending - we want to ensure the tree is a few levels deep
         // so we do this to a reasonable number.
         let mut sb = unsafe { SuperBlock::new() };
-        let mut rdr: CursorRead<usize, usize> = sb.create_reader();
+        let mut rdr: CursorRead<usize, usize, parking_lot::RawMutex> = sb.create_reader();
 
         for v in 1..(L_CAPACITY << 4) {
             let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-                CursorRead<usize, usize>,
+                CursorRead<usize, usize, parking_lot::RawMutex>,
                 CursorWrite<usize, usize>,
             >>::create_writer(&sb);
             // println!("ITER v {}", v);
@@ -1751,11 +1751,11 @@ mod tests {
     fn test_bptree2_cursor_insert_stress_5() {
         // Insert descending
         let mut sb = unsafe { SuperBlock::new() };
-        let mut rdr: CursorRead<usize, usize> = sb.create_reader();
+        let mut rdr: CursorRead<usize, usize, parking_lot::RawMutex> = sb.create_reader();
 
         for v in (1..(L_CAPACITY << 4)).rev() {
             let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-                CursorRead<usize, usize>,
+                CursorRead<usize, usize, parking_lot::RawMutex>,
                 CursorWrite<usize, usize>,
             >>::create_writer(&sb);
             // println!("ITER v {}", v);
@@ -1779,11 +1779,11 @@ mod tests {
         ins.shuffle(&mut rng);
 
         let mut sb = unsafe { SuperBlock::new() };
-        let mut rdr: CursorRead<usize, usize> = sb.create_reader();
+        let mut rdr: CursorRead<usize, usize, parking_lot::RawMutex> = sb.create_reader();
 
         for v in ins.into_iter() {
             let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-                CursorRead<usize, usize>,
+                CursorRead<usize, usize, parking_lot::RawMutex>,
                 CursorWrite<usize, usize>,
             >>::create_writer(&sb);
             let r = wcurs.insert(v, v);
@@ -1803,7 +1803,7 @@ mod tests {
         let node = create_leaf_node(0);
         let sb = SuperBlock::new_test(1, node);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -1830,7 +1830,7 @@ mod tests {
         let node = create_leaf_node(0);
         let sb = SuperBlock::new_test(1, node);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -1853,7 +1853,7 @@ mod tests {
         let lnode = create_leaf_node_full(0);
         let sb = SuperBlock::new_test(1, lnode);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         // println!("{:?}", wcurs);
@@ -1879,7 +1879,7 @@ mod tests {
         let node = create_leaf_node(0);
         let sb = SuperBlock::new_test(1, node);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -1908,7 +1908,7 @@ mod tests {
         unsafe { (*root).add_node(rnode) };
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         // println!("{:?}", wcurs);
@@ -1938,7 +1938,7 @@ mod tests {
         unsafe { (*root).add_node(znode) };
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -1967,7 +1967,7 @@ mod tests {
         unsafe { (*root).add_node(rnode) };
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -2000,7 +2000,7 @@ mod tests {
         unsafe { (*root).add_node(rnode) };
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -2033,7 +2033,7 @@ mod tests {
         unsafe { (*root).add_node(znode) };
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -2075,7 +2075,7 @@ mod tests {
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -2116,7 +2116,7 @@ mod tests {
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -2156,7 +2156,7 @@ mod tests {
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -2196,7 +2196,7 @@ mod tests {
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -2236,7 +2236,7 @@ mod tests {
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -2280,7 +2280,7 @@ mod tests {
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -2323,7 +2323,7 @@ mod tests {
         // let count = BV_CAPACITY + 2;
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -2366,7 +2366,7 @@ mod tests {
         let root = Node::new_branch(0, lbranch as *mut _, rbranch as *mut _);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -2393,7 +2393,7 @@ mod tests {
         let root = Node::new_branch(0, lnode, rnode);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -2414,7 +2414,7 @@ mod tests {
         let root = Node::new_branch(0, lnode, rnode);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         assert!(wcurs.verify());
@@ -2427,7 +2427,7 @@ mod tests {
         assert_released();
     }
 
-    fn tree_create_rand() -> (SuperBlock<usize, usize>, CursorRead<usize, usize>) {
+    fn tree_create_rand() -> (SuperBlock<usize, usize>, CursorRead<usize, usize, parking_lot::RawMutex>) {
         let mut rng = rand::rng();
         let mut ins: Vec<usize> = (1..(L_CAPACITY << 4)).collect();
         ins.shuffle(&mut rng);
@@ -2435,7 +2435,7 @@ mod tests {
         let mut sb = unsafe { SuperBlock::new() };
         let rdr = sb.create_reader();
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -2454,7 +2454,7 @@ mod tests {
         // so we do this to a reasonable number.
         let (mut sb, rdr) = tree_create_rand();
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -2478,7 +2478,7 @@ mod tests {
         // Insert descending
         let (mut sb, rdr) = tree_create_rand();
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -2504,7 +2504,7 @@ mod tests {
 
         let (mut sb, rdr) = tree_create_rand();
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -2529,7 +2529,7 @@ mod tests {
 
         for v in 1..(L_CAPACITY << 4) {
             let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-                CursorRead<usize, usize>,
+                CursorRead<usize, usize, parking_lot::RawMutex>,
                 CursorWrite<usize, usize>,
             >>::create_writer(&sb);
             // println!("ITER v {}", v);
@@ -2550,7 +2550,7 @@ mod tests {
 
         for v in (1..(L_CAPACITY << 4)).rev() {
             let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-                CursorRead<usize, usize>,
+                CursorRead<usize, usize, parking_lot::RawMutex>,
                 CursorWrite<usize, usize>,
             >>::create_writer(&sb);
             // println!("ITER v {}", v);
@@ -2575,7 +2575,7 @@ mod tests {
 
         for v in ins.into_iter() {
             let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-                CursorRead<usize, usize>,
+                CursorRead<usize, usize, parking_lot::RawMutex>,
                 CursorWrite<usize, usize>,
             >>::create_writer(&sb);
             let r = wcurs.remove(&v);
@@ -2680,7 +2680,7 @@ mod tests {
         let node = create_leaf_node(0);
         let sb = SuperBlock::new_test(1, node);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -2701,7 +2701,7 @@ mod tests {
         let node = create_leaf_node_full(10);
         let sb = SuperBlock::new_test(1, node);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -2722,7 +2722,7 @@ mod tests {
         let node = create_leaf_node_full(10);
         let sb = SuperBlock::new_test(1, node);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 
@@ -2744,7 +2744,7 @@ mod tests {
 
         let sb = SuperBlock::new_test(1, tree);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         // 0 is min, and not present, will cause no change.
@@ -2778,7 +2778,7 @@ mod tests {
 
         let sb = SuperBlock::new_test(1, tree);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
         // 0 is min, and not present, will cause no change.
@@ -2837,7 +2837,7 @@ mod tests {
             let node: *mut Leaf<isize, isize> = Node::new_leaf(0) as *mut _;
             let sb = SuperBlock::new_test(1, node as *mut Node<isize, isize>);
             let mut wcurs = <SuperBlock<isize, isize> as LinCowCellCapable<
-                CursorRead<isize, isize>,
+                CursorRead<isize, isize, parking_lot::RawMutex>,
                 CursorWrite<isize, isize>,
             >>::create_writer(&sb);
             wcurs.extend(data.iter().map(|v| (*v, *v)));
@@ -2863,7 +2863,7 @@ mod tests {
         let node: *mut Leaf<isize, isize> = Node::new_leaf(0) as *mut _;
         let sb = SuperBlock::new_test(1, node as *mut Node<isize, isize>);
         let mut wcurs = <SuperBlock<isize, isize> as LinCowCellCapable<
-            CursorRead<isize, isize>,
+            CursorRead<isize, isize, parking_lot::RawMutex>,
             CursorWrite<isize, isize>,
         >>::create_writer(&sb);
 

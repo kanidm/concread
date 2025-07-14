@@ -56,7 +56,7 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 extern crate smallvec;
 
 pub mod cowcell;
-pub use cowcell::CowCell;
+pub use cowcell::CowCellRaw;
 
 #[cfg(feature = "ebr")]
 pub mod ebrcell;

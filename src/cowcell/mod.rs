@@ -21,7 +21,11 @@ use ::alloc::sync::Arc;
 #[cfg(feature = "std")]
 use std::sync::Arc;
 
-/// A conncurrently readable cell.
+/// CowCell with a default lock type provided.
+#[cfg(feature = "std")]
+pub type CowCell<T> = CowCellRaw<T, parking_lot::RawMutex>;
+
+/// A concurrently readable cell.
 ///
 /// This structure behaves in a similar manner to a `RwLock<T>`. However unlike
 /// a `RwLock`, writes and parallel reads can be performed at the same time. This
@@ -63,12 +67,12 @@ use std::sync::Arc;
 /// assert_eq!(*new_read_txn, 1);
 /// ```
 #[derive(Debug)]
-pub struct CowCell<T, R: RawMutex = crate::utils::DefaultRawMutex> {
+pub struct CowCellRaw<T, R: RawMutex> {
     write: Mutex<R, ()>,
     active: Mutex<R, Arc<T>>,
 }
 
-impl<T: Default, R: RawMutex> Default for CowCell<T, R> {
+impl<T: Default, R: RawMutex> Default for CowCellRaw<T, R> {
     fn default() -> Self {
         Self {
             write: Mutex::new(()),
@@ -91,7 +95,7 @@ pub struct CowCellWriteTxn<'a, T, R: RawMutex> {
     work: Option<T>,
     read: Arc<T>,
     // This way we know who to contact for updating our data ....
-    caller: &'a CowCell<T, R>,
+    caller: &'a CowCellRaw<T, R>,
     _guard: MutexGuard<'a, R, ()>,
 }
 
@@ -108,7 +112,7 @@ impl<T> Clone for CowCellReadTxn<T> {
     }
 }
 
-impl<T, R> CowCell<T, R>
+impl<T, R> CowCellRaw<T, R>
 where
     T: Clone,
     R: RawMutex,
@@ -116,7 +120,7 @@ where
     /// Create a new `CowCell` for storing type `T`. `T` must implement `Clone`
     /// to enable clone-on-write.
     pub fn new(data: T) -> Self {
-        CowCell {
+        CowCellRaw {
             write: Mutex::new(()),
             active: Mutex::new(Arc::new(data)),
         }

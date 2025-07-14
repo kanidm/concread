@@ -9,7 +9,7 @@ use serde::{
 #[cfg(feature = "serde")]
 use crate::utils::MapCollector;
 
-use crate::internals::lincowcell_async::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
+use crate::internals::lincowcell_async::{LinCowCellRaw, LinCowCellReadTxn, LinCowCellWriteTxn};
 
 include!("impl.rs");
 
@@ -17,7 +17,7 @@ impl<
         K: Clone + Ord + Debug + Sync + Send + 'static,
         V: Clone + Sync + Send + 'static,
         R: RawMutex + 'static,
-    > BptreeMap<K, V, R>
+    > BptreeMapRaw<K, V, R>
 {
     /// Initiate a read transaction for the tree, concurrent to any
     /// other readers or writers.
@@ -70,7 +70,7 @@ where
 }
 
 #[cfg(feature = "serde")]
-impl<K, V> Serialize for BptreeMap<K, V>
+impl<K, V> Serialize for BptreeMapRaw<K, V>
 where
     K: Serialize + Clone + Ord + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
@@ -84,7 +84,7 @@ where
 }
 
 #[cfg(feature = "serde")]
-impl<'de, K, V> Deserialize<'de> for BptreeMap<K, V>
+impl<'de, K, V> Deserialize<'de> for BptreeMapRaw<K, V>
 where
     K: Deserialize<'de> + Clone + Ord + Debug + Sync + Send + 'static,
     V: Deserialize<'de> + Clone + Sync + Send + 'static,

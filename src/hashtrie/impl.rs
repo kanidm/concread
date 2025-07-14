@@ -11,6 +11,10 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::iter::FromIterator;
 
+/// HashTrie with a default lock type provided.
+#[cfg(feature = "std")]
+pub type HashTrie<K, V> = HashTrieRaw<K, V, parking_lot::RawMutex>;
+
 /// A concurrently readable map based on a modified Trie.
 ///
 ///
@@ -27,21 +31,21 @@ use std::iter::FromIterator;
 ///
 /// Transactions can be rolled-back (aborted) without penalty by dropping
 /// the `HashTrieWriteTxn` without calling `commit()`.
-pub struct HashTrie<K, V, M = crate::utils::DefaultRawMutex>
+pub struct HashTrieRaw<K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
     M: RawMutex + 'static
 {
-    inner: LinCowCell<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
+    inner: LinCowCellRaw<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
 
 unsafe impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + Send + 'static>
-    Send for HashTrie<K, V, M>
+    Send for HashTrieRaw<K, V, M>
 {
 }
 unsafe impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + Send + Sync + 'static>
-    Sync for HashTrie<K, V, M>
+    Sync for HashTrieRaw<K, V, M>
 {
 }
 
@@ -99,7 +103,7 @@ where
 }
 
 impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static> Default
-    for HashTrie<K, V, M>
+    for HashTrieRaw<K, V, M>
 {
     fn default() -> Self {
         Self::new()
@@ -107,7 +111,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 }
 
 impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
-    FromIterator<(K, V)> for HashTrie<K, V, M>
+    FromIterator<(K, V)> for HashTrieRaw<K, V, M>
 {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let mut new_sblock = unsafe { SuperBlock::new() };
@@ -120,8 +124,8 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 
         let _ = new_sblock.pre_commit(cursor, &prev);
 
-        HashTrie {
-            inner: LinCowCell::new(new_sblock),
+        HashTrieRaw {
+            inner: LinCowCellRaw::new(new_sblock),
         }
     }
 }

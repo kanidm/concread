@@ -105,7 +105,7 @@ mod tests {
 
         let sb = SuperBlock::new_test(1, node as *mut Node<usize, usize>);
         let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
-            CursorRead<usize, usize>,
+            CursorRead<usize, usize, parking_lot::RawMutex>,
             CursorWrite<usize, usize>,
         >>::create_writer(&sb);
 

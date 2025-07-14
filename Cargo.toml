@@ -34,7 +34,7 @@ ebr = ["std"]
 maps = ["dep:crossbeam-utils", "smallvec"]
 tcache = []
 std = ["ahash/std", "ahash/runtime-rng", "crossbeam-epoch/std", "crossbeam-queue/std", "crossbeam-utils/std",  "tracing/std", "dep:parking_lot", "smallvec/write"]
-no_std = ["crossbeam-epoch/alloc", "crossbeam-queue/alloc", "serde/alloc", "dep:spin", "ahash"]
+no_std = ["crossbeam-epoch/alloc", "crossbeam-queue/alloc", "serde/alloc", "ahash"]
 
 
 # Internal features for tweaking some align/perf behaviours.
@@ -62,7 +62,6 @@ tracing = {version = "0.1", default-features = false}
 lock_api = "0.4"
 parking_lot = {version = "0.12.3", optional = true }
 hashbrown = {version = "0.15.2", default-features = false}
-spin = {version = "0.10.0", optional = true, default-features = false, features = ["lock_api", "spin_mutex", "rwlock"]}
 cfg-if = "1.0.0"
 
 [dev-dependencies]
@@ -78,6 +77,7 @@ function_name = "0.3"
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "macros"] }
 proptest = "1.0.0"
+spin = {version = "0.10.0", default-features = false, features = ["lock_api", "spin_mutex", "rwlock"]}
 
 [[bench]]
 name = "hashmap_benchmark"

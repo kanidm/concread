@@ -67,6 +67,11 @@ use core::ops::DerefMut;
 use lock_api::RawMutex;
 use lock_api::{Mutex, MutexGuard};
 
+
+/// Linear Copy-on-write cell with default Mutex type provided
+#[cfg(feature = "std")]
+pub type LinCowCell<T, R, U> = LinCowCellRaw<T, R, U, parking_lot::RawMutex>;
+
 /// Do not implement this. You don't need this negativity in your life.
 pub trait LinCowCellCapable<R, U> {
     /// Create the first reader snapshot for a new instance.
@@ -82,13 +87,13 @@ pub trait LinCowCellCapable<R, U> {
 }
 
 /// A concurrently readable cell with linearised drop behaviour.
-pub struct LinCowCell<T, R, U, M: RawMutex = crate::utils::DefaultRawMutex> {
+pub struct LinCowCellRaw<T, R, U, M: RawMutex> {
     updater: PhantomData<U>,
     write: Mutex<M, T>,
     active: Mutex<M, Arc<LinCowCellInner<R, M>>>,
 }
 
-impl<T: Debug, R: Debug, U, M: RawMutex> Debug for LinCowCell<T, R, U, M> {
+impl<T: Debug, R: Debug, U, M: RawMutex> Debug for LinCowCellRaw<T, R, U, M> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut f = f.debug_struct("LinCowCell");
         match self.write.try_lock() {
@@ -188,7 +193,7 @@ impl<R, M: RawMutex> Drop for LinCowCellInner<R, M> {
 /// A read txn over a linear cell.
 pub struct LinCowCellReadTxn<'a, T, R, U, M: RawMutex> {
     // We must outlive the root
-    _caller: &'a LinCowCell<T, R, U, M>,
+    _caller: &'a LinCowCellRaw<T, R, U, M>,
     // We pin the current version.
     work: Arc<LinCowCellInner<R, M>>,
 }
@@ -204,7 +209,7 @@ impl<T: Debug, R: Debug, U, M: RawMutex> Debug for LinCowCellReadTxn<'_, T, R, U
 /// A write txn over a linear cell.
 pub struct LinCowCellWriteTxn<'a, T, R, U, M: RawMutex> {
     // This way we know who to contact for updating our data ....
-    caller: &'a LinCowCell<T, R, U, M>,
+    caller: &'a LinCowCellRaw<T, R, U, M>,
     guard: MutexGuard<'a, M, T>,
     work: U,
 }
@@ -219,7 +224,7 @@ impl<T: Debug, R: Debug, U: Debug, M: RawMutex> Debug for LinCowCellWriteTxn<'_,
     }
 }
 
-impl<T, R, U, M> LinCowCell<T, R, U, M>
+impl<T, R, U, M> LinCowCellRaw<T, R, U, M>
 where
     T: LinCowCellCapable<R, U>,
     M: RawMutex,
@@ -227,7 +232,7 @@ where
     /// Create a new linear 🐄 cell.
     pub fn new(data: T) -> Self {
         let r = data.create_reader();
-        LinCowCell {
+        LinCowCellRaw {
             updater: PhantomData,
             write: Mutex::new(data),
             active: Mutex::new(Arc::new(LinCowCellInner::new(r))),

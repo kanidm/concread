@@ -1,5 +1,5 @@
 use crate::internals::bptree::cursor::{CursorRead, CursorWrite, SuperBlock};
-use crate::internals::lincowcell::{LinCowCell, LinCowCellCapable};
+use crate::internals::lincowcell::{LinCowCellRaw, LinCowCellCapable};
 
 struct TestStruct {
     bptree_map_a: SuperBlock<u32, u32>,
@@ -62,8 +62,8 @@ impl LinCowCellCapable<TestStructRead, TestStructWrite> for TestStruct {
 
 #[test]
 fn test_lc_basic() {
-    let lcc: LinCowCell<TestStruct, TestStructRead, TestStructWrite, parking_lot::RawMutex> =
-        LinCowCell::new(TestStruct {
+    let lcc: LinCowCellRaw<TestStruct, TestStructRead, TestStructWrite, parking_lot::RawMutex> =
+        LinCowCellRaw::new(TestStruct {
             bptree_map_a: unsafe { SuperBlock::new() },
             bptree_map_b: unsafe { SuperBlock::new() },
         });
