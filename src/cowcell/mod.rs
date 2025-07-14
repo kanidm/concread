@@ -16,7 +16,7 @@ use core::ops::{Deref, DerefMut};
 use lock_api::{Mutex, MutexGuard, RawMutex};
 
 #[cfg(not(feature = "std"))]
-use ::alloc::sync::Arc;
+use alloc::sync::Arc;
 
 #[cfg(feature = "std")]
 use std::sync::Arc;
