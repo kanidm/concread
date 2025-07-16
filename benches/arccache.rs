@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use function_name::named;
 use rand::distributions::uniform::SampleUniform;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -54,8 +54,8 @@ where
     fn next(&self) -> T {
         match self {
             AccessPattern::Random(min, max) => {
-                let mut rng = thread_rng();
-                rng.gen_range(min.clone()..max.clone())
+                let mut rng = rng();
+                rng.random_range(min.clone()..max.clone())
             }
         }
     }

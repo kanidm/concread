@@ -389,7 +389,7 @@ mod tests {
     /*
     #[test]
     fn test_bptree2_map_write_compact() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let insa: Vec<usize> = (0..(L_CAPACITY << 4)).collect();
 
         let map = BptreeMap::from_iter(insa.into_iter().map(|v| (v, v)));
@@ -445,7 +445,7 @@ mod tests {
                 .map(|_| {
                     scope.spawn(move || {
                         println!("Started reader ...");
-                        let mut rng = rand::thread_rng();
+                        let mut rng = rand::rng();
                         let mut proceed = true;
                         while proceed {
                             let m_read = mref.read();
@@ -453,7 +453,7 @@ mod tests {
                             // Get a random number.
                             // Add 10_000 * random
                             // Remove 10_000 * random
-                            let v1 = rng.gen_range(1, 18) * 10_000;
+                            let v1 = rng.random_range(1, 18) * 10_000;
                             let r1 = v1 + 10_000;
                             for i in v1..r1 {
                                 m_read.get(&i);
@@ -470,7 +470,7 @@ mod tests {
                 .map(|_| {
                     scope.spawn(move || {
                         println!("Started writer ...");
-                        let mut rng = rand::thread_rng();
+                        let mut rng = rand::rng();
                         let mut proceed = true;
                         while proceed {
                             let mut m_write = mref.write();
@@ -478,9 +478,9 @@ mod tests {
                             // Get a random number.
                             // Add 10_000 * random
                             // Remove 10_000 * random
-                            let v1 = rng.gen_range(1, 18) * 10_000;
+                            let v1 = rng.random_range(1, 18) * 10_000;
                             let r1 = v1 + 10_000;
-                            let v2 = rng.gen_range(1, 19) * 10_000;
+                            let v2 = rng.random_range(1, 19) * 10_000;
                             let r2 = v2 + 10_000;
 
                             for i in v1..r1 {
@@ -536,7 +536,7 @@ mod tests {
                 .map(|_| {
                     scope.spawn(move || {
                         println!("Started reader ...");
-                        let mut rng = rand::thread_rng();
+                        let mut rng = rand::rng();
                         let mut proceed = true;
                         while proceed {
                             let m_read = mref.lock().unwrap();
@@ -544,7 +544,7 @@ mod tests {
                             // Get a random number.
                             // Add 10_000 * random
                             // Remove 10_000 * random
-                            let v1 = rng.gen_range(1, 18) * 10_000;
+                            let v1 = rng.random_range(1, 18) * 10_000;
                             let r1 = v1 + 10_000;
                             for i in v1..r1 {
                                 m_read.get(&i);
@@ -560,7 +560,7 @@ mod tests {
                 .map(|_| {
                     scope.spawn(move || {
                         println!("Started writer ...");
-                        let mut rng = rand::thread_rng();
+                        let mut rng = rand::rng();
                         let mut proceed = true;
                         while proceed {
                             let mut m_write = mref.lock().unwrap();
@@ -568,9 +568,9 @@ mod tests {
                             // Get a random number.
                             // Add 10_000 * random
                             // Remove 10_000 * random
-                            let v1 = rng.gen_range(1, 18) * 10_000;
+                            let v1 = rng.random_range(1, 18) * 10_000;
                             let r1 = v1 + 10_000;
-                            let v2 = rng.gen_range(1, 19) * 10_000;
+                            let v2 = rng.random_range(1, 19) * 10_000;
                             let r2 = v2 + 10_000;
 
                             for i in v1..r1 {
@@ -623,7 +623,7 @@ mod tests {
                 .map(|_| {
                     scope.spawn(move || {
                         println!("Started reader ...");
-                        let mut rng = rand::thread_rng();
+                        let mut rng = rand::rng();
                         let mut proceed = true;
                         while proceed {
                             let m_read = mref.read().unwrap();
@@ -631,7 +631,7 @@ mod tests {
                             // Get a random number.
                             // Add 10_000 * random
                             // Remove 10_000 * random
-                            let v1 = rng.gen_range(1, 18) * 10_000;
+                            let v1 = rng.random_range(1, 18) * 10_000;
                             let r1 = v1 + 10_000;
                             for i in v1..r1 {
                                 m_read.get(&i);
@@ -647,7 +647,7 @@ mod tests {
                 .map(|_| {
                     scope.spawn(move || {
                         println!("Started writer ...");
-                        let mut rng = rand::thread_rng();
+                        let mut rng = rand::rng();
                         let mut proceed = true;
                         while proceed {
                             let mut m_write = mref.write().unwrap();
@@ -655,9 +655,9 @@ mod tests {
                             // Get a random number.
                             // Add 10_000 * random
                             // Remove 10_000 * random
-                            let v1 = rng.gen_range(1, 18) * 10_000;
+                            let v1 = rng.random_range(1, 18) * 10_000;
                             let r1 = v1 + 10_000;
-                            let v2 = rng.gen_range(1, 19) * 10_000;
+                            let v2 = rng.random_range(1, 19) * 10_000;
                             let r2 = v2 + 10_000;
 
                             for i in v1..r1 {
