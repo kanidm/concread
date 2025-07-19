@@ -34,46 +34,52 @@ use crate::utils::MapCollector;
 #[cfg(all(feature = "arcache", feature = "arcache-is-hashmap"))]
 use crate::internals::hashmap::cursor::Datum;
 
-use crate::internals::lincowcell::{LinCowCell, LinCowCellReadTxn, LinCowCellWriteTxn};
+use crate::internals::lincowcell::{LinCowCellRaw, LinCowCellReadTxn, LinCowCellWriteTxn};
 
 include!("impl.rs");
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    HashMap<K, V>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + 'static,
+    > HashMapRaw<K, V, M>
 {
     /// Construct a new concurrent hashmap
     pub fn new() -> Self {
         // I acknowledge I understand what is required to make this safe.
-        HashMap {
-            inner: LinCowCell::new(unsafe { SuperBlock::new() }),
+        HashMapRaw {
+            inner: LinCowCellRaw::new(unsafe { SuperBlock::new() }),
         }
     }
 
     /// Initiate a read transaction for the Hashmap, concurrent to any
     /// other readers or writers.
-    pub fn read(&self) -> HashMapReadTxn<'_, K, V> {
+    pub fn read(&self) -> HashMapReadTxn<'_, K, V, M> {
         let inner = self.inner.read();
         HashMapReadTxn { inner }
     }
 
     /// Initiate a write transaction for the map, exclusive to this
     /// writer, and concurrently to all existing reads.
-    pub fn write(&self) -> HashMapWriteTxn<'_, K, V> {
+    pub fn write(&self) -> HashMapWriteTxn<'_, K, V, M> {
         let inner = self.inner.write();
         HashMapWriteTxn { inner }
     }
 
     /// Attempt to create a new write, returns None if another writer
     /// already exists.
-    pub fn try_write(&self) -> Option<HashMapWriteTxn<'_, K, V>> {
+    pub fn try_write(&self) -> Option<HashMapWriteTxn<'_, K, V, M>> {
         self.inner
             .try_write()
             .map(|inner| HashMapWriteTxn { inner })
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    HashMapWriteTxn<'_, K, V>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex + 'static,
+    > HashMapWriteTxn<'_, K, V, M>
 {
     #[cfg(all(feature = "arcache", feature = "arcache-is-hashmap"))]
     pub(crate) fn get_txid(&self) -> u64 {
@@ -107,8 +113,11 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    HashMapReadTxn<'_, K, V>
+impl<
+        K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: RawMutex,
+    > HashMapReadTxn<'_, K, V, M>
 {
     #[cfg(all(feature = "arcache", feature = "arcache-is-hashmap"))]
     pub(crate) fn get_txid(&self) -> u64 {
@@ -126,10 +135,11 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 }
 
 #[cfg(feature = "serde")]
-impl<K, V> Serialize for HashMapReadTxn<'_, K, V>
+impl<K, V, M> Serialize for HashMapReadTxn<'_, K, V, M>
 where
     K: Serialize + Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
+    M: RawMutex,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -146,10 +156,11 @@ where
 }
 
 #[cfg(feature = "serde")]
-impl<K, V> Serialize for HashMap<K, V>
+impl<K, V, M> Serialize for HashMap<K, V, M>
 where
     K: Serialize + Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Serialize + Clone + Sync + Send + 'static,
+    M: RawMutex + 'static,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -160,10 +171,11 @@ where
 }
 
 #[cfg(feature = "serde")]
-impl<'de, K, V> Deserialize<'de> for HashMap<K, V>
+impl<'de, K, V, M> Deserialize<'de> for HashMap<K, V, M>
 where
     K: Deserialize<'de> + Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Deserialize<'de> + Clone + Sync + Send + 'static,
+    M: RawMutex + 'static,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

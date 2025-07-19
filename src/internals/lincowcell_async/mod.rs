@@ -65,19 +65,21 @@ use crate::internals::lincowcell::LinCowCellCapable;
 
 #[derive(Debug)]
 /// A concurrently readable cell with linearised drop behaviour.
-pub struct LinCowCell<T, R, U> {
+pub struct LinCowCellRaw<T, R, U, M = ()> {
     updater: PhantomData<U>,
     write: Mutex<T>,
     active: SyncMutex<Arc<LinCowCellInner<R>>>,
+    _phantom: PhantomData<M>,
 }
 
 #[derive(Debug)]
 /// A write txn over a linear cell.
-pub struct LinCowCellWriteTxn<'a, T, R, U> {
+pub struct LinCowCellWriteTxn<'a, T, R, U, M> {
     // This way we know who to contact for updating our data ....
-    caller: &'a LinCowCell<T, R, U>,
+    caller: &'a LinCowCellRaw<T, R, U, M>,
     guard: MutexGuard<'a, T>,
     work: U,
+    _phantom: PhantomData<M>,
 }
 
 #[derive(Debug)]
@@ -89,9 +91,9 @@ struct LinCowCellInner<R> {
 
 #[derive(Debug)]
 /// A read txn over a linear cell.
-pub struct LinCowCellReadTxn<'a, T, R, U> {
+pub struct LinCowCellReadTxn<'a, T, R, U, M> {
     // We must outlive the root
-    _caller: &'a LinCowCell<T, R, U>,
+    _caller: &'a LinCowCellRaw<T, R, U, M>,
     // We pin the current version.
     work: Arc<LinCowCellInner<R>>,
 }
@@ -127,22 +129,23 @@ impl<R> Drop for LinCowCellInner<R> {
     }
 }
 
-impl<T, R, U> LinCowCell<T, R, U>
+impl<T, R, U, M> LinCowCellRaw<T, R, U, M>
 where
     T: LinCowCellCapable<R, U>,
 {
     /// Create a new linear 🐄 cell.
     pub fn new(data: T) -> Self {
         let r = data.create_reader();
-        LinCowCell {
+        LinCowCellRaw {
             updater: PhantomData,
             write: Mutex::new(data),
             active: SyncMutex::new(Arc::new(LinCowCellInner::new(r))),
+            _phantom: PhantomData,
         }
     }
 
     /// Begin a read txn
-    pub fn read(&self) -> LinCowCellReadTxn<'_, T, R, U> {
+    pub fn read(&self) -> LinCowCellReadTxn<'_, T, R, U, M> {
         let rwguard = self.active.lock().unwrap();
         LinCowCellReadTxn {
             _caller: self,
@@ -152,7 +155,7 @@ where
     }
 
     /// Begin a write txn
-    pub async fn write<'x>(&'x self) -> LinCowCellWriteTxn<'x, T, R, U> {
+    pub async fn write<'x>(&'x self) -> LinCowCellWriteTxn<'x, T, R, U, M> {
         /* Take the exclusive write lock first */
         let write_guard = self.write.lock().await;
         /* Now take a ro-txn to get the data copied */
@@ -164,11 +167,12 @@ where
             caller: self,
             guard: write_guard,
             work,
+            _phantom: PhantomData,
         }
     }
 
     /// Attempt a write txn
-    pub fn try_write(&self) -> Option<LinCowCellWriteTxn<'_, T, R, U>> {
+    pub fn try_write(&self) -> Option<LinCowCellWriteTxn<'_, T, R, U, M>> {
         self.write
             .try_lock()
             .map(|write_guard| {
@@ -179,18 +183,20 @@ where
                     caller: self,
                     guard: write_guard,
                     work,
+                    _phantom: PhantomData,
                 }
             })
             .ok()
     }
 
-    fn commit(&self, write: LinCowCellWriteTxn<'_, T, R, U>) {
+    fn commit(&self, write: LinCowCellWriteTxn<'_, T, R, U, M>) {
         // Destructure our writer.
         let LinCowCellWriteTxn {
             // This is self.
             caller: _caller,
             mut guard,
             work,
+            _phantom: PhantomData,
         } = write;
 
         // Get the previous generation.
@@ -212,7 +218,7 @@ where
     }
 }
 
-impl<T, R, U> Deref for LinCowCellReadTxn<'_, T, R, U> {
+impl<T, R, U, M> Deref for LinCowCellReadTxn<'_, T, R, U, M> {
     type Target = R;
 
     #[inline]
@@ -221,14 +227,14 @@ impl<T, R, U> Deref for LinCowCellReadTxn<'_, T, R, U> {
     }
 }
 
-impl<T, R, U> AsRef<R> for LinCowCellReadTxn<'_, T, R, U> {
+impl<T, R, U, M> AsRef<R> for LinCowCellReadTxn<'_, T, R, U, M> {
     #[inline]
     fn as_ref(&self) -> &R {
         &self.work.data
     }
 }
 
-impl<T, R, U> LinCowCellWriteTxn<'_, T, R, U>
+impl<T, R, U, M> LinCowCellWriteTxn<'_, T, R, U, M>
 where
     T: LinCowCellCapable<R, U>,
 {
@@ -245,7 +251,7 @@ where
     }
 }
 
-impl<T, R, U> Deref for LinCowCellWriteTxn<'_, T, R, U> {
+impl<T, R, U, M> Deref for LinCowCellWriteTxn<'_, T, R, U, M> {
     type Target = U;
 
     #[inline]
@@ -254,21 +260,21 @@ impl<T, R, U> Deref for LinCowCellWriteTxn<'_, T, R, U> {
     }
 }
 
-impl<T, R, U> DerefMut for LinCowCellWriteTxn<'_, T, R, U> {
+impl<T, R, U, M> DerefMut for LinCowCellWriteTxn<'_, T, R, U, M> {
     #[inline]
     fn deref_mut(&mut self) -> &mut U {
         &mut self.work
     }
 }
 
-impl<T, R, U> AsRef<U> for LinCowCellWriteTxn<'_, T, R, U> {
+impl<T, R, U, M> AsRef<U> for LinCowCellWriteTxn<'_, T, R, U, M> {
     #[inline]
     fn as_ref(&self) -> &U {
         &self.work
     }
 }
 
-impl<T, R, U> AsMut<U> for LinCowCellWriteTxn<'_, T, R, U> {
+impl<T, R, U, M> AsMut<U> for LinCowCellWriteTxn<'_, T, R, U, M> {
     #[inline]
     fn as_mut(&mut self) -> &mut U {
         &mut self.work
@@ -277,7 +283,7 @@ impl<T, R, U> AsMut<U> for LinCowCellWriteTxn<'_, T, R, U> {
 
 #[cfg(test)]
 mod tests {
-    use super::LinCowCell;
+    use super::LinCowCellRaw;
     use super::LinCowCellCapable;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -321,7 +327,7 @@ mod tests {
     #[tokio::test]
     async fn test_simple_create() {
         let data = TestData { x: 0 };
-        let cc = LinCowCell::new(data);
+        let cc: LinCowCellRaw<TestData, TestDataReadTxn, TestDataWriteTxn, ()> = LinCowCellRaw::new(data);
 
         let cc_rotxn_a = cc.read();
         println!("cc_rotxn_a -> {:?}", cc_rotxn_a);
@@ -372,7 +378,7 @@ mod tests {
 
     // == mt tests ==
 
-    async fn mt_writer(cc: Arc<LinCowCell<TestData, TestDataReadTxn, TestDataWriteTxn>>) {
+    async fn mt_writer(cc: Arc<LinCowCellRaw<TestData, TestDataReadTxn, TestDataWriteTxn>>) {
         let mut last_value: i64 = 0;
         while last_value < 500 {
             let mut cc_wrtxn = cc.write().await;
@@ -386,7 +392,7 @@ mod tests {
         }
     }
 
-    fn rt_writer(cc: Arc<LinCowCell<TestData, TestDataReadTxn, TestDataWriteTxn>>) {
+    fn rt_writer(cc: Arc<LinCowCellRaw<TestData, TestDataReadTxn, TestDataWriteTxn>>) {
         let mut last_value: i64 = 0;
         while last_value < 500 {
             let cc_rotxn = cc.read();
@@ -405,7 +411,8 @@ mod tests {
         let start = Instant::now();
         // Create the new cowcell.
         let data = TestData { x: 0 };
-        let cc = Arc::new(LinCowCell::new(data));
+        let cc: Arc<LinCowCellRaw<TestData, TestDataReadTxn, TestDataWriteTxn>> =
+            Arc::new(LinCowCellRaw::new(data));
 
         let _ = tokio::join!(
             tokio::task::spawn_blocking({
@@ -487,7 +494,7 @@ mod tests {
 
     async fn test_gc_operation_thread(
         cc: Arc<
-            LinCowCell<TestGcWrapper<i64>, TestGcWrapperReadTxn<i64>, TestGcWrapperWriteTxn<i64>>,
+            LinCowCellRaw<TestGcWrapper<i64>, TestGcWrapperReadTxn<i64>, TestGcWrapperWriteTxn<i64>>,
         >,
     ) {
         while GC_COUNT.load(Ordering::Acquire) < 50 {
@@ -508,7 +515,9 @@ mod tests {
     async fn test_gc_operation() {
         GC_COUNT.store(0, Ordering::Release);
         let data = TestGcWrapper { data: 0 };
-        let cc = Arc::new(LinCowCell::new(data));
+        let cc: Arc<
+            LinCowCellRaw<TestGcWrapper<i64>, TestGcWrapperReadTxn<i64>, TestGcWrapperWriteTxn<i64>>,
+        > = Arc::new(LinCowCellRaw::new(data));
 
         let _ = tokio::join!(
             tokio::task::spawn(test_gc_operation_thread(cc.clone())),
@@ -524,7 +533,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     async fn test_long_chain_drop_no_stack_overflow() {
         let data = TestData { x: 0 };
-        let cc = LinCowCell::new(data);
+        let cc: LinCowCellRaw<TestData, TestDataReadTxn, TestDataWriteTxn> = LinCowCellRaw::new(data);
 
         // Simulate a read txn that is not dropped.
         let initial_read = cc.read();
@@ -546,7 +555,7 @@ mod tests {
 
 #[cfg(test)]
 mod tests_linear {
-    use super::LinCowCell;
+    use super::LinCowCellRaw;
     use super::LinCowCellCapable;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -612,7 +621,11 @@ mod tests_linear {
         GC_COUNT.store(0, Ordering::Release);
         assert!(GC_COUNT.load(Ordering::Acquire) == 0);
         let data = TestGcWrapper { data: 0 };
-        let cc = LinCowCell::new(data);
+        let cc: LinCowCellRaw<
+            TestGcWrapper<i32>,
+            TestGcWrapperReadTxn<i32>,
+            TestGcWrapperWriteTxn<i32>,
+        > = LinCowCellRaw::new(data);
 
         // Open a read A.
         let cc_rotxn_a = cc.read();

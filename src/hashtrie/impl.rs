@@ -1,3 +1,5 @@
+use lock_api::RawMutex;
+
 use crate::internals::hashtrie::cursor::CursorReadOps;
 use crate::internals::hashtrie::cursor::{CursorRead, CursorWrite, SuperBlock};
 use crate::internals::hashtrie::iter::*;
@@ -8,6 +10,10 @@ use crate::internals::lincowcell::LinCowCellCapable;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::iter::FromIterator;
+
+/// HashTrie with a default lock type provided.
+#[cfg(feature = "std")]
+pub type HashTrie<K, V> = HashTrieRaw<K, V, parking_lot::RawMutex>;
 
 /// A concurrently readable map based on a modified Trie.
 ///
@@ -25,32 +31,34 @@ use std::iter::FromIterator;
 ///
 /// Transactions can be rolled-back (aborted) without penalty by dropping
 /// the `HashTrieWriteTxn` without calling `commit()`.
-pub struct HashTrie<K, V>
+pub struct HashTrieRaw<K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: RawMutex + 'static
 {
-    inner: LinCowCell<SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
+    inner: LinCowCellRaw<SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
 
-unsafe impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    Send for HashTrie<K, V>
+unsafe impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + Send + 'static>
+    Send for HashTrieRaw<K, V, M>
 {
 }
-unsafe impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    Sync for HashTrie<K, V>
+unsafe impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + Send + Sync + 'static>
+    Sync for HashTrieRaw<K, V, M>
 {
 }
 
 /// An active read transaction over a `HashTrie`. The data in this tree
 /// is guaranteed to not change and will remain consistent for the life
 /// of this transaction.
-pub struct HashTrieReadTxn<'a, K, V>
+pub struct HashTrieReadTxn<'a, K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: RawMutex
 {
-    inner: LinCowCellReadTxn<'a, SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
+    inner: LinCowCellReadTxn<'a, SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
 
 /// An active write transaction for a `HashTrie`. The data in this tree
@@ -58,20 +66,22 @@ where
 /// readers. The write may be rolledback/aborted by dropping this guard
 /// without calling `commit()`. Once `commit()` is called, readers will be
 /// able to access and perceive changes in new transactions.
-pub struct HashTrieWriteTxn<'a, K, V>
+pub struct HashTrieWriteTxn<'a, K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: RawMutex
 {
-    inner: LinCowCellWriteTxn<'a, SuperBlock<K, V>, CursorRead<K, V>, CursorWrite<K, V>>,
+    inner: LinCowCellWriteTxn<'a, SuperBlock<K, V>, CursorRead<K, V, M>, CursorWrite<K, V>, M>,
 }
 
-enum SnapshotType<'a, K, V>
+enum SnapshotType<'a, K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: RawMutex + 'static
 {
-    R(&'a CursorRead<K, V>),
+    R(&'a CursorRead<K, V, M>),
     W(&'a CursorWrite<K, V>),
 }
 
@@ -83,49 +93,53 @@ where
 /// This snapshot IS safe within the read thread due to the nature of the
 /// implementation borrowing the inner tree to prevent mutations within the
 /// same thread while the read snapshot is open.
-pub struct HashTrieReadSnapshot<'a, K, V>
+pub struct HashTrieReadSnapshot<'a, K, V, M>
 where
     K: Hash + Eq + Clone + Debug + Sync + Send + 'static,
     V: Clone + Sync + Send + 'static,
+    M: RawMutex + 'static
 {
-    inner: SnapshotType<'a, K, V>,
+    inner: SnapshotType<'a, K, V, M>,
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Default
-    for HashTrie<K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static> Default
+    for HashTrieRaw<K, V, M>
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    FromIterator<(K, V)> for HashTrie<K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
+    FromIterator<(K, V)> for HashTrieRaw<K, V, M>
 {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let mut new_sblock = unsafe { SuperBlock::new() };
-        let prev = new_sblock.create_reader();
-        let mut cursor = new_sblock.create_writer();
+        let prev: CursorRead<K, V, M> = new_sblock.create_reader();
+        
+        // TODO - can we specify the bound some other way that doesn't make this type vomit?
+        use crate::internals::hashtrie::cursor;
+        let mut cursor = <cursor::SuperBlock<K, V> as LinCowCellCapable<cursor::CursorRead<K, V, M>, cursor::CursorWrite<K, V>>>::create_writer(&new_sblock);
         cursor.extend(iter);
 
         let _ = new_sblock.pre_commit(cursor, &prev);
 
-        HashTrie {
-            inner: LinCowCell::new(new_sblock),
+        HashTrieRaw {
+            inner: LinCowCellRaw::new(new_sblock),
         }
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    Extend<(K, V)> for HashTrieWriteTxn<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
+    Extend<(K, V)> for HashTrieWriteTxn<'_, K, V, M>
 {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         self.inner.as_mut().extend(iter);
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    HashTrieWriteTxn<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
+    HashTrieWriteTxn<'_, K, V, M>
 {
     /*
     pub(crate) fn prehash<Q>(&self, k: &Q) -> u64
@@ -223,15 +237,15 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     /// Create a read-snapshot of the current map. This does NOT guarantee the map may
     /// not be mutated during the read, so you MUST guarantee that no functions of the
     /// write txn are called while this snapshot is active.
-    pub fn to_snapshot(&self) -> HashTrieReadSnapshot<'_, K, V> {
+    pub fn to_snapshot(&self) -> HashTrieReadSnapshot<'_, K, V, M> {
         HashTrieReadSnapshot {
             inner: SnapshotType::W(self.inner.as_ref()),
         }
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    HashTrieReadTxn<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
+    HashTrieReadTxn<'_, K, V, M>
 {
     pub(crate) fn get_prehashed<Q>(&self, k: &Q, k_hash: u64) -> Option<&V>
     where
@@ -288,15 +302,15 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
 
     /// Create a read-snapshot of the current tree.
     /// As this is the read variant, it IS safe, and guaranteed the tree will not change.
-    pub fn to_snapshot(&self) -> HashTrieReadSnapshot<'_, K, V> {
+    pub fn to_snapshot(&self) -> HashTrieReadSnapshot<'_, K, V, M> {
         HashTrieReadSnapshot {
             inner: SnapshotType::R(self.inner.as_ref()),
         }
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    HashTrieReadSnapshot<'_, K, V>
+impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M: RawMutex + 'static>
+    HashTrieReadSnapshot<'_, K, V, M>
 {
     /// Retrieve a value from the tree. If the value exists, a reference is returned
     /// as `Some(&V)`, otherwise if not present `None` is returned.

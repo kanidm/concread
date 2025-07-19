@@ -33,11 +33,19 @@
 //! By default all of these features are enabled. If you are planning to use this crate in a wasm
 //! context we recommend you use only `maps` as a feature.
 
+//#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 #![deny(warnings)]
 #![warn(unused_extern_crates)]
 #![warn(missing_docs)]
 #![allow(clippy::needless_lifetimes)]
 #![cfg_attr(feature = "simd_support", feature(portable_simd))]
+
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+#[cfg(any(test, feature = "std"))]
+extern crate std;
 
 #[cfg(all(test, feature = "dhat-heap"))]
 #[global_allocator]
@@ -48,7 +56,7 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 extern crate smallvec;
 
 pub mod cowcell;
-pub use cowcell::CowCell;
+pub use cowcell::CowCellRaw;
 
 #[cfg(feature = "ebr")]
 pub mod ebrcell;
@@ -63,8 +71,11 @@ pub mod threadcache;
 // This is where the scary rust lives.
 #[cfg(feature = "maps")]
 pub mod internals;
+
 // This is where the good rust lives.
-#[cfg(feature = "maps")]
+// We're allowing unused here since we may or may not use all items based on enabled features
+// All potentially incompatible features must be feature gated internally.
+#[allow(unused)]
 mod utils;
 
 #[cfg(feature = "maps")]
@@ -74,5 +85,5 @@ pub mod hashmap;
 #[cfg(feature = "maps")]
 pub mod hashtrie;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "maps"))]
 mod lc_tests;

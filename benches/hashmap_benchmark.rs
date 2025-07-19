@@ -19,8 +19,10 @@ extern crate criterion;
 extern crate rand;
 
 use concread::hashmap::*;
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use rand::{thread_rng, Rng};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use rand::{rng, Rng};
+
+use std::hint::black_box;
 
 // ranges of counts for different benchmarks (MINs are inclusive, MAXes exclusive):
 const INSERT_COUNT_MIN: usize = 120;
@@ -168,7 +170,7 @@ criterion_main!(insert, remove, search);
 fn insert_vec<V: Clone + Sync + Send + 'static>(
     map: &mut HashMap<u32, V>,
     list: Vec<(u32, V)>,
-) -> HashMapWriteTxn<u32, V> {
+) -> HashMapWriteTxn<u32, V, parking_lot::RawMutex> {
     let mut write_txn = map.write();
     for (key, val) in list.into_iter() {
         write_txn.insert(key, val);
@@ -179,7 +181,7 @@ fn insert_vec<V: Clone + Sync + Send + 'static>(
 fn remove_vec<'a, V: Clone + Sync + Send + 'static>(
     map: &'a mut HashMap<u32, V>,
     list: &Vec<u32>,
-) -> HashMapWriteTxn<'a, u32, V> {
+) -> HashMapWriteTxn<'a, u32, V, parking_lot::RawMutex> {
     let mut write_txn = map.write();
     for i in list.iter() {
         write_txn.remove(i);
@@ -242,12 +244,12 @@ struct Struct {
 }
 
 fn prepare_insert<V: Clone + Sync + Send + 'static>(value: V) -> (HashMap<u32, V>, Vec<(u32, V)>) {
-    let mut rng = thread_rng();
-    let count = rng.gen_range(INSERT_COUNT_MIN..INSERT_COUNT_MAX);
+    let mut rng = rng();
+    let count = rng.random_range(INSERT_COUNT_MIN..INSERT_COUNT_MAX);
     let mut list = Vec::with_capacity(count);
     for _ in 0..count {
         list.push((
-            rng.gen_range(0..INSERT_COUNT_MAX << 8) as u32,
+            rng.random_range(0..INSERT_COUNT_MAX << 8) as u32,
             value.clone(),
         ));
     }
@@ -256,9 +258,9 @@ fn prepare_insert<V: Clone + Sync + Send + 'static>(value: V) -> (HashMap<u32, V
 
 /// Prepares a remove benchmark with values in the HashMap being clones of the 'value' parameter
 fn prepare_remove<V: Clone + Sync + Send + 'static>(value: V) -> (HashMap<u32, V>, Vec<u32>) {
-    let mut rng = thread_rng();
-    let insert_count = rng.gen_range(INSERT_COUNT_FOR_REMOVE_MIN..INSERT_COUNT_FOR_REMOVE_MAX);
-    let remove_count = rng.gen_range(REMOVE_COUNT_MIN..REMOVE_COUNT_MAX);
+    let mut rng = rng();
+    let insert_count = rng.random_range(INSERT_COUNT_FOR_REMOVE_MIN..INSERT_COUNT_FOR_REMOVE_MAX);
+    let remove_count = rng.random_range(REMOVE_COUNT_MIN..REMOVE_COUNT_MAX);
     let map = HashMap::new();
     let mut write_txn = map.write();
     for i in random_order(insert_count, insert_count).iter() {
@@ -271,10 +273,10 @@ fn prepare_remove<V: Clone + Sync + Send + 'static>(value: V) -> (HashMap<u32, V
 }
 
 fn prepare_search<V: Clone + Sync + Send + 'static>(value: V) -> (HashMap<u32, V>, Vec<u32>) {
-    let mut rng = thread_rng();
-    let insert_count = rng.gen_range(INSERT_COUNT_FOR_SEARCH_MIN..INSERT_COUNT_FOR_SEARCH_MAX);
+    let mut rng = rng();
+    let insert_count = rng.random_range(INSERT_COUNT_FOR_SEARCH_MIN..INSERT_COUNT_FOR_SEARCH_MAX);
     let search_limit = insert_count * SEARCH_SIZE_NUMERATOR / SEARCH_SIZE_DENOMINATOR;
-    let search_count = rng.gen_range(SEARCH_COUNT_MIN..SEARCH_COUNT_MAX);
+    let search_count = rng.random_range(SEARCH_COUNT_MIN..SEARCH_COUNT_MAX);
 
     // Create a HashMap with elements 0 through insert_count(-1)
     let map = HashMap::new();
@@ -287,20 +289,20 @@ fn prepare_search<V: Clone + Sync + Send + 'static>(value: V) -> (HashMap<u32, V
     // Choose 'search_count' numbers from [0,search_limit) randomly to be searched in the created map.
     let mut list = Vec::with_capacity(search_count);
     for _ in 0..search_count {
-        list.push(rng.gen_range(0..search_limit as u32));
+        list.push(rng.random_range(0..search_limit as u32));
     }
     (map, list)
 }
 
 /// Returns a Vec of n elements from the range [0,up_to) in random order without repetition
 fn random_order(up_to: usize, n: usize) -> Vec<u32> {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let mut order = Vec::with_capacity(n);
     let mut generated = vec![false; up_to];
     let mut remaining = n;
     let mut remaining_elems = up_to;
     while remaining > 0 {
-        let mut r = rng.gen_range(0..remaining_elems);
+        let mut r = rng.random_range(0..remaining_elems);
         // find the r-th yet nongenerated number:
         for i in 0..up_to {
             if generated[i] {

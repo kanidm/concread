@@ -12,11 +12,20 @@
 #[cfg(feature = "asynch")]
 pub mod asynch;
 
-use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
-use std::sync::{Mutex, MutexGuard};
+use core::ops::{Deref, DerefMut};
+use lock_api::{Mutex, MutexGuard, RawMutex};
 
-/// A conncurrently readable cell.
+#[cfg(not(feature = "std"))]
+use alloc::sync::Arc;
+
+#[cfg(feature = "std")]
+use std::sync::Arc;
+
+/// CowCell with a default lock type provided.
+#[cfg(feature = "std")]
+pub type CowCell<T> = CowCellRaw<T, parking_lot::RawMutex>;
+
+/// A concurrently readable cell.
 ///
 /// This structure behaves in a similar manner to a `RwLock<T>`. However unlike
 /// a `RwLock`, writes and parallel reads can be performed at the same time. This
@@ -39,7 +48,7 @@ use std::sync::{Mutex, MutexGuard};
 /// use concread::cowcell::CowCell;
 ///
 /// let data: i64 = 0;
-/// let cowcell = CowCell::new(data);
+/// let cowcell = CowCell::<i64>::new(data);
 ///
 /// // Begin a read transaction
 /// let read_txn = cowcell.read();
@@ -57,10 +66,19 @@ use std::sync::{Mutex, MutexGuard};
 /// // And a new read transaction has '1'
 /// assert_eq!(*new_read_txn, 1);
 /// ```
-#[derive(Debug, Default)]
-pub struct CowCell<T> {
-    write: Mutex<()>,
-    active: Mutex<Arc<T>>,
+#[derive(Debug)]
+pub struct CowCellRaw<T, R: RawMutex> {
+    write: Mutex<R, ()>,
+    active: Mutex<R, Arc<T>>,
+}
+
+impl<T: Default, R: RawMutex> Default for CowCellRaw<T, R> {
+    fn default() -> Self {
+        Self {
+            write: Mutex::new(()),
+            active: Mutex::new(Arc::new(Default::default())),
+        }
+    }
 }
 
 /// A `CowCell` Write Transaction handle.
@@ -72,13 +90,13 @@ pub struct CowCell<T> {
 /// rollback a change, don't call commit and allow the write transaction to
 /// be dropped. This causes the `CowCell` to unlock allowing the next writer
 /// to proceed.
-pub struct CowCellWriteTxn<'a, T> {
+pub struct CowCellWriteTxn<'a, T, R: RawMutex> {
     // Hold open the guard, and initiate the copy to here.
     work: Option<T>,
     read: Arc<T>,
     // This way we know who to contact for updating our data ....
-    caller: &'a CowCell<T>,
-    _guard: MutexGuard<'a, ()>,
+    caller: &'a CowCellRaw<T, R>,
+    _guard: MutexGuard<'a, R, ()>,
 }
 
 /// A `CowCell` Read Transaction handle.
@@ -94,14 +112,15 @@ impl<T> Clone for CowCellReadTxn<T> {
     }
 }
 
-impl<T> CowCell<T>
+impl<T, R> CowCellRaw<T, R>
 where
     T: Clone,
+    R: RawMutex,
 {
     /// Create a new `CowCell` for storing type `T`. `T` must implement `Clone`
     /// to enable clone-on-write.
     pub fn new(data: T) -> Self {
-        CowCell {
+        CowCellRaw {
             write: Mutex::new(()),
             active: Mutex::new(Arc::new(data)),
         }
@@ -111,7 +130,7 @@ where
     /// the read guard is guaranteed to be consistent for the life time of the
     /// read - even if writers commit during.
     pub fn read(&self) -> CowCellReadTxn<T> {
-        let rwguard = self.active.lock().unwrap();
+        let rwguard = self.active.lock();
         CowCellReadTxn(rwguard.clone())
         // rwguard ends here
     }
@@ -119,12 +138,12 @@ where
     /// Begin a write transaction, returning a write guard. The content of the
     /// write is only visible to this thread, and is not visible to any reader
     /// until `commit()` is called.
-    pub fn write(&self) -> CowCellWriteTxn<'_, T> {
+    pub fn write(&self) -> CowCellWriteTxn<'_, T, R> {
         /* Take the exclusive write lock first */
-        let mguard = self.write.lock().unwrap();
+        let mguard = self.write.lock();
         // We delay copying until the first get_mut.
         let read = {
-            let rwguard = self.active.lock().unwrap();
+            let rwguard = self.active.lock();
             rwguard.clone()
         };
         /* Now build the write struct */
@@ -139,12 +158,12 @@ where
     /// Attempt to create a write transaction. If it fails, and err
     /// is returned. On success the `Ok(guard)` is returned. See also
     /// `write(&self)`
-    pub fn try_write(&self) -> Option<CowCellWriteTxn<'_, T>> {
+    pub fn try_write(&self) -> Option<CowCellWriteTxn<'_, T, R>> {
         /* Take the exclusive write lock first */
-        self.write.try_lock().ok().map(|mguard| {
+        self.write.try_lock().map(|mguard| {
             // We delay copying until the first get_mut.
             let read = {
-                let rwguard = self.active.lock().unwrap();
+                let rwguard = self.active.lock();
                 rwguard.clone()
             };
             /* Now build the write struct */
@@ -159,7 +178,7 @@ where
 
     fn commit(&self, newdata: Option<T>) {
         if let Some(new_data) = newdata {
-            let mut rwguard = self.active.lock().unwrap();
+            let mut rwguard = self.active.lock();
             let new_inner = Arc::new(new_data);
             // now over-write the last value in the mutex.
             *rwguard = new_inner;
@@ -178,9 +197,10 @@ impl<T> Deref for CowCellReadTxn<T> {
     }
 }
 
-impl<T> CowCellWriteTxn<'_, T>
+impl<T, R> CowCellWriteTxn<'_, T, R>
 where
     T: Clone,
+    R: RawMutex,
 {
     /// Access a mutable pointer of the data in the `CowCell`. This data is only
     /// visible to the write transaction object in this thread, until you call
@@ -188,7 +208,7 @@ where
     pub fn get_mut(&mut self) -> &mut T {
         if self.work.is_none() {
             let mut data: Option<T> = Some((*self.read).clone());
-            std::mem::swap(&mut data, &mut self.work);
+            core::mem::swap(&mut data, &mut self.work);
             // Should be the none we previously had.
             debug_assert!(data.is_none())
         }
@@ -211,9 +231,10 @@ where
     }
 }
 
-impl<T> Deref for CowCellWriteTxn<'_, T>
+impl<T, R> Deref for CowCellWriteTxn<'_, T, R>
 where
     T: Clone,
+    R: RawMutex,
 {
     type Target = T;
 
@@ -226,9 +247,10 @@ where
     }
 }
 
-impl<T> DerefMut for CowCellWriteTxn<'_, T>
+impl<T, R> DerefMut for CowCellWriteTxn<'_, T, R>
 where
     T: Clone,
+    R: RawMutex,
 {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut T {
@@ -238,16 +260,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::CowCell;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Instant;
+    use super::CowCellRaw;
 
-    use std::thread::scope;
+    type CowCell<T> = CowCellRaw<T, spin::Mutex<()>>;
 
     #[test]
     fn test_deref_mut() {
         let data: i64 = 0;
-        let cc = CowCell::new(data);
+        let cc: CowCell<i64> = CowCell::new(data);
         {
             /* Take a write txn */
             let mut cc_wrtxn = cc.write();
@@ -261,26 +281,26 @@ mod tests {
     #[test]
     fn test_try_write() {
         let data: i64 = 0;
-        let cc = CowCell::new(data);
+        let cc: CowCell<i64> = CowCell::new(data);
         /* Take a write txn */
-        let cc_wrtxn_a = cc.try_write();
+        let cc_wrtxn_a: Option<crate::cowcell::CowCellWriteTxn<'_, i64, spin::mutex::Mutex<()>>> = cc.try_write();
         assert!(cc_wrtxn_a.is_some());
         /* Because we already hold the writ, the second is guaranteed to fail */
-        let cc_wrtxn_a = cc.try_write();
+        let cc_wrtxn_a: Option<crate::cowcell::CowCellWriteTxn<'_, i64, spin::mutex::Mutex<()>>> = cc.try_write();
         assert!(cc_wrtxn_a.is_none());
     }
 
     #[test]
     fn test_simple_create() {
         let data: i64 = 0;
-        let cc = CowCell::new(data);
+        let cc: CowCell<i64> = CowCell::new(data);
 
-        let cc_rotxn_a = cc.read();
+        let cc_rotxn_a: crate::cowcell::CowCellReadTxn<i64> = cc.read();
         assert_eq!(*cc_rotxn_a, 0);
 
         {
             /* Take a write txn */
-            let mut cc_wrtxn = cc.write();
+            let mut cc_wrtxn: crate::cowcell::CowCellWriteTxn<'_, i64, spin::mutex::Mutex<()>> = cc.write();
             /* Get the data ... */
             {
                 let mut_ptr = cc_wrtxn.get_mut();
@@ -302,6 +322,14 @@ mod tests {
         assert_eq!(*cc_rotxn_c, 1);
         assert_eq!(*cc_rotxn_a, 0);
     }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests_std {
+    use super::CowCell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread::scope;
+    use std::time::Instant;
 
     const MAX_TARGET: i64 = 2000;
 
@@ -311,7 +339,7 @@ mod tests {
         let start = Instant::now();
         // Create the new cowcell.
         let data: i64 = 0;
-        let cc = CowCell::new(data);
+        let cc: CowCell<i64> = CowCell::new(data);
 
         assert!(scope(|scope| {
             let cc_ref = &cc;

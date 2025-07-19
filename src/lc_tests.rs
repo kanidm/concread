@@ -1,5 +1,5 @@
 use crate::internals::bptree::cursor::{CursorRead, CursorWrite, SuperBlock};
-use crate::internals::lincowcell::{LinCowCell, LinCowCellCapable};
+use crate::internals::lincowcell::{LinCowCellRaw, LinCowCellCapable};
 
 struct TestStruct {
     bptree_map_a: SuperBlock<u32, u32>,
@@ -7,8 +7,8 @@ struct TestStruct {
 }
 
 struct TestStructRead {
-    bptree_map_a: CursorRead<u32, u32>,
-    bptree_map_b: CursorRead<u32, u32>,
+    bptree_map_a: CursorRead<u32, u32, parking_lot::RawMutex>,
+    bptree_map_b: CursorRead<u32, u32, parking_lot::RawMutex>,
 }
 
 struct TestStructWrite {
@@ -28,8 +28,14 @@ impl LinCowCellCapable<TestStructRead, TestStructWrite> for TestStruct {
     fn create_writer(&self) -> TestStructWrite {
         // This sets up the first writer.
         TestStructWrite {
-            bptree_map_a: self.bptree_map_a.create_writer(),
-            bptree_map_b: self.bptree_map_b.create_writer(),
+            bptree_map_a: <SuperBlock<u32, u32> as LinCowCellCapable<
+                CursorRead<u32, u32, parking_lot::RawMutex>,
+                CursorWrite<u32, u32>,
+            >>::create_writer(&self.bptree_map_a),
+            bptree_map_b: <SuperBlock<u32, u32> as LinCowCellCapable<
+                CursorRead<u32, u32, parking_lot::RawMutex>,
+                CursorWrite<u32, u32>,
+            >>::create_writer(&self.bptree_map_b),
         }
     }
 
@@ -56,10 +62,11 @@ impl LinCowCellCapable<TestStructRead, TestStructWrite> for TestStruct {
 
 #[test]
 fn test_lc_basic() {
-    let lcc = LinCowCell::new(TestStruct {
-        bptree_map_a: unsafe { SuperBlock::new() },
-        bptree_map_b: unsafe { SuperBlock::new() },
-    });
+    let lcc: LinCowCellRaw<TestStruct, TestStructRead, TestStructWrite, parking_lot::RawMutex> =
+        LinCowCellRaw::new(TestStruct {
+            bptree_map_a: unsafe { SuperBlock::new() },
+            bptree_map_b: unsafe { SuperBlock::new() },
+        });
 
     let x = lcc.write();
 

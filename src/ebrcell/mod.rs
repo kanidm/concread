@@ -21,6 +21,7 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use std::mem;
 use std::ops::{Deref, DerefMut};
+
 use std::sync::{Mutex, MutexGuard};
 
 /// An `EbrCell` Write Transaction handle.
@@ -129,7 +130,10 @@ where
 /// assert_eq!(*new_read_txn, 1);
 /// ```
 #[derive(Debug)]
-pub struct EbrCell<T: Clone + Sync + Send + 'static> {
+pub struct EbrCell<T: Clone + Sync + Send + 'static>
+where
+    T: Clone + Sync + Send + 'static,
+{
     write: Mutex<()>,
     active: Atomic<T>,
 }
@@ -150,7 +154,7 @@ where
     /// Create a new `EbrCell` storing type `T`. `T` must implement `Clone`.
     pub fn new(data: T) -> Self {
         EbrCell {
-            write: Mutex::new(()),
+            write: Mutex::<()>::new(()),
             active: Atomic::new(data),
         }
     }

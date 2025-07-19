@@ -9,6 +9,14 @@ use std::mem::MaybeUninit;
 use std::ptr;
 use std::slice;
 
+#[cfg(not(feature = "std"))]
+use alloc::{boxed, vec};
+#[cfg(feature = "std")]
+use std::{boxed, vec};
+
+use boxed::Box;
+use vec::Vec;
+
 #[cfg(test)]
 use std::collections::BTreeSet;
 #[cfg(all(test, not(miri)))]
@@ -649,7 +657,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
                 nid: alloc_nid(),
             }));
 
-            debug_assert!((x.meta.0 & FLAG_INVALID) != 0);
+            debug_assert!(0u64 != (x.meta.0 & FLAG_INVALID));
 
             // Copy in the values to the correct location.
             for idx in 0..self.count() {
@@ -663,7 +671,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
             // Finally undo the invalid flag to allow drop to proceed.
             x.meta.0 &= !FLAG_INVALID;
 
-            debug_assert!((x.meta.0 & FLAG_INVALID) == 0);
+            debug_assert!(0u64 == (x.meta.0 & FLAG_INVALID));
 
             Some(Box::into_raw(x) as *mut Node<K, V>)
         }
@@ -844,11 +852,11 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
             let rk: &K = unsafe { &*self.key[work_idx].as_ptr() };
             if lk >= rk {
                 // println!("{:?}", self);
-                if cfg!(test) {
+                cfg_if::cfg_if! {if #[cfg(test)] {
                     return false;
                 } else {
                     debug_assert!(false);
-                }
+                }}
             }
             lk = rk;
         }
@@ -868,11 +876,11 @@ impl<K: Ord + Clone + Debug, V: Clone> Leaf<K, V> {
             let rk: &K = unsafe { &*(*pointer).key[work_idx].as_ptr() };
             if lk >= rk {
                 // println!("{:?}", self);
-                if cfg!(test) {
+                cfg_if::cfg_if! { if #[cfg(test)] {
                     return false;
                 } else {
                     debug_assert!(false);
-                }
+                }}
             }
             lk = rk;
         }
@@ -1008,7 +1016,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
                 nid: alloc_nid(),
             }));
 
-            debug_assert!((x.meta.0 & FLAG_INVALID) != 0);
+            debug_assert!(0u64 != (x.meta.0 & FLAG_INVALID));
 
             // Copy in the keys to the correct location.
             for idx in 0..self.count() {
@@ -1020,7 +1028,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
             // Finally undo the invalid flag to allow drop to proceed.
             x.meta.0 &= !FLAG_INVALID;
 
-            debug_assert!((x.meta.0 & FLAG_INVALID) == 0);
+            debug_assert!(0u64 == (x.meta.0 & FLAG_INVALID));
 
             Some(Box::into_raw(x) as *mut Node<K, V>)
         }

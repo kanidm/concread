@@ -4,30 +4,39 @@
 //! Additionally, the cursor also is responsible for general movement
 //! throughout the structure and how to handle that effectively
 
+#[cfg(not(feature = "std"))]
+use alloc::{boxed, collections, vec};
+#[cfg(feature = "std")]
+use std::{boxed, collections, vec};
+
+use boxed::Box;
+use vec::Vec;
+
 use crate::internals::lincowcell::LinCowCellCapable;
 
+use collections::{BTreeSet, VecDeque};
+use lock_api::{Mutex, RawMutex};
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, VecDeque};
-use std::fmt::{self, Debug};
+use std::fmt;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ptr;
-use std::sync::Mutex;
 
 use smallvec::SmallVec;
 
 use super::iter::*;
 
-#[cfg(feature = "ahash")]
+#[cfg(any(feature = "ahash", not(feature = "std")))]
 use ahash::RandomState;
 
-#[cfg(feature = "foldhash")]
-use foldhash::fast::RandomState;
+//#[cfg(feature = "foldhash")]
+//use foldhash::fast::RandomState;
 
 #[cfg(all(not(feature = "ahash"), not(feature = "foldhash")))]
 use std::collections::hash_map::RandomState;
 
-use std::hash::{BuildHasher, Hash, Hasher};
+use core::hash::{BuildHasher, Hash, Hasher};
 
 // This defines the max height of our tree. Gives 16777216.0 entries
 // This only consumes 16KB if fully populated
@@ -77,17 +86,17 @@ macro_rules! hash_key {
 }
 
 #[cfg(all(test, not(miri)))]
-thread_local!(static ALLOC_LIST: Mutex<BTreeSet<Ptr>> = const { Mutex::new(BTreeSet::new()) });
+thread_local!(static ALLOC_LIST: Mutex<parking_lot::RawMutex, BTreeSet<Ptr>> = const { Mutex::new(BTreeSet::new()) });
 
 #[cfg(all(test, not(miri)))]
-thread_local!(static WRITE_LIST: Mutex<BTreeSet<Ptr>> = const { Mutex::new(BTreeSet::new()) });
+thread_local!(static WRITE_LIST: Mutex<parking_lot::RawMutex, BTreeSet<Ptr>> = const { Mutex::new(BTreeSet::new()) });
 
 #[cfg(test)]
 fn assert_released() {
     #[cfg(not(miri))]
     {
         let is_empty = ALLOC_LIST.with(|llist| {
-            let x = llist.lock().unwrap();
+            let x = llist.lock();
             println!("Remaining -> {:?}", x);
             x.is_empty()
         });
@@ -172,14 +181,14 @@ impl Ptr {
     #[inline(always)]
     fn mark_dirty(&mut self) {
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
-        WRITE_LIST.with(|llist| assert!(llist.lock().unwrap().insert(self.untagged())));
+        WRITE_LIST.with(|llist| assert!(llist.lock().insert(self.untagged())));
         self.p = self.p.map_addr(|a| a | FLAG_DIRTY)
     }
 
     #[inline(always)]
     fn mark_clean(&mut self) {
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
-        WRITE_LIST.with(|llist| assert!(llist.lock().unwrap().remove(&(self.untagged()))));
+        WRITE_LIST.with(|llist| assert!(llist.lock().remove(&(self.untagged()))));
         self.p = self.p.map_addr(|a| a & MARK_CLEAN)
     }
 
@@ -187,7 +196,7 @@ impl Ptr {
     pub(crate) fn as_bucket<K: Hash + Eq + Clone + Debug, V: Clone>(&self) -> &Bucket<K, V> {
         debug_assert!(self.is_bucket());
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
-        ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
+        ALLOC_LIST.with(|llist| assert!(llist.lock().contains(&self.untagged())));
         unsafe { &*(self.p.map_addr(|a| a & UNTAG) as *const Bucket<K, V>) }
     }
 
@@ -195,7 +204,7 @@ impl Ptr {
     fn as_bucket_raw<K: Hash + Eq + Clone + Debug, V: Clone>(&self) -> *mut Bucket<K, V> {
         debug_assert!(self.is_bucket());
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
-        ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
+        ALLOC_LIST.with(|llist| assert!(llist.lock().contains(&self.untagged())));
         self.p.map_addr(|a| a & UNTAG) as *mut Bucket<K, V>
     }
 
@@ -208,7 +217,7 @@ impl Ptr {
         debug_assert!(self.is_dirty());
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         WRITE_LIST.with(|llist| {
-            let wlist_guard = llist.lock().unwrap();
+            let wlist_guard = llist.lock();
             assert!(wlist_guard.contains(&self.untagged()))
         });
         unsafe { &mut *(self.p.map_addr(|a| a & UNTAG) as *mut Bucket<K, V>) }
@@ -218,7 +227,7 @@ impl Ptr {
     pub(crate) fn as_branch<K: Hash + Eq + Clone + Debug, V: Clone>(&self) -> &Branch<K, V> {
         debug_assert!(self.is_branch());
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
-        ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
+        ALLOC_LIST.with(|llist| assert!(llist.lock().contains(&self.untagged())));
         unsafe { &*(self.p.map_addr(|a| a & UNTAG) as *const Branch<K, V>) }
     }
 
@@ -226,7 +235,7 @@ impl Ptr {
     fn as_branch_raw<K: Hash + Eq + Clone + Debug, V: Clone>(&self) -> *mut Branch<K, V> {
         debug_assert!(self.is_branch());
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
-        ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
+        ALLOC_LIST.with(|llist| assert!(llist.lock().contains(&self.untagged())));
         self.p.map_addr(|a| a & UNTAG) as *mut Branch<K, V>
     }
 
@@ -239,7 +248,7 @@ impl Ptr {
         debug_assert!(self.is_dirty());
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         WRITE_LIST.with(|llist| {
-            let wlist_guard = llist.lock().unwrap();
+            let wlist_guard = llist.lock();
             assert!(wlist_guard.contains(&self.untagged()))
         });
         unsafe { &mut *(self.p.map_addr(|a| a & UNTAG) as *mut Branch<K, V>) }
@@ -259,7 +268,7 @@ impl Ptr {
     fn free<K: Hash + Eq + Clone + Debug, V: Clone>(&self) {
         // We MUST have allocated this, else it's a double free
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
-        ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().contains(&self.untagged())));
+        ALLOC_LIST.with(|llist| assert!(llist.lock().contains(&self.untagged())));
 
         // It's getting freeeeeedddd
         unsafe {
@@ -272,11 +281,11 @@ impl Ptr {
 
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         if self.is_dirty() {
-            WRITE_LIST.with(|llist| assert!(llist.lock().unwrap().remove(&(self.untagged()))))
+            WRITE_LIST.with(|llist| assert!(llist.lock().remove(&(self.untagged()))))
         };
 
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
-        ALLOC_LIST.with(|llist| assert!(llist.lock().unwrap().remove(&self.untagged())));
+        ALLOC_LIST.with(|llist| assert!(llist.lock().remove(&self.untagged())));
     }
 }
 
@@ -288,7 +297,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> From<Box<Branch<K, V>>> for Ptr {
             p: rptr.map_addr(|a| a | FLAG_BRANCH) as *mut i32,
         };
         #[cfg(all(test, not(miri)))]
-        ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(r.untagged()));
+        ALLOC_LIST.with(|llist| llist.lock().insert(r.untagged()));
         r
     }
 }
@@ -301,7 +310,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> From<Box<Bucket<K, V>>> for Ptr {
             p: rptr.map_addr(|a| a | FLAG_BUCKET) as *mut i32,
         };
         #[cfg(all(test, not(miri)))]
-        ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(r.untagged()));
+        ALLOC_LIST.with(|llist| llist.lock().insert(r.untagged()));
         r
     }
 }
@@ -436,10 +445,10 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> SuperBlock<K, V> {
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>, CursorWrite<K, V>>
-    for SuperBlock<K, V>
+impl<K: Hash + Eq + Clone + Debug, V: Clone, M: RawMutex>
+    LinCowCellCapable<CursorRead<K, V, M>, CursorWrite<K, V>> for SuperBlock<K, V>
 {
-    fn create_reader(&self) -> CursorRead<K, V> {
+    fn create_reader(&self) -> CursorRead<K, V, M> {
         CursorRead::new(self)
     }
 
@@ -450,9 +459,9 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> LinCowCellCapable<CursorRead<K, V>,
     fn pre_commit(
         &mut self,
         mut new: CursorWrite<K, V>,
-        prev: &CursorRead<K, V>,
-    ) -> CursorRead<K, V> {
-        let mut prev_last_seen = prev.last_seen.lock().unwrap();
+        prev: &CursorRead<K, V, M>,
+    ) -> CursorRead<K, V, M> {
+        let mut prev_last_seen = prev.last_seen.lock();
         debug_assert!((*prev_last_seen).is_empty());
 
         let new_last_seen = &mut new.last_seen;
@@ -674,11 +683,11 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
                 }
             }
 
-            if cfg!(debug_assertions) {
+            cfg_if::cfg_if! {if #[cfg(debug_assertions)] {
                 for n in tgt_ptr.as_branch::<K, V>().nodes.iter() {
                     assert!(n.is_null() || !n.is_dirty());
                 }
-            }
+            }}
         }
     }
 
@@ -854,7 +863,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
                             let tgt_bkt_mut = tgt_ptr.as_bucket_mut::<K, V>();
                             let Datum { v, .. } = tgt_bkt_mut.remove(0);
                             // Keep any pointer that ISN'T the one we are oob freeing.
-                            self.first_seen.retain(|e| *e != tgt_ptr);
+                            self.first_seen.retain(|e: &Ptr| *e != tgt_ptr);
                             tgt_ptr.free::<K, V>();
                             v
                         } else {
@@ -1046,21 +1055,22 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorWrite
 }
 
 #[derive(Debug)]
-pub(crate) struct CursorRead<K, V>
+pub(crate) struct CursorRead<K, V, R>
 where
     K: Hash + Eq + Clone + Debug,
     V: Clone,
+    R: RawMutex,
 {
     txid: u64,
     length: usize,
     root: Ptr,
-    last_seen: Mutex<Vec<Ptr>>,
+    last_seen: Mutex<R, Vec<Ptr>>,
     build_hasher: RandomState,
     k: PhantomData<K>,
     v: PhantomData<V>,
 }
 
-impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorRead<K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone, R: RawMutex> CursorRead<K, V, R> {
     pub(crate) fn new(sblock: &SuperBlock<K, V>) -> Self {
         let build_hasher = sblock.build_hasher.clone();
         CursorRead {
@@ -1075,7 +1085,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorRead<K, V> {
     }
 }
 
-impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for CursorRead<K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone, R: RawMutex> Drop for CursorRead<K, V, R> {
     fn drop(&mut self) {
         let last_seen_guard = self
             .last_seen
@@ -1086,7 +1096,9 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for CursorRead<K, V> {
     }
 }
 
-impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorReadOps<K, V> for CursorRead<K, V> {
+impl<K: Clone + Hash + Eq + Debug, V: Clone, R: RawMutex> CursorReadOps<K, V>
+    for CursorRead<K, V, R>
+{
     fn get_root_ptr(&self) -> Ptr {
         self.root
     }
@@ -1120,7 +1132,10 @@ mod tests {
     fn test_hashtrie_cursor_basic() {
         let sb: SuperBlock<u64, u64> = unsafe { SuperBlock::new() };
 
-        let mut wr = sb.create_writer();
+        let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<
+            CursorRead<u64, u64, parking_lot::RawMutex>,
+            CursorWrite<u64, u64>,
+        >>::create_writer(&sb);
 
         assert!(wr.len() == 0);
         assert!(wr.search(0, &0).is_none());
@@ -1141,8 +1156,11 @@ mod tests {
     #[test]
     fn test_hashtrie_cursor_insert_max_depth() {
         let mut sb: SuperBlock<u64, u64> = unsafe { SuperBlock::new() };
-        let rdr = sb.create_reader();
-        let mut wr = sb.create_writer();
+        let rdr: CursorRead<u64, u64, parking_lot::RawMutex> = sb.create_reader();
+        let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<
+            CursorRead<u64, u64, parking_lot::RawMutex>,
+            CursorWrite<u64, u64>,
+        >>::create_writer(&sb);
 
         assert!(wr.len() == 0);
         for i in 0..(ABS_MAX_HEIGHT * 2) {
@@ -1177,8 +1195,11 @@ mod tests {
     #[test]
     fn test_hashtrie_cursor_insert_broad() {
         let mut sb: SuperBlock<u64, u64> = unsafe { SuperBlock::new() };
-        let rdr = sb.create_reader();
-        let mut wr = sb.create_writer();
+        let rdr: CursorRead<u64, u64, parking_lot::RawMutex> = sb.create_reader();
+        let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<
+            CursorRead<u64, u64, parking_lot::RawMutex>,
+            CursorWrite<u64, u64>,
+        >>::create_writer(&sb);
 
         assert!(wr.len() == 0);
         for i in 0..(ABS_MAX_HEIGHT * ABS_MAX_HEIGHT) {
@@ -1212,20 +1233,23 @@ mod tests {
     #[test]
     fn test_hashtrie_cursor_insert_multiple_txns() {
         let mut sb: SuperBlock<u64, u64> = unsafe { SuperBlock::new() };
-        let mut rdr = sb.create_reader();
+        let mut rdr: CursorRead<u64, u64, parking_lot::RawMutex> = sb.create_reader();
 
         // Do thing
         assert!(rdr.len() == 0);
 
         for i in 0..(ABS_MAX_HEIGHT * ABS_MAX_HEIGHT) {
-            let mut wr = sb.create_writer();
+            let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<
+                CursorRead<u64, u64, parking_lot::RawMutex>,
+                CursorWrite<u64, u64>,
+            >>::create_writer(&sb);
             assert!(wr.insert(i, i, i).is_none());
             wr.verify();
             rdr = sb.pre_commit(wr, &rdr);
         }
 
         {
-            let rdr2 = sb.create_reader();
+            let rdr2: CursorRead<u64, u64, parking_lot::RawMutex> = sb.create_reader();
             assert!(rdr2.len() == (ABS_MAX_HEIGHT * ABS_MAX_HEIGHT) as usize);
             for i in 0..(ABS_MAX_HEIGHT * ABS_MAX_HEIGHT) {
                 assert!(rdr2.search(i, &i).is_some());
@@ -1233,7 +1257,10 @@ mod tests {
         }
 
         for i in 0..(ABS_MAX_HEIGHT * ABS_MAX_HEIGHT) {
-            let mut wr = sb.create_writer();
+            let mut wr = <SuperBlock<u64, u64> as LinCowCellCapable<
+                CursorRead<u64, u64, parking_lot::RawMutex>,
+                CursorWrite<u64, u64>,
+            >>::create_writer(&sb);
             assert!(wr.remove(i, &i).is_some());
             wr.verify();
             rdr = sb.pre_commit(wr, &rdr);

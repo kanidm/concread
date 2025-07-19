@@ -10,6 +10,11 @@
 //! writers that are serialised. This formally means that this is an ACID
 //! compliant Cache.
 
+#[cfg(not(feature = "std"))]
+use alloc::{borrow::ToOwned, sync::Arc, vec::Vec};
+#[cfg(feature = "std")]
+use std::{borrow::ToOwned, sync::Arc, vec::Vec};
+
 mod ll;
 /// Stats collection for [ARCache]
 pub mod stats;
@@ -19,19 +24,19 @@ use self::stats::{ARCacheReadStat, ARCacheWriteStat};
 
 #[cfg(feature = "arcache-is-hashmap")]
 use crate::hashmap::{
-    HashMap as DataMap, HashMapReadTxn as DataMapReadTxn, HashMapWriteTxn as DataMapWriteTxn,
+    HashMapRaw as DataMap, HashMapReadTxn as DataMapReadTxn, HashMapWriteTxn as DataMapWriteTxn,
 };
 
 #[cfg(feature = "arcache-is-hashtrie")]
 use crate::hashtrie::{
-    HashTrie as DataMap, HashTrieReadTxn as DataMapReadTxn, HashTrieWriteTxn as DataMapWriteTxn,
+    HashTrieRaw as DataMap, HashTrieReadTxn as DataMapReadTxn, HashTrieWriteTxn as DataMapWriteTxn,
 };
+use crate::utils::{self, Monotonic};
 
 use crossbeam_queue::ArrayQueue;
-use std::collections::HashMap as Map;
+use hashbrown::HashMap as Map;
+use lock_api::{Mutex, RawMutex, RawRwLock, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::sync::{Mutex, RwLock};
 
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -41,7 +46,6 @@ use std::mem;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::time::Instant;
 
 use tracing::trace;
 
@@ -59,18 +63,76 @@ const WATERMARK_DISABLE_MIN: usize = 128;
 const WATERMARK_DISABLE_DIVISOR: usize = 20;
 const WATERMARK_DISABLE_RATIO: usize = 18;
 
+#[cfg(feature = "std")]
+mod monotonic_timer {
+    pub struct MonotonicTimer;
+
+    unsafe impl crate::utils::Monotonic for MonotonicTimer {
+        type Output = std::time::Instant;
+
+        fn new() -> Self {
+            MonotonicTimer
+        }
+
+        fn current(&self) -> Self::Output {
+            self.next()
+        }
+
+        fn next(&self) -> Self::Output {
+            std::time::Instant::now()
+        }
+    }
+}
+
+#[cfg(not(feature = "std"))]
+mod monotonic_timer {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    /// This provides a mnonotonic generation counter, with the bit width equal to the pointer width of the platform.
+    ///
+    /// # SAFETY
+    ///
+    /// This wraps around on overflow, so the result becomes invalid if you call it more than `usize::MAX`.
+    /// Overflow will panic on debug, and continue on release mode.
+    pub struct MonotonicTimer(AtomicUsize);
+
+    unsafe impl crate::utils::Monotonic for MonotonicTimer {
+        type Output = usize;
+
+        fn new() -> Self {
+            Self(AtomicUsize::new(0))
+        }
+
+        fn current(&self) -> Self::Output {
+            // If you are calling this function, you probably want more guarantees about the relative ordering.
+            // Therefore, we use Acquire semantics to get the best ordering for loads withour requiring SeqSct for everything
+            self.0.load(Ordering::Acquire)
+        }
+
+        fn next(&self) -> Self::Output {
+            // we can use relaxed ordering here as it still guarantees that each value will only be observed once.
+            // the downside is that close calls may have re-ordered insertion do the relaxed ordering on the read.
+            let counter = self.0.fetch_add(1, Ordering::Relaxed);
+            debug_assert!(
+                counter != usize::MAX,
+                "The default monotonic counter reached the maximum number of valid calls"
+            );
+            counter
+        }
+    }
+}
+
 enum ThreadCacheItem<V> {
     Present(V, bool, usize),
     Removed(bool),
 }
 
-struct CacheHitEvent {
-    t: Instant,
+struct CacheHitEvent<M: Monotonic> {
+    t: M::Output,
     k_hash: u64,
 }
 
-struct CacheIncludeEvent<K, V> {
-    t: Instant,
+struct CacheIncludeEvent<K, V, M: Monotonic> {
+    t: M::Output,
     k: K,
     v: V,
     txid: u64,
@@ -147,10 +209,11 @@ pub(crate) struct CStat {
     p: usize,
 }
 
-struct ArcInner<K, V>
+struct ArcInner<K, V, M>
 where
     K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Debug + Sync + Send + 'static,
+    M: Monotonic,
 {
     /// Weight of items between the two caches.
     p: usize,
@@ -159,22 +222,23 @@ where
     ghost_freq: LL<CacheItemInner<K>>,
     ghost_rec: LL<CacheItemInner<K>>,
     haunted: LL<CacheItemInner<K>>,
-    hit_queue: Arc<ArrayQueue<CacheHitEvent>>,
-    inc_queue: Arc<ArrayQueue<CacheIncludeEvent<K, V>>>,
+    hit_queue: Arc<ArrayQueue<CacheHitEvent<M>>>,
+    inc_queue: Arc<ArrayQueue<CacheIncludeEvent<K, V, M>>>,
     min_txid: u64,
 }
 
-struct ArcShared<K, V>
+struct ArcShared<K, V, M>
 where
     K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Debug + Sync + Send + 'static,
+    M: Monotonic,
 {
     // Max number of elements to cache.
     max: usize,
     // Max number of elements for a reader per thread.
     read_max: usize,
-    hit_queue: Arc<ArrayQueue<CacheHitEvent>>,
-    inc_queue: Arc<ArrayQueue<CacheIncludeEvent<K, V>>>,
+    hit_queue: Arc<ArrayQueue<CacheHitEvent<M>>>,
+    inc_queue: Arc<ArrayQueue<CacheIncludeEvent<K, V, M>>>,
     /// The number of items that are present in the cache before we start to process
     /// the arc sets/lists.
     watermark: usize,
@@ -182,36 +246,55 @@ where
     reader_quiesce: bool,
 }
 
+/// ARCache structure with default sychronisation primitives for write transaction locking.
+#[cfg(feature = "std")]
+pub type ARCache<K, V> = ARCacheRaw<K,V, monotonic_timer::MonotonicTimer, parking_lot::RawMutex, parking_lot::RawRwLock>;
+
 /// A concurrently readable adaptive replacement cache. Operations are performed on the
 /// cache via read and write operations.
-pub struct ARCache<K, V>
-where
+pub struct ARCacheRaw<
+    K,
+    V,
+    MonotonicCounter,
+    RawMutexImpl,
+    RawRwLockImpl,
+> where
     K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Debug + Sync + Send + 'static,
+    MonotonicCounter: Monotonic + 'static,
+    RawMutexImpl: RawMutex + 'static,
+    RawRwLockImpl: RawRwLock + 'static,
 {
     // Use a unified tree, allows simpler movement of items between the
     // cache types.
-    cache: DataMap<K, CacheItem<K, V>>,
+    cache: DataMap<K, CacheItem<K, V>, RawMutexImpl>,
     // This is normally only ever taken in "read" mode, so it's effectively
     // an uncontended barrier.
-    shared: RwLock<ArcShared<K, V>>,
+    shared: RwLock<RawRwLockImpl, ArcShared<K, V, MonotonicCounter>>,
     // These are only taken during a quiesce
-    inner: Mutex<ArcInner<K, V>>,
+    inner: Mutex<RawMutexImpl, ArcInner<K, V, MonotonicCounter>>,
     // stats: CowCell<CacheStats>,
     above_watermark: AtomicBool,
     look_back_limit: u64,
+    monotonic: MonotonicCounter,
 }
 
 unsafe impl<
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
         V: Clone + Debug + Sync + Send + 'static,
-    > Send for ARCache<K, V>
+        M: Monotonic + Send + Send + 'static,
+        Mutex: RawMutex + Sync + Send + 'static,
+        RwLock: RawRwLock + Sync + Send + 'static,
+    > Send for ARCacheRaw<K, V, M, Mutex, RwLock>
 {
 }
 unsafe impl<
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
         V: Clone + Debug + Sync + Send + 'static,
-    > Sync for ARCache<K, V>
+        M: Monotonic + Send + 'static,
+        Mutex: RawMutex + Sync + 'static,
+        RwLock: RawRwLock + Sync + 'static,
+    > Sync for ARCacheRaw<K, V, M, Mutex, RwLock>
 {
 }
 
@@ -252,18 +335,21 @@ where
 /// An active read transaction over the cache. The data is this cache is guaranteed to be
 /// valid at the point in time the read is created. You may include items during a cache
 /// miss via the "insert" function.
-pub struct ARCacheReadTxn<'a, K, V, S>
+pub struct ARCacheReadTxn<'a, K, V, S, M, Mutex, RwLock>
 where
     K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Debug + Sync + Send + 'static,
     S: ARCacheReadStat + Clone,
+    M: Monotonic + 'static,
+    Mutex: RawMutex + 'static,
+    RwLock: RawRwLock + 'static,
 {
-    caller: &'a ARCache<K, V>,
+    caller: &'a ARCacheRaw<K, V, M, Mutex, RwLock>,
     // ro_txn to cache
-    cache: DataMapReadTxn<'a, K, CacheItem<K, V>>,
+    cache: DataMapReadTxn<'a, K, CacheItem<K, V>, Mutex>,
     tlocal: Option<ReadCache<K, V>>,
-    hit_queue: Arc<ArrayQueue<CacheHitEvent>>,
-    inc_queue: Arc<ArrayQueue<CacheIncludeEvent<K, V>>>,
+    hit_queue: Arc<ArrayQueue<CacheHitEvent<M>>>,
+    inc_queue: Arc<ArrayQueue<CacheIncludeEvent<K, V, M>>>,
     above_watermark: bool,
     reader_quiesce: bool,
     stats: S,
@@ -273,14 +359,20 @@ unsafe impl<
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
         V: Clone + Debug + Sync + Send + 'static,
         S: ARCacheReadStat + Clone + Sync + Send + 'static,
-    > Send for ARCacheReadTxn<'_, K, V, S>
+        M: Monotonic + Sync + Send + 'static,
+        Mutex: RawMutex + Sync + Send + 'static,
+        RwLock: RawRwLock + Sync + Send + 'static,
+    > Send for ARCacheReadTxn<'_, K, V, S, M, Mutex, RwLock>
 {
 }
 unsafe impl<
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
         V: Clone + Debug + Sync + Send + 'static,
         S: ARCacheReadStat + Clone + Sync + Send + 'static,
-    > Sync for ARCacheReadTxn<'_, K, V, S>
+        M: Monotonic + Sync + 'static,
+        Mutex: RawMutex + Sync + 'static,
+        RwLock: RawRwLock + Sync + 'static,
+    > Sync for ARCacheReadTxn<'_, K, V, S, M, Mutex, RwLock>
 {
 }
 
@@ -288,15 +380,18 @@ unsafe impl<
 /// from readers, and may be rolled-back if an error occurs. Changes only become
 /// globally visible once you call "commit". Items may be added to the cache on
 /// a miss via "insert", and you can explicitly remove items by calling "remove".
-pub struct ARCacheWriteTxn<'a, K, V, S>
+pub struct ARCacheWriteTxn<'a, K, V, S, M, Mutex, RwLock>
 where
     K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
     V: Clone + Debug + Sync + Send + 'static,
     S: ARCacheWriteStat<K>,
+    M: Monotonic + 'static,
+    Mutex: RawMutex + 'static,
+    RwLock: RawRwLock + 'static,
 {
-    caller: &'a ARCache<K, V>,
+    caller: &'a ARCacheRaw<K, V, M, Mutex, RwLock>,
     // wr_txn to cache
-    cache: DataMapWriteTxn<'a, K, CacheItem<K, V>>,
+    cache: DataMapWriteTxn<'a, K, CacheItem<K, V>, Mutex>,
     // Cache of missed items (w_ dirty/clean)
     // On COMMIT we drain this to the main cache
     tlocal: Map<K, ThreadCacheItem<V>>,
@@ -342,15 +437,16 @@ impl<
 }
 
 /// A configurable builder to create new concurrent Adaptive Replacement Caches.
-pub struct ARCacheBuilder {
+pub struct ARCacheBuilder<M: utils::Monotonic> {
     max: Option<usize>,
     read_max: Option<usize>,
     watermark: Option<usize>,
     reader_quiesce: bool,
     look_back_limit: Option<u8>,
+    monotonic: Option<M>,
 }
 
-impl Default for ARCacheBuilder {
+impl<M: utils::Monotonic> Default for ARCacheBuilder<M> {
     fn default() -> Self {
         ARCacheBuilder {
             max: None,
@@ -358,11 +454,15 @@ impl Default for ARCacheBuilder {
             watermark: None,
             reader_quiesce: true,
             look_back_limit: None,
+            monotonic: None,
         }
     }
 }
 
-impl ARCacheBuilder {
+impl<M> ARCacheBuilder<M>
+where
+    M: Monotonic,
+{
     /// Create a new ARCache builder that you can configure before creation.
     pub fn new() -> Self {
         Self::default()
@@ -429,6 +529,7 @@ impl ARCacheBuilder {
             watermark: self.watermark,
             reader_quiesce: self.reader_quiesce,
             look_back_limit: self.look_back_limit,
+            ..self
         }
     }
 
@@ -477,7 +578,9 @@ impl ARCacheBuilder {
 
     /// Consume this builder, returning a cache if successful. If configured parameters are
     /// missing or incorrect, a None will be returned.
-    pub fn build<K, V>(self) -> Option<ARCache<K, V>>
+    pub fn build<K, V, RawMutexImpl: RawMutex, RawRwLockImpl: RawRwLock>(
+        self,
+    ) -> Option<ARCacheRaw<K, V, M, RawMutexImpl, RawRwLockImpl>>
     where
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
         V: Clone + Debug + Sync + Send + 'static,
@@ -489,6 +592,7 @@ impl ARCacheBuilder {
             watermark,
             reader_quiesce,
             look_back_limit,
+            monotonic,
         } = self;
 
         let (max, read_max) = max.zip(read_max)?;
@@ -520,7 +624,7 @@ impl ARCacheBuilder {
         let chan_size = READ_THREAD_CHANNEL_SIZE;
         let inc_queue = Arc::new(ArrayQueue::new(chan_size));
 
-        let shared = RwLock::new(ArcShared {
+        let shared = RwLock::<RawRwLockImpl, ArcShared<K, V, M>>::new(ArcShared {
             max,
             read_max,
             // stat_tx,
@@ -529,7 +633,7 @@ impl ARCacheBuilder {
             watermark,
             reader_quiesce,
         });
-        let inner = Mutex::new(ArcInner {
+        let inner = Mutex::<RawMutexImpl, ArcInner<K, V, M>>::new(ArcInner {
             // We use p from the former stats.
             p: 0,
             freq: LL::new(),
@@ -543,13 +647,14 @@ impl ARCacheBuilder {
             min_txid: 0,
         });
 
-        Some(ARCache {
+        Some(ARCacheRaw {
             cache: DataMap::new(),
             shared,
             inner,
             // stats: CowCell::new(stats),
             above_watermark: AtomicBool::new(init_watermark),
             look_back_limit,
+            monotonic: monotonic.unwrap_or(M::new()),
         })
     }
 }
@@ -557,7 +662,10 @@ impl ARCacheBuilder {
 impl<
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
         V: Clone + Debug + Sync + Send + 'static,
-    > ARCache<K, V>
+        M: Monotonic + 'static,
+        Mutex: RawMutex + 'static,
+        RwLock: RawRwLock + 'static,
+    > ARCacheRaw<K, V, M, Mutex, RwLock>
 {
     /// Use ARCacheBuilder instead
     #[deprecated(since = "0.2.20", note = "please use`ARCacheBuilder` instead")]
@@ -596,11 +704,11 @@ impl<
     /// Begin a read operation on the cache. This reader has a thread-local cache for items
     /// that are localled included via `insert`, and can communicate back to the main cache
     /// to safely include items.
-    pub fn read_stats<S>(&self, stats: S) -> ARCacheReadTxn<'_, K, V, S>
+    pub fn read_stats<S>(&self, stats: S) -> ARCacheReadTxn<'_, K, V, S, M, Mutex, RwLock>
     where
         S: ARCacheReadStat + Clone,
     {
-        let rshared = self.shared.read().unwrap();
+        let rshared = self.shared.read();
         let tlocal = if rshared.read_max > 0 {
             Some(ReadCache {
                 set: Map::new(),
@@ -627,19 +735,19 @@ impl<
     /// Begin a read operation on the cache. This reader has a thread-local cache for items
     /// that are localled included via `insert`, and can communicate back to the main cache
     /// to safely include items.
-    pub fn read(&self) -> ARCacheReadTxn<'_, K, V, ()> {
+    pub fn read(&self) -> ARCacheReadTxn<'_, K, V, (), M, Mutex, RwLock> {
         self.read_stats(())
     }
 
     /// Begin a write operation on the cache. This writer has a thread-local store
     /// for all items that have been included or dirtied in the transactions, items
     /// may be removed from this cache (ie deleted, invalidated).
-    pub fn write(&self) -> ARCacheWriteTxn<'_, K, V, ()> {
+    pub fn write(&self) -> ARCacheWriteTxn<'_, K, V, (), M, Mutex, RwLock> {
         self.write_stats(())
     }
 
     /// _
-    pub fn write_stats<S>(&self, stats: S) -> ARCacheWriteTxn<'_, K, V, S>
+    pub fn write_stats<S>(&self, stats: S) -> ARCacheWriteTxn<'_, K, V, S, M, Mutex, RwLock>
     where
         S: ARCacheWriteStat<K>,
     {
@@ -656,7 +764,10 @@ impl<
         }
     }
 
-    fn try_write_stats<S>(&self, stats: S) -> Result<ARCacheWriteTxn<'_, K, V, S>, S>
+    fn try_write_stats<S>(
+        &self,
+        stats: S,
+    ) -> Result<ARCacheWriteTxn<'_, K, V, S, M, Mutex, RwLock>, S>
     where
         S: ARCacheWriteStat<K>,
     {
@@ -737,9 +848,9 @@ impl<
 
     fn drain_tlocal_inc<S>(
         &self,
-        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
-        inner: &mut ArcInner<K, V>,
-        shared: &ArcShared<K, V>,
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>, Mutex>,
+        inner: &mut ArcInner<K, V, M>,
+        shared: &ArcShared<K, V, M>,
         tlocal: Map<K, ThreadCacheItem<V>>,
         commit_txid: u64,
         stats: &mut S,
@@ -883,9 +994,9 @@ impl<
 
     fn drain_hit_rx(
         &self,
-        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
-        inner: &mut ArcInner<K, V>,
-        commit_ts: Instant,
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>, Mutex>,
+        inner: &mut ArcInner<K, V, M>,
+        commit_ts: M::Output,
     ) {
         // * for each item
         // while let Ok(ce) = inner.rx.try_recv() {
@@ -935,10 +1046,10 @@ impl<
 
     fn drain_inc_rx<S>(
         &self,
-        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
-        inner: &mut ArcInner<K, V>,
-        shared: &ArcShared<K, V>,
-        commit_ts: Instant,
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>, Mutex>,
+        inner: &mut ArcInner<K, V, M>,
+        shared: &ArcShared<K, V, M>,
+        commit_ts: M::Output,
         stats: &mut S,
     ) where
         S: ARCacheWriteStat<K>,
@@ -1083,8 +1194,8 @@ impl<
 
     fn drain_tlocal_hits(
         &self,
-        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
-        inner: &mut ArcInner<K, V>,
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>, Mutex>,
+        inner: &mut ArcInner<K, V, M>,
         // shared: &ArcShared<K, V>,
         commit_txid: u64,
         hit: Vec<u64>,
@@ -1150,7 +1261,7 @@ impl<
     }
 
     fn evict_to_haunted_len(
-        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>, Mutex>,
         ll: &mut LL<CacheItemInner<K>>,
         to_ll: &mut LL<CacheItemInner<K>>,
         size: usize,
@@ -1181,7 +1292,7 @@ impl<
     }
 
     fn evict_to_len<S>(
-        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>, Mutex>,
         ll: &mut LL<CacheItemInner<K>>,
         to_ll: &mut LL<CacheItemInner<K>>,
         size: usize,
@@ -1236,9 +1347,9 @@ impl<
     #[allow(clippy::cognitive_complexity)]
     fn evict<S>(
         &self,
-        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
-        inner: &mut ArcInner<K, V>,
-        shared: &ArcShared<K, V>,
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>, Mutex>,
+        inner: &mut ArcInner<K, V, M>,
+        shared: &ArcShared<K, V, M>,
         commit_txid: u64,
         stats: &mut S,
     ) where
@@ -1369,7 +1480,7 @@ impl<
     }
 
     fn drain_ll_to_ghost<S>(
-        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>, Mutex>,
         ll: &mut LL<CacheItemInner<K>>,
         gf: &mut LL<CacheItemInner<K>>,
         gr: &mut LL<CacheItemInner<K>>,
@@ -1418,7 +1529,7 @@ impl<
     }
 
     fn drain_ll_min_txid(
-        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>>,
+        cache: &mut DataMapWriteTxn<K, CacheItem<K, V>, Mutex>,
         ll: &mut LL<CacheItemInner<K>>,
         min_txid: u64,
     ) {
@@ -1440,7 +1551,7 @@ impl<
     #[allow(clippy::unnecessary_mut_passed)]
     fn commit<S>(
         &self,
-        mut cache: DataMapWriteTxn<K, CacheItem<K, V>>,
+        mut cache: DataMapWriteTxn<K, CacheItem<K, V>, Mutex>,
         tlocal: Map<K, ThreadCacheItem<V>>,
         hit: Vec<u64>,
         clear: bool,
@@ -1452,11 +1563,11 @@ impl<
         S: ARCacheWriteStat<K>,
     {
         // What is the time?
-        let commit_ts = Instant::now();
+        let commit_generation = self.monotonic.next();
         let commit_txid = cache.get_txid();
         // Copy p + init cache sizes for adjustment.
-        let mut inner = self.inner.lock().unwrap();
-        let shared = self.shared.read().unwrap();
+        let mut inner = self.inner.lock();
+        let shared = self.shared.read();
 
         // Did we request to be cleared? If so, we move everything to a ghost set
         // that was live.
@@ -1514,11 +1625,11 @@ impl<
             &mut cache,
             inner.deref_mut(),
             shared.deref(),
-            commit_ts,
+            commit_generation,
             &mut stats,
         );
 
-        self.drain_hit_rx(&mut cache, inner.deref_mut(), commit_ts);
+        self.drain_hit_rx(&mut cache, inner.deref_mut(), commit_generation);
 
         // drain the tlocal hits into the main cache.
 
@@ -1582,7 +1693,10 @@ impl<
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
         V: Clone + Debug + Sync + Send + 'static,
         S: ARCacheWriteStat<K>,
-    > ARCacheWriteTxn<'_, K, V, S>
+        M: Monotonic + 'static,
+        Mutex: RawMutex + 'static,
+        RwLock: RawRwLock + 'static,
+    > ARCacheWriteTxn<'_, K, V, S, M, Mutex, RwLock>
 {
     /// Commit the changes of this writer, making them globally visible. This causes
     /// all items written to this thread's local store to become visible in the main
@@ -1952,8 +2066,8 @@ impl<
 
     #[cfg(test)]
     pub(crate) fn peek_stat(&self) -> CStat {
-        let inner = self.caller.inner.lock().unwrap();
-        let shared = self.caller.shared.read().unwrap();
+        let inner = self.caller.inner.lock();
+        let shared = self.caller.shared.read();
         CStat {
             max: shared.max,
             cache: self.cache.len(),
@@ -1974,7 +2088,10 @@ impl<
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
         V: Clone + Debug + Sync + Send + 'static,
         S: ARCacheReadStat + Clone,
-    > ARCacheReadTxn<'_, K, V, S>
+        M: Monotonic + 'static,
+        Mutex: RawMutex,
+        RwLock: RawRwLock,
+    > ARCacheReadTxn<'_, K, V, S, M, Mutex, RwLock>
 {
     /// Attempt to retrieve a k-v pair from the cache. If it is present in the main cache OR
     /// the thread local cache, a `Some` is returned, else you will receive a `None`. On a
@@ -2003,7 +2120,7 @@ impl<
 
                     if self.above_watermark {
                         let _ = self.hit_queue.push(CacheHitEvent {
-                            t: Instant::now(),
+                            t: self.caller.monotonic.next(),
                             k_hash,
                         });
                     }
@@ -2022,7 +2139,7 @@ impl<
 
                         if self.above_watermark {
                             let _ = self.hit_queue.push(CacheHitEvent {
-                                t: Instant::now(),
+                                t: self.caller.monotonic.next(),
                                 k_hash,
                             });
                         }
@@ -2062,7 +2179,7 @@ impl<
         if self
             .inc_queue
             .push(CacheIncludeEvent {
-                t: Instant::now(),
+                t: self.caller.monotonic.next(),
                 k: k.clone(),
                 v: v.clone(),
                 txid: self.cache.get_txid(),
@@ -2129,7 +2246,10 @@ impl<
         K: Hash + Eq + Ord + Clone + Debug + Sync + Send + 'static,
         V: Clone + Debug + Sync + Send + 'static,
         S: ARCacheReadStat + Clone,
-    > Drop for ARCacheReadTxn<'_, K, V, S>
+        M: Monotonic + 'static,
+        Mutex: RawMutex,
+        RwLock: RawRwLock,
+    > Drop for ARCacheReadTxn<'_, K, V, S, M, Mutex, RwLock>
 {
     fn drop(&mut self) {
         // We could make this check the queue sizes rather than blindly quiescing

@@ -14,7 +14,15 @@ use std::ptr;
 use smallvec::SmallVec;
 
 #[cfg(feature = "simd_support")]
-use core_simd::u64x8;
+use std::simd::u64x8;
+
+#[cfg(not(feature = "std"))]
+use alloc::{boxed, vec};
+#[cfg(feature = "std")]
+use std::{boxed, vec};
+
+use boxed::Box;
+use vec::Vec;
 
 #[cfg(test)]
 use std::collections::BTreeSet;
@@ -96,6 +104,7 @@ pub(crate) fn assert_released() {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub(crate) struct Meta(u64);
 
@@ -652,7 +661,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             for idx in 0..self.slots() {
                 unsafe {
                     let lvalue: Bucket<K, V> = (*self.values[idx].as_ptr()).clone();
-                    (&mut (*x)).values[idx].as_mut_ptr().write(lvalue);
+                    (&mut (*x)).values[idx].write(lvalue);
                 }
             }
 
@@ -903,11 +912,11 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Leaf<K, V> {
             // Eq not ok as we have buckets.
             if lk >= rk {
                 // println!("{:?}", self);
-                if cfg!(test) {
+                cfg_if::cfg_if! { if #[cfg(test)] {
                     return false;
                 } else {
                     debug_assert!(false);
-                }
+                }}
             }
             lk = rk;
         }
@@ -1938,6 +1947,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         // Check everything above slots is u64::max
         for work_idx in unsafe { self.ctrl.a.0.slots() }..H_CAPACITY {
             if unsafe { self.ctrl.a.1[work_idx] } != u64::MAX {
+                #[cfg(feature = "std")]
                 eprintln!("FAILED ARRAY -> {:?}", unsafe { self.ctrl.a.1 });
                 debug_assert!(false);
             }

@@ -1,10 +1,14 @@
 //! Iterators for the hashtrie
 
-use super::cursor::{Ptr, HT_CAPACITY, MAX_HEIGHT};
+#[cfg(not(feature = "std"))]
+use alloc::collections::VecDeque;
+#[cfg(feature = "std")]
 use std::collections::VecDeque;
-use std::fmt::Debug;
-use std::hash::Hash;
-use std::marker::PhantomData;
+
+use super::cursor::{Ptr, HT_CAPACITY, MAX_HEIGHT};
+use core::fmt::Debug;
+use core::hash::Hash;
+use core::marker::PhantomData;
 
 /// Iterator over references to Key Value pairs stored in the map.
 pub struct Iter<'a, K, V>

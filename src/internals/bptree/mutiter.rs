@@ -81,9 +81,9 @@ mod tests {
     use super::super::cursor::SuperBlock;
     use super::super::node::{Leaf, Node, L_CAPACITY};
     use super::RangeMutIter;
-    use std::ops::Bound;
-    use std::ops::Bound::*;
+    use std::ops::Bound::{self, *};
 
+    use crate::internals::bptree::cursor::{CursorRead, CursorWrite};
     use crate::internals::lincowcell::LinCowCellCapable;
 
     fn create_leaf_node_full(vbase: usize) -> *mut Node<usize, usize> {
@@ -104,7 +104,10 @@ mod tests {
         let node = create_leaf_node_full(10);
 
         let sb = SuperBlock::new_test(1, node as *mut Node<usize, usize>);
-        let mut wcurs = sb.create_writer();
+        let mut wcurs = <SuperBlock<usize, usize> as LinCowCellCapable<
+            CursorRead<usize, usize, parking_lot::RawMutex>,
+            CursorWrite<usize, usize>,
+        >>::create_writer(&sb);
 
         let bounds: (Bound<usize>, Bound<usize>) = (Unbounded, Unbounded);
         let range_mut_iter = RangeMutIter::new(&mut wcurs, bounds);
