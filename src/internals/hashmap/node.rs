@@ -2206,8 +2206,7 @@ mod tests {
         assert!(leaf.count() == H_CAPACITY);
         assert!(leaf.slots() == 1);
         // Check update to capacity
-        for idx in 0..H_CAPACITY {
-            let kv = kvs[idx];
+        for kv in kvs.into_iter().take(H_CAPACITY) {
             let r = leaf.insert_or_update(hash, kv, kv);
             if let LeafInsertState::Ok(Some(pkv)) = r {
                 assert!(pkv == kv);
@@ -2227,7 +2226,6 @@ mod tests {
     fn test_hashmap2_node_leaf_min() {
         let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf };
-        assert!(H_CAPACITY <= 8);
 
         let kvs = [3, 2, 6, 4, 5, 1, 9, 0];
         let min: [u64; 8] = [3, 2, 2, 2, 2, 1, 1, 0];
@@ -2252,7 +2250,6 @@ mod tests {
     fn test_hashmap2_node_leaf_max() {
         let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf };
-        assert!(H_CAPACITY <= 8);
 
         let kvs = [1, 3, 2, 6, 4, 5, 9, 0];
         let max: [u64; 8] = [1, 3, 3, 6, 6, 6, 9, 9];

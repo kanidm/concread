@@ -224,7 +224,7 @@ mod tests {
         assert!(hmap_w1.is_empty());
         hmap_w1.insert(10, 10);
         // just coverage things
-        hmap_w1.extend([(15, 15)].into_iter());
+        hmap_w1.extend([(15, 15)]);
         assert!(!hmap_w1.is_empty());
         hmap_w1.commit();
 
@@ -294,9 +294,9 @@ mod tests {
     fn test_hashtrie_keys() {
         let hmap: HashTrie<usize, usize> = vec![(10, 10), (15, 15), (20, 20)].into_iter().collect();
         let hmap_read = hmap.read();
-        assert!(hmap_read.keys().find(|&&x| x == 10).is_some());
+        assert!(hmap_read.keys().any(|&x| x == 10));
         let hmap_write = hmap.write();
-        assert!(hmap_write.keys().find(|&&x| x == 10).is_some());
+        assert!(hmap_write.keys().any(|&x| x == 10));
     }
 
     #[test]
