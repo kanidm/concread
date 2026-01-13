@@ -124,7 +124,7 @@ where
 
     /// Begin a read transaction of this thread local cache. In the start of this read
     /// invalidation requests will be acknowledged.
-    pub fn read(&mut self) -> ThreadLocalReadTxn<K, V> {
+    pub fn read(&mut self) -> ThreadLocalReadTxn<'_, K, V> {
         let txid = self.inv_up_to_txid.load(Ordering::Acquire);
 
         let parent = self.invalidate(txid);
@@ -134,7 +134,7 @@ where
     /// Begin a write transaction of this thread local cache. Once granted, only this
     /// thread may be in the write state - all other threads will either block on
     /// acquiring the write, or they can proceed to read.
-    pub fn write(&mut self) -> ThreadLocalWriteTxn<K, V> {
+    pub fn write(&mut self) -> ThreadLocalWriteTxn<'_, K, V> {
         // SAFETY this is safe, because while we are duplicating the mutable reference
         // which conflicts with the mutex, we aren't change the wrlock value so the mutex
         // is fine.
@@ -153,7 +153,8 @@ where
             inv_up_to_txid,
         }
     }
-
+    // This allow is here because the lifetime syntax is mismatched, but correct
+    #[allow(mismatched_lifetime_syntaxes)]
     fn invalidate(&self, up_to: u64) -> MutexGuard<Inner<K, V>> {
         let mut inner = self.inner.lock().unwrap();
 

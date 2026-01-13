@@ -1,6 +1,6 @@
 [package]
 name = "concread"
-version = "0.5.7"
+version = "0.6.0"
 authors = ["William Brown <william@blackhats.net.au>"]
 edition = "2021"
 description = "Concurrently Readable Data-Structures for Rust"
@@ -45,7 +45,7 @@ arcache-is-hashtrie = ["arcache"]
 simd_support = []
 
 [dependencies]
-ahash = { version = "0.8", optional = true }
+ahash = { version = "0.8.12", optional = true }
 foldhash = { version = "0.1.5", optional = true }
 crossbeam-utils = { version = "0.8.21", optional = true }
 crossbeam-epoch = { version = "0.9.11", optional = true }
