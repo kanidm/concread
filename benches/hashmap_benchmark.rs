@@ -19,8 +19,9 @@ extern crate criterion;
 extern crate rand;
 
 use concread::hashmap::*;
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use rand::{rng, Rng};
+use std::hint::black_box;
 
 // ranges of counts for different benchmarks (MINs are inclusive, MAXes exclusive):
 const INSERT_COUNT_MIN: usize = 120;
