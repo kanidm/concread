@@ -325,10 +325,9 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
 
     #[cfg(test)]
     #[inline(always)]
-    pub(crate) fn get_ref<Q: ?Sized>(&self, h: u64, k: &Q) -> Option<&V>
+    pub(crate) fn get_ref<Q: ?Sized + Eq>(&self, h: u64, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Eq,
     {
         match unsafe { self.ctrl.a.0 .0 } & FLAG_MASK {
             FLAG_HASH_LEAF => {
@@ -1092,10 +1091,9 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
     }
 
     #[cfg(test)]
-    pub(crate) fn get_ref<Q: ?Sized>(&self, h: u64, k: &Q) -> Option<&V>
+    pub(crate) fn get_ref<Q: ?Sized + Eq>(&self, h: u64, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Eq,
     {
         debug_assert_branch!(self);
         let idx = self.locate_node(h);

@@ -2296,7 +2296,7 @@ mod tests {
     #[test]
     fn test_bptree2_cursor_remove_15() {
         // Test leaf borrow right.
-        let lnode = create_leaf_node(10) as *mut Node<usize, usize>;
+        let lnode = create_leaf_node(10);
         let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);

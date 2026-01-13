@@ -315,10 +315,9 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
 
     #[cfg(test)]
     #[inline(always)]
-    pub(crate) fn get_ref_raw<Q: ?Sized>(pointer: *const Self, k: &Q) -> Option<*const V>
+    pub(crate) fn get_ref_raw<Q: ?Sized + Ord>(pointer: *const Self, k: &Q) -> Option<*const V>
     where
         K: Borrow<Q>,
-        Q: Ord,
     {
         match unsafe { &*pointer }.meta.0 & FLAG_MASK {
             FLAG_LEAF => Leaf::<K, V>::get_ref_raw(pointer as *const _, k),
@@ -1060,10 +1059,9 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
     }
 
     #[cfg(test)]
-    pub(crate) fn get_ref_raw<Q: ?Sized>(pointer: *const Self, k: &Q) -> Option<*const V>
+    pub(crate) fn get_ref_raw<Q: ?Sized + Ord>(pointer: *const Self, k: &Q) -> Option<*const V>
     where
         K: Borrow<Q>,
-        Q: Ord,
     {
         let this = unsafe { &*pointer };
         debug_assert_branch!(this);

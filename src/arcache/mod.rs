@@ -1938,10 +1938,9 @@ impl<
     }
 
     #[cfg(test)]
-    pub(crate) fn peek_cache<Q: ?Sized>(&self, k: &Q) -> CacheState
+    pub(crate) fn peek_cache<Q: ?Sized + Hash + Eq + Ord>(&self, k: &Q) -> CacheState
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Ord,
     {
         if let Some(v) = self.cache.get(k) {
             (*v).to_state()
@@ -3154,7 +3153,6 @@ mod tests {
     }
 
     #[allow(dead_code)]
-
     pub static RUNNING: AtomicBool = AtomicBool::new(false);
 
     #[cfg(test)]
