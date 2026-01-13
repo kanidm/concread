@@ -284,7 +284,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
                 let mut lcount = 0; // leaf populated
                 let mut mcount = 0; // leaf max possible
                 for idx in 0..(bref.count() + 1) {
-                    let n = bref.nodes[idx] as *mut Node<K, V>;
+                    let n = bref.nodes[idx];
                     let (l, m) = Self::tree_density_raw(n);
                     lcount += l;
                     mcount += m;
@@ -377,10 +377,10 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         match unsafe { &*pointer }.meta.0 & FLAG_MASK {
             FLAG_LEAF => {
                 // check if we are in the set?
-                track.insert(pointer as *const Self)
+                track.insert(pointer)
             }
             FLAG_BRANCH => {
-                if track.insert(pointer as *const Self) {
+                if track.insert(pointer) {
                     // check
                     let bref = unsafe { &*(pointer as *const Branch<K, V>) };
                     for i in 0..(bref.count() + 1) {
@@ -2073,14 +2073,13 @@ mod tests {
         assert!(leaf.verify());
         assert!(leaf.count() == L_CAPACITY);
         // Check update to capacity
-        for idx in 0..L_CAPACITY {
-            let kv = kvs[idx];
-            let r = leaf.insert_or_update(kv, kv);
+        for kv in kvs.iter().take(L_CAPACITY) {
+            let r = leaf.insert_or_update(*kv, *kv);
             if let LeafInsertState::Ok(Some(pkv)) = r {
-                assert!(pkv == kv);
+                assert!(&pkv == kv);
                 assert!(leaf.get_ref(&kv) == Some(&kv));
             } else {
-                assert!(false);
+                panic!("Invalid Leaf InsertState");
             }
         }
         assert!(leaf.verify());
@@ -2093,7 +2092,6 @@ mod tests {
     fn test_bptree2_node_leaf_min() {
         let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf_raw };
-        assert!(L_CAPACITY <= 8);
 
         let kvs = [3, 2, 6, 4, 5, 1, 9, 0];
         let min = [3, 2, 2, 2, 2, 1, 1, 0];
@@ -2105,7 +2103,7 @@ mod tests {
                 assert!(leaf.get_ref(&kv) == Some(&kv));
                 assert!(leaf.min() == &min[idx]);
             } else {
-                assert!(false);
+                panic!("Invalid Leaf InsertState");
             }
         }
         assert!(leaf.verify());
@@ -2130,7 +2128,7 @@ mod tests {
                 assert!(leaf.get_ref(&kv) == Some(&kv));
                 assert!(leaf.max() == &max[idx]);
             } else {
-                assert!(false);
+                panic!("Invalid Leaf InsertState");
             }
         }
         assert!(leaf.verify());

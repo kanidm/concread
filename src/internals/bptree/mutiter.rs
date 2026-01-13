@@ -103,7 +103,7 @@ mod tests {
     fn test_bptree2_iter_mutrangeiter_1() {
         let node = create_leaf_node_full(10);
 
-        let sb = SuperBlock::new_test(1, node as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, node);
         let mut wcurs = sb.create_writer();
 
         let bounds: (Bound<usize>, Bound<usize>) = (Unbounded, Unbounded);

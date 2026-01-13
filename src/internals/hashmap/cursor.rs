@@ -2025,7 +2025,7 @@ mod tests {
         let root =
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _) as *mut Node<usize, usize>;
         // let count = HBV_CAPACITY + 2;
-        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root);
         let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
@@ -2090,7 +2090,7 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode) as *mut Node<usize, usize>;
-        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root);
         let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
