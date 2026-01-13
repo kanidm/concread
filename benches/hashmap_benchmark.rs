@@ -168,7 +168,7 @@ criterion_main!(insert, remove, search);
 fn insert_vec<V: Clone + Sync + Send + 'static>(
     map: &mut HashMap<u32, V>,
     list: Vec<(u32, V)>,
-) -> HashMapWriteTxn<u32, V> {
+) -> HashMapWriteTxn<'_, u32, V> {
     let mut write_txn = map.write();
     for (key, val) in list.into_iter() {
         write_txn.insert(key, val);
@@ -178,7 +178,7 @@ fn insert_vec<V: Clone + Sync + Send + 'static>(
 
 fn remove_vec<'a, V: Clone + Sync + Send + 'static>(
     map: &'a mut HashMap<u32, V>,
-    list: &Vec<u32>,
+    list: &[u32],
 ) -> HashMapWriteTxn<'a, u32, V> {
     let mut write_txn = map.write();
     for i in list.iter() {
@@ -187,7 +187,7 @@ fn remove_vec<'a, V: Clone + Sync + Send + 'static>(
     write_txn
 }
 
-fn search_vec<V: Clone + Sync + Send + 'static>(map: &HashMap<u32, V>, list: &Vec<u32>) {
+fn search_vec<V: Clone + Sync + Send + 'static>(map: &HashMap<u32, V>, list: &[u32]) {
     let read_txn = map.read();
     for i in list.iter() {
         read_txn.get(black_box(i));

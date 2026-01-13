@@ -2193,26 +2193,25 @@ mod tests {
         let kvs = [7, 5, 1, 6, 2, 3, 0, 8];
         assert!(leaf.get_txid() == 1);
         // Check insert to capacity
-        for idx in 0..H_CAPACITY {
-            let kv = kvs[idx];
-            let r = leaf.insert_or_update(hash, kv, kv);
+        for kv in kvs.iter().take(H_CAPACITY) {
+            let r = leaf.insert_or_update(hash, *kv, *kv);
             if let LeafInsertState::Ok(None) = r {
                 assert!(leaf.get_ref(hash, &kv) == Some(&kv));
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());
         assert!(leaf.count() == H_CAPACITY);
         assert!(leaf.slots() == 1);
         // Check update to capacity
-        for kv in kvs.into_iter().take(H_CAPACITY) {
-            let r = leaf.insert_or_update(hash, kv, kv);
+        for kv in kvs.iter().take(H_CAPACITY) {
+            let r = leaf.insert_or_update(hash, *kv, *kv);
             if let LeafInsertState::Ok(Some(pkv)) = r {
-                assert!(pkv == kv);
-                assert!(leaf.get_ref(hash, &kv) == Some(&kv));
+                assert!(pkv == *kv);
+                assert!(leaf.get_ref(hash, kv) == Some(&kv));
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());
@@ -2237,7 +2236,7 @@ mod tests {
                 assert!(leaf.get_ref(kv as u64, &kv) == Some(&kv));
                 assert!(leaf.min() == min[idx]);
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());
@@ -2261,7 +2260,7 @@ mod tests {
                 assert!(leaf.get_ref(kv as u64, &kv) == Some(&kv));
                 assert!(leaf.max() == max[idx]);
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());
@@ -2283,7 +2282,7 @@ mod tests {
             if let LeafRemoveState::Ok(Some(rkv)) = r {
                 assert!(rkv == kv);
             } else {
-                assert!(false);
+                panic!("Invalid leaf remove state");
             }
         }
         assert!(leaf.slots() == 1);
@@ -2293,7 +2292,7 @@ mod tests {
         if let LeafRemoveState::Ok(None) = r {
             // Ok!
         } else {
-            assert!(false);
+            panic!("Invalid leaf remove state");
         }
         // Finally clear the node, should request a shrink.
         let kv = H_CAPACITY - 1;
@@ -2301,7 +2300,7 @@ mod tests {
         if let LeafRemoveState::Shrink(Some(rkv)) = r {
             assert!(rkv == kv);
         } else {
-            assert!(false);
+            panic!("Invalid leaf remove state");
         }
         assert!(leaf.slots() == 0);
         // Remove non-existent post shrink. Should never happen
@@ -2310,7 +2309,7 @@ mod tests {
         if let LeafRemoveState::Shrink(None) = r {
             // Ok!
         } else {
-            assert!(false);
+            panic!("Invalid leaf remove state");
         }
 
         assert!(leaf.slots() == 0);
@@ -2362,7 +2361,7 @@ mod tests {
             if let LeafInsertState::Ok(None) = r {
                 assert!(leaf.get_ref(hash, &kv) == Some(&kv));
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());
