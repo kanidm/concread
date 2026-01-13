@@ -1685,7 +1685,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         let (ridx, idx) = if idx == 0 {
             // println!("clone_sibling_idx clone right");
             // If we are 0 we clone our right sibling,
-            // and return thet right idx as 1.
+            // and return the right idx as 1.
             (1, 1)
         } else {
             // println!("clone_sibling_idx clone left");
