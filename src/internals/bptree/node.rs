@@ -2033,7 +2033,7 @@ mod tests {
             if let LeafInsertState::Ok(None) = r {
                 assert!(leaf.get_ref(&kv) == Some(&kv));
             } else {
-                assert!(false);
+                panic!("Invalid Leaf InsertState");
             }
         }
         assert!(leaf.verify());
@@ -2044,7 +2044,7 @@ mod tests {
                 assert!(pkv == kv);
                 assert!(leaf.get_ref(&kv) == Some(&kv));
             } else {
-                assert!(false);
+                panic!("Invalid Leaf InsertState");
             }
         }
         assert!(Leaf::<usize, usize>::verify_raw(leaf_raw));
@@ -2057,17 +2057,15 @@ mod tests {
         let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf_raw };
 
-        assert!(L_CAPACITY <= 8);
         let kvs = [7, 5, 1, 6, 2, 3, 0, 8];
         assert!(leaf.get_txid() == 1);
         // Check insert to capacity
-        for idx in 0..L_CAPACITY {
-            let kv = kvs[idx];
-            let r = leaf.insert_or_update(kv, kv);
+        for kv in kvs.iter().take(L_CAPACITY) {
+            let r = leaf.insert_or_update(*kv, *kv);
             if let LeafInsertState::Ok(None) = r {
-                assert!(leaf.get_ref(&kv) == Some(&kv));
+                assert!(leaf.get_ref(kv) == Some(kv));
             } else {
-                assert!(false);
+                panic!("Invalid Leaf InsertState");
             }
         }
         assert!(leaf.verify());
@@ -2077,7 +2075,7 @@ mod tests {
             let r = leaf.insert_or_update(*kv, *kv);
             if let LeafInsertState::Ok(Some(pkv)) = r {
                 assert!(&pkv == kv);
-                assert!(leaf.get_ref(&kv) == Some(&kv));
+                assert!(leaf.get_ref(kv) == Some(kv));
             } else {
                 panic!("Invalid Leaf InsertState");
             }
@@ -2116,7 +2114,6 @@ mod tests {
     fn test_bptree2_node_leaf_max() {
         let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf_raw };
-        assert!(L_CAPACITY <= 8);
 
         let kvs = [1, 3, 2, 6, 4, 5, 9, 0];
         let max: [usize; 8] = [1, 3, 3, 6, 6, 6, 9, 9];
@@ -2150,7 +2147,7 @@ mod tests {
             if let LeafRemoveState::Ok(Some(rkv)) = r {
                 assert!(rkv == kv);
             } else {
-                assert!(false);
+                panic!("Invalid Leaf RemoveState");
             }
         }
         assert!(leaf.count() == 1);
@@ -2160,7 +2157,7 @@ mod tests {
         if let LeafRemoveState::Ok(None) = r {
             // Ok!
         } else {
-            assert!(false);
+            panic!("Invalid Leaf RemoveState");
         }
         // Finally clear the node, should request a shrink.
         let kv = L_CAPACITY - 1;
@@ -2168,7 +2165,7 @@ mod tests {
         if let LeafRemoveState::Shrink(Some(rkv)) = r {
             assert!(rkv == kv);
         } else {
-            assert!(false);
+            panic!("Invalid Leaf RemoveState");
         }
         assert!(leaf.count() == 0);
         // Remove non-existent post shrink. Should never happen
@@ -2177,7 +2174,7 @@ mod tests {
         if let LeafRemoveState::Shrink(None) = r {
             // Ok!
         } else {
-            assert!(false);
+            panic!("Invalid Leaf RemoveState");
         }
 
         assert!(leaf.count() == 0);

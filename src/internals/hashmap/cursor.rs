@@ -2066,7 +2066,7 @@ mod tests {
 
         let root =
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _) as *mut Node<usize, usize>;
-        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root);
         let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
@@ -2105,10 +2105,10 @@ mod tests {
     #[test]
     fn test_hashmap2_cursor_remove_15() {
         // Test leaf borrow right.
-        let lnode = create_leaf_node(10) as *mut Node<usize, usize>;
-        let rnode = create_leaf_node_full(20) as *mut Node<usize, usize>;
+        let lnode = create_leaf_node(10);
+        let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode) as *mut Node<usize, usize>;
-        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root);
         let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 

@@ -1468,6 +1468,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         debug_assert!(!left.is_null());
         debug_assert!(!right.is_null());
 
+        #[allow(clippy::needless_borrow)]
         match unsafe { (&(*left).ctrl.a).0 .0 & FLAG_MASK } {
             FLAG_HASH_LEAF => {
                 let lmut = leaf_ref!(left, K, V);
@@ -1781,6 +1782,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         let sib_ptr = self.nodes[idx];
         debug_assert!(!sib_ptr.is_null());
         // Do we need to clone?
+        #[allow(clippy::needless_borrow)]
         let res = match unsafe { (&(*sib_ptr).ctrl.a).0 .0 } & FLAG_MASK {
             FLAG_HASH_LEAF => {
                 let lref = unsafe { &*(sib_ptr as *const _ as *const Leaf<K, V>) };
