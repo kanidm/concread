@@ -703,7 +703,7 @@ mod tests {
     use std::ops::Bound::*;
 
     fn create_leaf_node_full(vbase: usize) -> *mut Node<usize, usize> {
-        assert!(vbase % 10 == 0);
+        assert!(vbase.is_multiple_of(10));
         let node = Node::new_leaf(0);
         {
             let nmut = leaf_ref!(node, usize, usize);

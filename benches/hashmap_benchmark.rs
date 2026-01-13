@@ -302,13 +302,13 @@ fn random_order(up_to: usize, n: usize) -> Vec<u32> {
     while remaining > 0 {
         let mut r = rng.random_range(0..remaining_elems);
         // find the r-th yet nongenerated number:
-        for i in 0..up_to {
-            if generated[i] {
+        for (i, value) in generated.iter_mut().enumerate().take(up_to) {
+            if *value {
                 continue;
             }
             if r == 0 {
                 order.push(i as u32);
-                generated[i] = true;
+                *value = true;
                 break;
             }
             r -= 1;

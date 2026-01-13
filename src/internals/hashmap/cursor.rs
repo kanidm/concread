@@ -275,7 +275,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
         let last_seen = Vec::with_capacity(16);
         let first_seen = Vec::with_capacity(16);
 
-        let build_hasher = sblock.build_hasher.clone();
+        let build_hasher = sblock.build_hasher;
 
         CursorWrite {
             txid,
@@ -534,7 +534,7 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for SuperBlock<K, V> {
 impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorRead<K, V> {
     pub(crate) fn new(sblock: &SuperBlock<K, V>) -> Self {
         // println!("starting rd txid -> {:?}", sblock.txid);
-        let build_hasher = sblock.build_hasher.clone();
+        let build_hasher = sblock.build_hasher;
         CursorRead {
             txid: sblock.txid,
             length: sblock.size,
@@ -1110,7 +1110,7 @@ mod tests {
     }
 
     fn create_leaf_node_full(vbase: usize) -> *mut Node<usize, usize> {
-        assert!(vbase % 10 == 0);
+        assert!(vbase.is_multiple_of(10));
         let node = Node::new_leaf(1);
         {
             let nmut = leaf_ref!(node, usize, usize);

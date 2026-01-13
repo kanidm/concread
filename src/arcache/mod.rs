@@ -3192,7 +3192,6 @@ mod tests {
         RUNNING.store(true, Ordering::Relaxed);
 
         let handles: Vec<_> = (0..thread_count)
-            .into_iter()
             .map(|_| {
                 // Build the threads.
                 let cache = arc.clone();
