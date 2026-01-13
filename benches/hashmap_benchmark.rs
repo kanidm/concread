@@ -249,7 +249,7 @@ fn prepare_insert<V: Clone + Sync + Send + 'static>(value: V) -> (HashMap<u32, V
     for _ in 0..count {
         list.push((
             rng.random_range(0..INSERT_COUNT_MAX << 8) as u32,
-            value.clone(),
+            value.to_owned(),
         ));
     }
     (HashMap::new(), list)

@@ -55,7 +55,7 @@ where
         match self {
             AccessPattern::Random(min, max) => {
                 let mut rng = thread_rng();
-                rng.gen_range(min.clone()..max.clone())
+                rng.gen_range(*min..*max)
             }
         }
     }
@@ -209,10 +209,10 @@ where
         .into_iter()
         .map(|cache| {
             // Build the threads.
-            let back_set = backing_set.clone();
-            let back_set_delay = backing_set_delay.clone();
             let pat = access_pattern.clone();
-            thread::spawn(move || tlocal_multi_thread_worker(cache, back_set, back_set_delay, pat))
+            thread::spawn(move || {
+                tlocal_multi_thread_worker(cache, backing_set, backing_set_delay, pat)
+            })
         })
         .collect();
 
