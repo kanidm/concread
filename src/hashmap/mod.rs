@@ -264,7 +264,7 @@ mod tests {
         assert!(!snap.contains_key(&20));
         assert_eq!(snap.len(), 2);
         assert!(!snap.is_empty());
-        assert!(snap.iter().find(|(_k, v)| **v == 10).is_some());
+        assert!(snap.iter().any(|(_k, v)| *v == 10));
         assert_eq!(snap.values().count(), 2);
         assert_eq!(snap.keys().count(), 2);
     }
@@ -311,17 +311,17 @@ mod tests {
     fn test_hashmap_keys() {
         let hmap: HashMap<usize, usize> = vec![(10, 10), (15, 15), (20, 20)].into_iter().collect();
         let hmap_read = hmap.read();
-        assert!(hmap_read.keys().find(|&&x| x == 10).is_some());
+        assert!(hmap_read.keys().any(|&x| x == 10));
         let hmap_write = hmap.write();
-        assert!(hmap_write.keys().find(|&&x| x == 10).is_some());
+        assert!(hmap_write.keys().any(|&x| x == 10));
     }
     #[test]
     fn test_hashmap_values() {
         let hmap: HashMap<usize, usize> = vec![(10, 11), (15, 15), (20, 20)].into_iter().collect();
         let hmap_read = hmap.read();
-        assert!(hmap_read.values().find(|&&x| x == 11).is_some());
+        assert!(hmap_read.values().any(|&x| x == 11));
         let hmap_write = hmap.write();
-        assert!(hmap_write.values().find(|&&x| x == 11).is_some());
+        assert!(hmap_write.values().any(|&x| x == 11));
     }
 
     #[test]
@@ -332,11 +332,11 @@ mod tests {
         assert!(!hmap_write_snapshot.is_empty());
         assert_eq!(hmap_write_snapshot.len(), 3);
         assert!(hmap_write_snapshot.contains_key(&10));
-        assert!(hmap_write_snapshot.values().find(|&&x| x == 11).is_some());
-        assert!(hmap_write_snapshot.values().find(|&&x| x == 10).is_none());
-        assert!(hmap_write_snapshot.keys().find(|&&x| x == 10).is_some());
-        assert!(hmap_write_snapshot.keys().find(|&&x| x == 11).is_none());
-        assert!(hmap_write_snapshot.keys().find(|&&x| x == 10).is_some());
+        assert!(hmap_write_snapshot.values().any(|&x| x == 11));
+        assert!(hmap_write_snapshot.values().all(|&x| x != 10));
+        assert!(hmap_write_snapshot.keys().any(|&x| x == 10));
+        assert!(hmap_write_snapshot.keys().all(|&x| x != 11));
+        assert!(hmap_write_snapshot.keys().any(|&x| x == 10));
         assert!(hmap_write_snapshot.iter().count() == 3);
     }
 }

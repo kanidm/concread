@@ -626,15 +626,13 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
         let last_seen = Vec::with_capacity(16);
         let first_seen = Vec::with_capacity(16);
 
-        let build_hasher = sblock.build_hasher.clone();
-
         CursorWrite {
             txid,
             length,
             root,
             last_seen,
             first_seen,
-            build_hasher,
+            build_hasher: sblock.build_hasher.to_owned(),
             k: PhantomData,
             v: PhantomData,
         }
@@ -1062,13 +1060,12 @@ where
 
 impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorRead<K, V> {
     pub(crate) fn new(sblock: &SuperBlock<K, V>) -> Self {
-        let build_hasher = sblock.build_hasher.clone();
         CursorRead {
             txid: sblock.txid,
             length: sblock.length,
             root: sblock.root,
             last_seen: Mutex::new(Vec::with_capacity(0)),
-            build_hasher,
+            build_hasher: sblock.build_hasher.to_owned(),
             k: PhantomData,
             v: PhantomData,
         }

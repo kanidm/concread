@@ -275,15 +275,13 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorWrite<K, V> {
         let last_seen = Vec::with_capacity(16);
         let first_seen = Vec::with_capacity(16);
 
-        let build_hasher = sblock.build_hasher.clone();
-
         CursorWrite {
             txid,
             length,
             root,
             last_seen,
             first_seen,
-            build_hasher,
+            build_hasher: sblock.build_hasher.to_owned(),
         }
     }
 
@@ -534,13 +532,12 @@ impl<K: Clone + Hash + Eq + Debug, V: Clone> Drop for SuperBlock<K, V> {
 impl<K: Clone + Hash + Eq + Debug, V: Clone> CursorRead<K, V> {
     pub(crate) fn new(sblock: &SuperBlock<K, V>) -> Self {
         // println!("starting rd txid -> {:?}", sblock.txid);
-        let build_hasher = sblock.build_hasher.clone();
         CursorRead {
             txid: sblock.txid,
             length: sblock.size,
             root: sblock.root,
             last_seen: Mutex::new(Vec::with_capacity(0)),
-            build_hasher,
+            build_hasher: sblock.build_hasher.to_owned(),
         }
     }
 }
@@ -1110,7 +1107,7 @@ mod tests {
     }
 
     fn create_leaf_node_full(vbase: usize) -> *mut Node<usize, usize> {
-        assert!(vbase % 10 == 0);
+        assert!(vbase.is_multiple_of(10));
         let node = Node::new_leaf(1);
         {
             let nmut = leaf_ref!(node, usize, usize);
@@ -2025,7 +2022,7 @@ mod tests {
         let root =
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _) as *mut Node<usize, usize>;
         // let count = HBV_CAPACITY + 2;
-        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root);
         let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
@@ -2066,7 +2063,7 @@ mod tests {
 
         let root =
             Node::new_branch(0, lbranch as *mut _, rbranch as *mut _) as *mut Node<usize, usize>;
-        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root);
         let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
@@ -2090,7 +2087,7 @@ mod tests {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node(20);
         let root = Node::new_branch(0, lnode, rnode) as *mut Node<usize, usize>;
-        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root);
         let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 
@@ -2105,10 +2102,10 @@ mod tests {
     #[test]
     fn test_hashmap2_cursor_remove_15() {
         // Test leaf borrow right.
-        let lnode = create_leaf_node(10) as *mut Node<usize, usize>;
-        let rnode = create_leaf_node_full(20) as *mut Node<usize, usize>;
+        let lnode = create_leaf_node(10);
+        let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode) as *mut Node<usize, usize>;
-        let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
+        let sb = SuperBlock::new_test(1, root);
         let mut wcurs = sb.create_writer();
         assert!(wcurs.verify());
 

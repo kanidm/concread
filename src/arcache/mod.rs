@@ -1094,7 +1094,7 @@ impl<
             // * everything hit must be in main cache now, so bring these
             //   all to the relevant item heads.
             // * Why do this last? Because the write is the "latest" we want all the fresh
-            //   written items in the cache over the "read" hits, it gives us some aprox
+            //   written items in the cache over the "read" hits, it gives us some appximation
             //   of time ordering, but not perfect.
 
             // Find the item in the cache.
@@ -1261,7 +1261,7 @@ impl<
             //
             // keep removing from rec until == p OR delta == 0, and if delta remains, then remove from freq.
             //
-            // Remember P is "the maximum size of recent" or "presure on recent". If P is max then
+            // Remember P is "the maximum size of recent" or "pressure on recent". If P is max then
             // we are pressuring churning on recent but not freq, so evict in freq.
             //
             // If P is toward 0 that means all our pressure is in frequent and we evicted things we
@@ -1938,10 +1938,9 @@ impl<
     }
 
     #[cfg(test)]
-    pub(crate) fn peek_cache<Q: ?Sized>(&self, k: &Q) -> CacheState
+    pub(crate) fn peek_cache<Q: ?Sized + Hash + Eq + Ord>(&self, k: &Q) -> CacheState
     where
         K: Borrow<Q>,
-        Q: Hash + Eq + Ord,
     {
         if let Some(v) = self.cache.get(k) {
             (*v).to_state()
@@ -3154,7 +3153,6 @@ mod tests {
     }
 
     #[allow(dead_code)]
-
     pub static RUNNING: AtomicBool = AtomicBool::new(false);
 
     #[cfg(test)]
@@ -3192,7 +3190,6 @@ mod tests {
         RUNNING.store(true, Ordering::Relaxed);
 
         let handles: Vec<_> = (0..thread_count)
-            .into_iter()
             .map(|_| {
                 // Build the threads.
                 let cache = arc.clone();

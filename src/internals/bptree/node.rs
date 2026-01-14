@@ -284,7 +284,7 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
                 let mut lcount = 0; // leaf populated
                 let mut mcount = 0; // leaf max possible
                 for idx in 0..(bref.count() + 1) {
-                    let n = bref.nodes[idx] as *mut Node<K, V>;
+                    let n = bref.nodes[idx];
                     let (l, m) = Self::tree_density_raw(n);
                     lcount += l;
                     mcount += m;
@@ -315,10 +315,9 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
 
     #[cfg(test)]
     #[inline(always)]
-    pub(crate) fn get_ref_raw<Q: ?Sized>(pointer: *const Self, k: &Q) -> Option<*const V>
+    pub(crate) fn get_ref_raw<Q: ?Sized + Ord>(pointer: *const Self, k: &Q) -> Option<*const V>
     where
         K: Borrow<Q>,
-        Q: Ord,
     {
         match unsafe { &*pointer }.meta.0 & FLAG_MASK {
             FLAG_LEAF => Leaf::<K, V>::get_ref_raw(pointer as *const _, k),
@@ -377,10 +376,10 @@ impl<K: Clone + Ord + Debug, V: Clone> Node<K, V> {
         match unsafe { &*pointer }.meta.0 & FLAG_MASK {
             FLAG_LEAF => {
                 // check if we are in the set?
-                track.insert(pointer as *const Self)
+                track.insert(pointer)
             }
             FLAG_BRANCH => {
-                if track.insert(pointer as *const Self) {
+                if track.insert(pointer) {
                     // check
                     let bref = unsafe { &*(pointer as *const Branch<K, V>) };
                     for i in 0..(bref.count() + 1) {
@@ -1060,10 +1059,9 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
     }
 
     #[cfg(test)]
-    pub(crate) fn get_ref_raw<Q: ?Sized>(pointer: *const Self, k: &Q) -> Option<*const V>
+    pub(crate) fn get_ref_raw<Q: ?Sized + Ord>(pointer: *const Self, k: &Q) -> Option<*const V>
     where
         K: Borrow<Q>,
-        Q: Ord,
     {
         let this = unsafe { &*pointer };
         debug_assert_branch!(this);
@@ -1687,7 +1685,7 @@ impl<K: Ord + Clone + Debug, V: Clone> Branch<K, V> {
         let (ridx, idx) = if idx == 0 {
             // println!("clone_sibling_idx clone right");
             // If we are 0 we clone our right sibling,
-            // and return thet right idx as 1.
+            // and return the right idx as 1.
             (1, 1)
         } else {
             // println!("clone_sibling_idx clone left");
@@ -2033,7 +2031,7 @@ mod tests {
             if let LeafInsertState::Ok(None) = r {
                 assert!(leaf.get_ref(&kv) == Some(&kv));
             } else {
-                assert!(false);
+                panic!("Invalid Leaf InsertState");
             }
         }
         assert!(leaf.verify());
@@ -2044,7 +2042,7 @@ mod tests {
                 assert!(pkv == kv);
                 assert!(leaf.get_ref(&kv) == Some(&kv));
             } else {
-                assert!(false);
+                panic!("Invalid Leaf InsertState");
             }
         }
         assert!(Leaf::<usize, usize>::verify_raw(leaf_raw));
@@ -2057,30 +2055,27 @@ mod tests {
         let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf_raw };
 
-        assert!(L_CAPACITY <= 8);
         let kvs = [7, 5, 1, 6, 2, 3, 0, 8];
         assert!(leaf.get_txid() == 1);
         // Check insert to capacity
-        for idx in 0..L_CAPACITY {
-            let kv = kvs[idx];
-            let r = leaf.insert_or_update(kv, kv);
+        for kv in kvs.iter().take(L_CAPACITY) {
+            let r = leaf.insert_or_update(*kv, *kv);
             if let LeafInsertState::Ok(None) = r {
-                assert!(leaf.get_ref(&kv) == Some(&kv));
+                assert!(leaf.get_ref(kv) == Some(kv));
             } else {
-                assert!(false);
+                panic!("Invalid Leaf InsertState");
             }
         }
         assert!(leaf.verify());
         assert!(leaf.count() == L_CAPACITY);
         // Check update to capacity
-        for idx in 0..L_CAPACITY {
-            let kv = kvs[idx];
-            let r = leaf.insert_or_update(kv, kv);
+        for kv in kvs.iter().take(L_CAPACITY) {
+            let r = leaf.insert_or_update(*kv, *kv);
             if let LeafInsertState::Ok(Some(pkv)) = r {
-                assert!(pkv == kv);
-                assert!(leaf.get_ref(&kv) == Some(&kv));
+                assert!(&pkv == kv);
+                assert!(leaf.get_ref(kv) == Some(kv));
             } else {
-                assert!(false);
+                panic!("Invalid Leaf InsertState");
             }
         }
         assert!(leaf.verify());
@@ -2093,7 +2088,6 @@ mod tests {
     fn test_bptree2_node_leaf_min() {
         let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf_raw };
-        assert!(L_CAPACITY <= 8);
 
         let kvs = [3, 2, 6, 4, 5, 1, 9, 0];
         let min = [3, 2, 2, 2, 2, 1, 1, 0];
@@ -2105,7 +2099,7 @@ mod tests {
                 assert!(leaf.get_ref(&kv) == Some(&kv));
                 assert!(leaf.min() == &min[idx]);
             } else {
-                assert!(false);
+                panic!("Invalid Leaf InsertState");
             }
         }
         assert!(leaf.verify());
@@ -2118,7 +2112,6 @@ mod tests {
     fn test_bptree2_node_leaf_max() {
         let leaf_raw: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf_raw };
-        assert!(L_CAPACITY <= 8);
 
         let kvs = [1, 3, 2, 6, 4, 5, 9, 0];
         let max: [usize; 8] = [1, 3, 3, 6, 6, 6, 9, 9];
@@ -2130,7 +2123,7 @@ mod tests {
                 assert!(leaf.get_ref(&kv) == Some(&kv));
                 assert!(leaf.max() == &max[idx]);
             } else {
-                assert!(false);
+                panic!("Invalid Leaf InsertState");
             }
         }
         assert!(leaf.verify());
@@ -2152,7 +2145,7 @@ mod tests {
             if let LeafRemoveState::Ok(Some(rkv)) = r {
                 assert!(rkv == kv);
             } else {
-                assert!(false);
+                panic!("Invalid Leaf RemoveState");
             }
         }
         assert!(leaf.count() == 1);
@@ -2162,7 +2155,7 @@ mod tests {
         if let LeafRemoveState::Ok(None) = r {
             // Ok!
         } else {
-            assert!(false);
+            panic!("Invalid Leaf RemoveState");
         }
         // Finally clear the node, should request a shrink.
         let kv = L_CAPACITY - 1;
@@ -2170,7 +2163,7 @@ mod tests {
         if let LeafRemoveState::Shrink(Some(rkv)) = r {
             assert!(rkv == kv);
         } else {
-            assert!(false);
+            panic!("Invalid Leaf RemoveState");
         }
         assert!(leaf.count() == 0);
         // Remove non-existent post shrink. Should never happen
@@ -2179,7 +2172,7 @@ mod tests {
         if let LeafRemoveState::Shrink(None) = r {
             // Ok!
         } else {
-            assert!(false);
+            panic!("Invalid Leaf RemoveState");
         }
 
         assert!(leaf.count() == 0);

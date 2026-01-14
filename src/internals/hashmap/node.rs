@@ -295,7 +295,7 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
                 let mut lslots = 0; // leaf populated slots
                 let mut mslots = 0; // leaf max possible
                 for idx in 0..(bref.slots() + 1) {
-                    let n = bref.nodes[idx] as *mut Node<K, V>;
+                    let n = bref.nodes[idx];
                     let (c, l, m) = unsafe { (*n).tree_density() };
                     lcount += c;
                     lslots += l;
@@ -325,10 +325,9 @@ impl<K: Clone + Eq + Hash + Debug, V: Clone> Node<K, V> {
 
     #[cfg(test)]
     #[inline(always)]
-    pub(crate) fn get_ref<Q: ?Sized>(&self, h: u64, k: &Q) -> Option<&V>
+    pub(crate) fn get_ref<Q: ?Sized + Eq>(&self, h: u64, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Eq,
     {
         match unsafe { self.ctrl.a.0 .0 } & FLAG_MASK {
             FLAG_HASH_LEAF => {
@@ -1092,10 +1091,9 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
     }
 
     #[cfg(test)]
-    pub(crate) fn get_ref<Q: ?Sized>(&self, h: u64, k: &Q) -> Option<&V>
+    pub(crate) fn get_ref<Q: ?Sized + Eq>(&self, h: u64, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
-        Q: Eq,
     {
         debug_assert_branch!(self);
         let idx = self.locate_node(h);
@@ -1468,6 +1466,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         debug_assert!(!left.is_null());
         debug_assert!(!right.is_null());
 
+        #[allow(clippy::needless_borrow)]
         match unsafe { (&(*left).ctrl.a).0 .0 & FLAG_MASK } {
             FLAG_HASH_LEAF => {
                 let lmut = leaf_ref!(left, K, V);
@@ -1768,7 +1767,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         let (ridx, idx) = if idx == 0 {
             // println!("clone_sibling_idx clone right");
             // If we are 0 we clone our right sibling,
-            // and return thet right idx as 1.
+            // and return the right idx as 1.
             (1, 1)
         } else {
             // println!("clone_sibling_idx clone left");
@@ -1781,6 +1780,7 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> Branch<K, V> {
         let sib_ptr = self.nodes[idx];
         debug_assert!(!sib_ptr.is_null());
         // Do we need to clone?
+        #[allow(clippy::needless_borrow)]
         let res = match unsafe { (&(*sib_ptr).ctrl.a).0 .0 } & FLAG_MASK {
             FLAG_HASH_LEAF => {
                 let lref = unsafe { &*(sib_ptr as *const _ as *const Leaf<K, V>) };
@@ -2096,7 +2096,7 @@ mod tests {
             if let LeafInsertState::Ok(None) = r {
                 assert!(leaf.get_ref(kv as u64, &kv) == Some(&kv));
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());
@@ -2107,7 +2107,7 @@ mod tests {
                 assert!(pkv == kv);
                 assert!(leaf.get_ref(kv as u64, &kv) == Some(&kv));
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());
@@ -2127,7 +2127,7 @@ mod tests {
             if let LeafInsertState::Ok(None) = r {
                 assert!(leaf.get_ref(hash, &kv) == Some(&kv));
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());
@@ -2138,7 +2138,7 @@ mod tests {
                 assert!(pkv == kv);
                 assert!(leaf.get_ref(hash, &kv) == Some(&kv));
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());
@@ -2151,30 +2151,27 @@ mod tests {
         let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf };
 
-        assert!(H_CAPACITY <= 8);
         let kvs = [7, 5, 1, 6, 2, 3, 0, 8];
         assert!(leaf.get_txid() == 1);
         // Check insert to capacity
-        for idx in 0..H_CAPACITY {
-            let kv = kvs[idx];
-            let r = leaf.insert_or_update(kv as u64, kv, kv);
+        for kv in kvs.iter().take(H_CAPACITY) {
+            let r = leaf.insert_or_update(*kv as u64, *kv, *kv);
             if let LeafInsertState::Ok(None) = r {
-                assert!(leaf.get_ref(kv as u64, &kv) == Some(&kv));
+                assert!(leaf.get_ref(*kv as u64, kv) == Some(kv));
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());
         assert!(leaf.slots() == H_CAPACITY);
         // Check update to capacity
-        for idx in 0..H_CAPACITY {
-            let kv = kvs[idx];
-            let r = leaf.insert_or_update(kv as u64, kv, kv);
+        for kv in kvs.iter().take(H_CAPACITY) {
+            let r = leaf.insert_or_update(*kv as u64, *kv, *kv);
             if let LeafInsertState::Ok(Some(pkv)) = r {
-                assert!(pkv == kv);
-                assert!(leaf.get_ref(kv as u64, &kv) == Some(&kv));
+                assert!(pkv == *kv);
+                assert!(leaf.get_ref(*kv as u64, kv) == Some(kv));
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());
@@ -2189,31 +2186,28 @@ mod tests {
         let leaf = unsafe { &mut *leaf };
         let hash: u64 = 1;
 
-        assert!(H_CAPACITY <= 8);
         let kvs = [7, 5, 1, 6, 2, 3, 0, 8];
         assert!(leaf.get_txid() == 1);
         // Check insert to capacity
-        for idx in 0..H_CAPACITY {
-            let kv = kvs[idx];
-            let r = leaf.insert_or_update(hash, kv, kv);
+        for kv in kvs.iter().take(H_CAPACITY) {
+            let r = leaf.insert_or_update(hash, *kv, *kv);
             if let LeafInsertState::Ok(None) = r {
-                assert!(leaf.get_ref(hash, &kv) == Some(&kv));
+                assert!(leaf.get_ref(hash, kv) == Some(kv));
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());
         assert!(leaf.count() == H_CAPACITY);
         assert!(leaf.slots() == 1);
         // Check update to capacity
-        for idx in 0..H_CAPACITY {
-            let kv = kvs[idx];
-            let r = leaf.insert_or_update(hash, kv, kv);
+        for kv in kvs.iter().take(H_CAPACITY) {
+            let r = leaf.insert_or_update(hash, *kv, *kv);
             if let LeafInsertState::Ok(Some(pkv)) = r {
-                assert!(pkv == kv);
-                assert!(leaf.get_ref(hash, &kv) == Some(&kv));
+                assert!(pkv == *kv);
+                assert!(leaf.get_ref(hash, kv) == Some(kv));
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());
@@ -2227,7 +2221,6 @@ mod tests {
     fn test_hashmap2_node_leaf_min() {
         let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf };
-        assert!(H_CAPACITY <= 8);
 
         let kvs = [3, 2, 6, 4, 5, 1, 9, 0];
         let min: [u64; 8] = [3, 2, 2, 2, 2, 1, 1, 0];
@@ -2239,7 +2232,7 @@ mod tests {
                 assert!(leaf.get_ref(kv as u64, &kv) == Some(&kv));
                 assert!(leaf.min() == min[idx]);
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());
@@ -2252,7 +2245,6 @@ mod tests {
     fn test_hashmap2_node_leaf_max() {
         let leaf: *mut Leaf<usize, usize> = Node::new_leaf(1);
         let leaf = unsafe { &mut *leaf };
-        assert!(H_CAPACITY <= 8);
 
         let kvs = [1, 3, 2, 6, 4, 5, 9, 0];
         let max: [u64; 8] = [1, 3, 3, 6, 6, 6, 9, 9];
@@ -2264,7 +2256,7 @@ mod tests {
                 assert!(leaf.get_ref(kv as u64, &kv) == Some(&kv));
                 assert!(leaf.max() == max[idx]);
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());
@@ -2286,7 +2278,7 @@ mod tests {
             if let LeafRemoveState::Ok(Some(rkv)) = r {
                 assert!(rkv == kv);
             } else {
-                assert!(false);
+                panic!("Invalid leaf remove state");
             }
         }
         assert!(leaf.slots() == 1);
@@ -2296,7 +2288,7 @@ mod tests {
         if let LeafRemoveState::Ok(None) = r {
             // Ok!
         } else {
-            assert!(false);
+            panic!("Invalid leaf remove state");
         }
         // Finally clear the node, should request a shrink.
         let kv = H_CAPACITY - 1;
@@ -2304,7 +2296,7 @@ mod tests {
         if let LeafRemoveState::Shrink(Some(rkv)) = r {
             assert!(rkv == kv);
         } else {
-            assert!(false);
+            panic!("Invalid leaf remove state");
         }
         assert!(leaf.slots() == 0);
         // Remove non-existent post shrink. Should never happen
@@ -2313,7 +2305,7 @@ mod tests {
         if let LeafRemoveState::Shrink(None) = r {
             // Ok!
         } else {
-            assert!(false);
+            panic!("Invalid leaf remove state");
         }
 
         assert!(leaf.slots() == 0);
@@ -2365,7 +2357,7 @@ mod tests {
             if let LeafInsertState::Ok(None) = r {
                 assert!(leaf.get_ref(hash, &kv) == Some(&kv));
             } else {
-                assert!(false);
+                panic!("Invalid leaf insert state");
             }
         }
         assert!(leaf.verify());

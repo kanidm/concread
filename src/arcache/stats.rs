@@ -3,7 +3,7 @@ use std::fmt::Debug;
 /// Write statistics for ARCache
 pub trait ARCacheWriteStat<K> {
     // RW phase trackers
-    /// Record that a cache clear event occured.
+    /// Record that a cache clear event occurred.
     ///
     /// Phase - write transaction open
     fn cache_clear(&mut self) {}

@@ -1300,7 +1300,7 @@ mod tests {
     }
 
     fn create_leaf_node_full(vbase: usize) -> *mut Node<usize, usize> {
-        assert!(vbase % 10 == 0);
+        assert!(vbase.is_multiple_of(10));
         let node = Node::new_leaf(1);
         {
             let nmut = leaf_ref!(node, usize, usize);
@@ -2296,8 +2296,8 @@ mod tests {
     #[test]
     fn test_bptree2_cursor_remove_15() {
         // Test leaf borrow right.
-        let lnode = create_leaf_node(10) as *mut Node<usize, usize>;
-        let rnode = create_leaf_node_full(20) as *mut Node<usize, usize>;
+        let lnode = create_leaf_node(10);
+        let rnode = create_leaf_node_full(20);
         let root = Node::new_branch(0, lnode, rnode);
         let sb = SuperBlock::new_test(1, root as *mut Node<usize, usize>);
         let mut wcurs = sb.create_writer();
@@ -2647,7 +2647,6 @@ mod tests {
     #[test]
     fn test_bptree2_cursor_split_off_lt_clone_stress() {
         // Can't proceed as the "fake" tree we make is invalid.
-        debug_assert!(L_CAPACITY >= 4);
         let outer: [usize; 4] = [0, 100, 200, 300];
         let inner: [usize; 4] = [0, 10, 20, 30];
         for i in outer.iter() {
@@ -2663,7 +2662,6 @@ mod tests {
     #[cfg(not(feature = "skinny"))]
     #[test]
     fn test_bptree2_cursor_split_off_lt_stress() {
-        debug_assert!(L_CAPACITY >= 4);
         let outer: [usize; 4] = [0, 100, 200, 300];
         let inner: [usize; 4] = [0, 10, 20, 30];
         for i in outer.iter() {
