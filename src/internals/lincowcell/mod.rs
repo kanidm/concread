@@ -120,18 +120,27 @@ impl<R> LinCowCellInner<R> {
 impl<R> Drop for LinCowCellInner<R> {
     fn drop(&mut self) {
         // Ensure the default drop won't recursively drop the chain
-        let mut current = self.pin.lock().unwrap().take();
+        // Use Arc::into_inner so we only advance on unique ownership
+        let mut current = self
+            .pin
+            .get_mut()
+            .map(|pin| pin.take())
+            .unwrap_or_else(|e| e.into_inner().take());
 
         // Drop the chain iteratively to avoid stack overflow
         while let Some(arc) = current {
             // Try to get exclusive ownership of the next link
-            match Arc::try_unwrap(arc) {
-                Ok(inner) => {
+            match Arc::into_inner(arc) {
+                Some(mut inner) => {
                     // Continue with the next link.
-                    current = inner.pin.lock().unwrap().take();
+                    current = inner
+                        .pin
+                        .get_mut()
+                        .map(|pin| pin.take())
+                        .unwrap_or_else(|e| e.into_inner().take());
                 }
-                Err(_) => {
-                    // Another reference exists, so we can safely let it drop normally without recursion
+                None => {
+                    // Another strong reference exists; stop without breaking its chain
                     break;
                 }
             }
