@@ -759,7 +759,9 @@ impl<
                     });
                     // stats.write_includes += 1;
                     stats.include(&k);
-                    cache.insert(k, CacheItem::Rec(llp, tci));
+                    // The key MUST NOT exist in the cache already.
+                    let existing = cache.insert(k, CacheItem::Rec(llp, tci));
+                    assert!(existing.is_none());
                 }
                 (None, ThreadCacheItem::Removed(clean)) => {
                     assert!(clean);
@@ -769,7 +771,9 @@ impl<
                         txid: commit_txid,
                         size: 1,
                     });
-                    cache.insert(k, CacheItem::Haunted(llp));
+                    // The key MUST NOT exist in the cache already.
+                    let existing = cache.insert(k, CacheItem::Haunted(llp));
+                    assert!(existing.is_none());
                 }
                 (Some(ref mut ci), ThreadCacheItem::Removed(clean)) => {
                     assert!(clean);
@@ -1069,7 +1073,9 @@ impl<
                             size,
                         });
                         stats.include(&k);
-                        cache.insert(k, CacheItem::Rec(llp, iv));
+                        // The key MUST NOT exist in the cache already.
+                        let existing = cache.insert(k, CacheItem::Rec(llp, iv));
+                        assert!(existing.is_none());
                     }
                 }
             };
@@ -1156,8 +1162,7 @@ impl<
         size: usize,
         txid: u64,
     ) {
-        while ll.len() > size {
-            let mut owned = ll.pop();
+        while let Some(mut owned) = ll.pop() {
             debug_assert!(!owned.is_null());
 
             // Set the item's evict txid.
@@ -1177,6 +1182,11 @@ impl<
                     unreachable!();
                 }
             };
+
+            if ll.len() <= size {
+                // We have removed enough.
+                break;
+            }
         }
     }
 
@@ -1192,8 +1202,7 @@ impl<
     {
         debug_assert!(ll.len() >= size);
 
-        while ll.len() > size {
-            let mut owned = ll.pop();
+        while let Some(mut owned) = ll.pop() {
             debug_assert!(!owned.is_null());
             let mut r = cache.get_mut(&owned.as_ref().k);
             // Set the item's evict txid.
@@ -1202,7 +1211,8 @@ impl<
                 Some(ref mut ci) => {
                     let mut next_state = match &ci {
                         CacheItem::Freq(llp, _v) => {
-                            debug_assert!(llp == &owned);
+                            // The pointer from any key MUST be unique!
+                            assert!(llp == &owned);
                             // No need to extract, already popped!
                             // $ll.extract(*llp);
                             stats.evict_from_frequent(&owned.as_ref().k);
@@ -1210,7 +1220,8 @@ impl<
                             CacheItem::GhostFreq(pointer)
                         }
                         CacheItem::Rec(llp, _v) => {
-                            debug_assert!(llp == &owned);
+                            // The pointer from any key MUST be unique!
+                            assert!(llp == &owned);
                             // No need to extract, already popped!
                             // $ll.extract(*llp);
                             stats.evict_from_recent(&owned.as_mut().k);
@@ -1218,7 +1229,8 @@ impl<
                             CacheItem::GhostRec(pointer)
                         }
                         _ => {
-                            // Impossible state!
+                            // Impossible state! All members of the from-ll, must be
+                            // in either the frequent or recent state.
                             unreachable!();
                         }
                     };
@@ -1226,11 +1238,19 @@ impl<
                     mem::swap(*ci, &mut next_state);
                 }
                 None => {
-                    // Impossible state!
+                    // Impossible state! This indicates that the key was already
+                    // removed. Only one key -> linked-list-pointer should exist at
+                    // anytime. If we already removed this, that indicates there were
+                    // two llp's with the same key!
                     unreachable!();
                 }
+            };
+
+            if ll.len() <= size {
+                // We have removed enough.
+                break;
             }
-        }
+        } // end while
     }
 
     #[allow(clippy::cognitive_complexity)]
@@ -1378,8 +1398,7 @@ impl<
     ) where
         S: ARCacheWriteStat<K>,
     {
-        while ll.len() > 0 {
-            let mut owned = ll.pop();
+        while let Some(mut owned) = ll.pop() {
             debug_assert!(!owned.is_null());
 
             // Set the item's eviction txid.
@@ -1410,7 +1429,10 @@ impl<
                     mem::swap(*ci, &mut next_state);
                 }
                 None => {
-                    // Impossible state!
+                    // Impossible state! This indicates that the key was already
+                    // removed. Only one key -> linked-list-pointer should exist at
+                    // anytime. If we already removed this, that indicates there were
+                    // two llp's with the same key!
                     unreachable!();
                 }
             }
@@ -2054,7 +2076,6 @@ impl<
 
     /// Insert an item to the cache, with an associated weight/size factor. See also `insert`
     pub fn insert_sized(&mut self, k: K, v: V, size: NonZeroUsize) {
-        let mut v = v;
         let size = size.get();
         // Send a copy forward through time and space.
         // let _ = self.tx.try_send(
@@ -2077,24 +2098,24 @@ impl<
         // We have a cache, so lets update it.
         if let Some(ref mut cache) = self.tlocal {
             self.stats.local_include();
-            let n = if cache.tlru.len() >= cache.read_size {
-                let mut owned = cache.tlru.pop();
-                // swap the old_key/old_val out
-                let mut k_clone = k.clone();
-                mem::swap(&mut k_clone, &mut owned.as_mut().k);
-                mem::swap(&mut v, &mut owned.as_mut().v);
-                // remove old K from the tree:
-                cache.set.remove(&k_clone);
-                // Return the owned node into the lru
-                cache.tlru.append_n(owned)
-            } else {
-                // Just add it!
-                cache.tlru.append_k(ReadCacheItem {
-                    k: k.clone(),
-                    v,
-                    size,
-                })
-            };
+            while cache.tlru.len() >= cache.read_size {
+                if let Some(owned_inner) = cache.tlru.pop_n_free() {
+                    let existing = cache.set.remove(&owned_inner.k);
+                    // Must have been present.
+                    assert!(existing.is_some());
+                } else {
+                    // Somehow the list is empty, but we still are oversize?
+                    debug_assert!(false);
+                    break;
+                }
+            }
+
+            // Now add it, as we have enough space.
+            let n = cache.tlru.append_k(ReadCacheItem {
+                k: k.clone(),
+                v,
+                size,
+            });
             let r = cache.set.insert(k, n);
             // There should never be a previous value.
             assert!(r.is_none());

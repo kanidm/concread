@@ -53,15 +53,6 @@ pub trait LLWeight {
     fn ll_weight(&self) -> usize;
 }
 
-/*
-impl<T> LLWeight for T {
-    #[inline]
-    default fn ll_weight(&self) -> usize {
-        1
-    }
-}
-*/
-
 #[derive(Clone, Debug)]
 pub(crate) struct LL<K>
 where
@@ -138,8 +129,7 @@ impl<K> LLNodeOwned<K>
 where
     K: LLWeight + Clone + Debug,
 {
-    #[allow(clippy::wrong_self_convention)]
-    fn into_inner(&mut self) -> *mut LLNode<K> {
+    fn into_inner(mut self) -> *mut LLNode<K> {
         let x = self.inner;
         self.inner = ptr::null_mut();
         x
@@ -187,7 +177,7 @@ where
                 debug_assert!((*self.inner).next.is_null());
                 debug_assert!((*self.inner).prev.is_null());
             }
-            panic!("dropping LLNodeOwned<K>");
+            panic!("dropping LLNodeOwned<K> which has valid content, this should never happen!");
         }
     }
 }
@@ -234,18 +224,28 @@ where
     }
 
     // Append an arbitrary node into this set.
-    pub(crate) fn append_n(&mut self, mut owned: LLNodeOwned<K>) -> LLNodeRef<K> {
+    pub(crate) fn append_n(&mut self, owned: LLNodeOwned<K>) -> LLNodeRef<K> {
         // Who is to the left of tail?
         let n = owned.into_inner();
         unsafe {
             self.size += (*(*n).k.as_ptr()).ll_weight();
             // must be untagged
             // assert!((*n).tag == 0);
+            // Tail has no trailing nodes.
             debug_assert!((*self.tail).next.is_null());
+            // Tail must have a previous node.
             debug_assert!(!(*self.tail).prev.is_null());
+            // What is that predecessor?
             let pred = (*self.tail).prev;
             debug_assert!(!pred.is_null());
+            // Assert that the predecessor points at tail correctly.
+            // We know now that:
+            //
+            // pred <-> tail
             debug_assert!((*pred).next == self.tail);
+
+            // Tell our node where we are.
+            // pred <-> n <-> tail
             (*n).prev = pred;
             (*n).next = self.tail;
             // (*n).tag = self.tag;
@@ -259,6 +259,7 @@ where
             debug_assert!(!(*(*n).next).prev.is_null());
             debug_assert!((*(*n).prev).next == n);
             debug_assert!((*(*n).next).prev == n);
+            // We have asserted the list is sane.
         };
         LLNodeRef { inner: n }
     }
@@ -275,13 +276,28 @@ where
     }
 
     // remove this node from the ll, and return it's ptr.
-    pub(crate) fn pop(&mut self) -> LLNodeOwned<K> {
-        let n = unsafe { (*self.head).next };
-        let owned = self.extract(LLNodeRef { inner: n });
-        debug_assert!(!owned.is_null());
-        debug_assert!(owned.inner != self.head);
-        debug_assert!(owned.inner != self.tail);
-        owned
+    pub(crate) fn pop(&mut self) -> Option<LLNodeOwned<K>> {
+        let next = unsafe { (*self.head).next };
+        if next == self.tail {
+            None
+        } else {
+            let n = unsafe { (*self.head).next };
+            let owned = self.extract(LLNodeRef { inner: n });
+            debug_assert!(!owned.is_null());
+            debug_assert!(owned.inner != self.head);
+            debug_assert!(owned.inner != self.tail);
+            Some(owned)
+        }
+    }
+
+    pub(crate) fn pop_n_free(&mut self) -> Option<K> {
+        if let Some(owned) = self.pop() {
+            let ll_node = owned.into_inner();
+            let k = LLNode::into_inner(ll_node);
+            Some(k)
+        } else {
+            None
+        }
     }
 
     // Cut a node out from this list from any location.
@@ -293,6 +309,10 @@ where
             debug_assert!(!(*n.inner).prev.is_null());
             debug_assert!(!(*n.inner).next.is_null());
             // And that prev's next is us, and next's prev is us.
+            // This is asserting that we have a proper construction
+            //
+            // prev <-> n <-> next
+            //
             debug_assert!(!(*(*n.inner).prev).next.is_null());
             debug_assert!(!(*(*n.inner).next).prev.is_null());
             debug_assert!((*(*n.inner).prev).next == n.inner);
@@ -305,14 +325,24 @@ where
         unsafe {
             let prev = (*n.inner).prev;
             let next = (*n.inner).next;
+            // Currently is:
+            //
             // prev <-> n <-> next
             (*next).prev = prev;
             (*prev).next = next;
+            // Now is
+            // prev <-> next
+
             // Null things for paranoia.
             if cfg!(test) || cfg!(debug_assertions) {
                 (*n.inner).prev = ptr::null_mut();
                 (*n.inner).next = ptr::null_mut();
             }
+            // Finally, we have
+            //
+            // null <- n -> null
+            // prev <-> next
+
             // (*n).tag = 0;
         }
 
@@ -324,10 +354,7 @@ where
     }
 
     pub(crate) fn drop_head(&mut self) {
-        assert!(self.size > 0);
-        let next = unsafe { (*self.head).next };
-        if next != self.tail {
-            let mut owned = self.pop();
+        while let Some(owned) = self.pop() {
             let n = owned.into_inner();
             LLNode::free(n);
         }
@@ -446,13 +473,20 @@ where
     }
 
     #[inline]
-    fn free(v: *mut Self) {
+    fn into_inner(v: *mut Self) -> K {
         debug_assert!(!v.is_null());
         let llnode = unsafe { Box::from_raw(v) };
-        // drop the inner k.
-        let _ = unsafe { llnode.k.assume_init() };
+        let k = unsafe { llnode.k.assume_init() };
         #[cfg(all(test, not(miri)))]
-        release_nid(llnode.nid)
+        release_nid(llnode.nid);
+
+        k
+    }
+
+    #[inline]
+    fn free(v: *mut Self) {
+        // drop the inner k.
+        let _ = Self::into_inner(v);
     }
 
     #[inline]
@@ -552,7 +586,7 @@ mod tests {
         assert!(ll.peek_tail().unwrap().as_ref() == &1);
 
         // pop from head
-        let n3 = ll.pop();
+        let n3 = ll.pop().unwrap();
         assert!(ll.len() == 3);
         assert!(ll.peek_head().unwrap().as_ref() == &4);
         assert!(ll.peek_tail().unwrap().as_ref() == &1);
@@ -574,7 +608,7 @@ mod tests {
         assert!(ll.peek_head().unwrap().as_ref() == &4);
         assert!(ll.peek_tail().unwrap().as_ref() == &4);
         // Remove last
-        let n4 = ll.pop();
+        let n4 = ll.pop().unwrap();
         assert!(ll.len() == 0);
         assert!(ll.peek_head().is_none());
         assert!(ll.peek_tail().is_none());
@@ -610,9 +644,9 @@ mod tests {
         assert!(ll.len() == 8);
         let _n2 = ll.append_k(Weighted { _i: 2 });
         assert!(ll.len() == 16);
-        let n1 = ll.pop();
+        let n1 = ll.pop().unwrap();
         assert!(ll.len() == 8);
-        let n2 = ll.pop();
+        let n2 = ll.pop().unwrap();
         assert!(ll.len() == 0);
         // Add back so they drop
         ll.append_n(n1);
