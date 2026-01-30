@@ -22,7 +22,7 @@ use crate::hashmap::{
     HashMap as DataMap, HashMapReadTxn as DataMapReadTxn, HashMapWriteTxn as DataMapWriteTxn,
 };
 
-#[cfg(feature = "arcache-is-hashtrie")]
+#[cfg(all(feature = "arcache-is-hashtrie", not(feature = "arcache-is-hashmap")))]
 use crate::hashtrie::{
     HashTrie as DataMap, HashTrieReadTxn as DataMapReadTxn, HashTrieWriteTxn as DataMapWriteTxn,
 };
@@ -58,6 +58,8 @@ const WATERMARK_DISABLE_MIN: usize = 128;
 
 const WATERMARK_DISABLE_DIVISOR: usize = 20;
 const WATERMARK_DISABLE_RATIO: usize = 18;
+
+const HAUNTED_SIZE: usize = 1;
 
 enum ThreadCacheItem<V> {
     Present(V, bool, usize),
@@ -748,6 +750,15 @@ impl<
     {
         // drain tlocal into the main cache.
         tlocal.into_iter().for_each(|(k, tcio)| {
+            #[cfg(test)]
+            {
+                inner.rec.verify();
+                inner.freq.verify();
+                inner.ghost_rec.verify();
+                inner.ghost_freq.verify();
+                inner.haunted.verify();
+            }
+
             let r = cache.get_mut(&k);
             match (r, tcio) {
                 (None, ThreadCacheItem::Present(tci, clean, size)) => {
@@ -769,11 +780,13 @@ impl<
                     let llp = inner.haunted.append_k(CacheItemInner {
                         k: k.clone(),
                         txid: commit_txid,
-                        size: 1,
+                        size: HAUNTED_SIZE,
                     });
                     // The key MUST NOT exist in the cache already.
                     let existing = cache.insert(k, CacheItem::Haunted(llp));
                     assert!(existing.is_none());
+                    // Must be now in haunted!
+                    debug_assert!(inner.haunted.len() > 0);
                 }
                 (Some(ref mut ci), ThreadCacheItem::Removed(clean)) => {
                     assert!(clean);
@@ -782,30 +795,39 @@ impl<
                         CacheItem::Freq(llp, _v) => {
                             let mut owned = inner.freq.extract(llp.clone());
                             owned.as_mut().txid = commit_txid;
+                            owned.as_mut().size = HAUNTED_SIZE;
                             let pointer = inner.haunted.append_n(owned);
+                            debug_assert!(inner.haunted.len() > 0);
                             CacheItem::Haunted(pointer)
                         }
                         CacheItem::Rec(llp, _v) => {
                             // Remove the node and put it into freq.
                             let mut owned = inner.rec.extract(llp.clone());
                             owned.as_mut().txid = commit_txid;
+                            owned.as_mut().size = HAUNTED_SIZE;
                             let pointer = inner.haunted.append_n(owned);
+                            debug_assert!(inner.haunted.len() > 0);
                             CacheItem::Haunted(pointer)
                         }
                         CacheItem::GhostFreq(llp) => {
                             let mut owned = inner.ghost_freq.extract(llp.clone());
                             owned.as_mut().txid = commit_txid;
+                            owned.as_mut().size = HAUNTED_SIZE;
                             let pointer = inner.haunted.append_n(owned);
+                            debug_assert!(inner.haunted.len() > 0);
                             CacheItem::Haunted(pointer)
                         }
                         CacheItem::GhostRec(llp) => {
                             let mut owned = inner.ghost_rec.extract(llp.clone());
                             owned.as_mut().txid = commit_txid;
+                            owned.as_mut().size = HAUNTED_SIZE;
                             let pointer = inner.haunted.append_n(owned);
+                            debug_assert!(inner.haunted.len() > 0);
                             CacheItem::Haunted(pointer)
                         }
                         CacheItem::Haunted(llp) => {
                             unsafe { llp.make_mut().txid = commit_txid };
+                            debug_assert!(inner.haunted.len() > 0);
                             CacheItem::Haunted(llp.clone())
                         }
                     };
@@ -870,7 +892,15 @@ impl<
                             CacheItem::Rec(pointer, tci)
                         }
                         CacheItem::Haunted(llp) => {
+                            // Moving from haunted to recent.
+                            // How can an item be Haunted, but then not be in the haunted set?
+
+                            // eprintln!("{:?}", inner.haunted.len());
+                            let before_len = inner.haunted.len();
+                            debug_assert!(inner.haunted.len() > 0);
                             let mut owned = inner.haunted.extract(llp.clone());
+                            debug_assert!(before_len - HAUNTED_SIZE == inner.haunted.len());
+
                             owned.as_mut().txid = commit_txid;
                             owned.as_mut().size = size;
                             stats.include_haunted(&owned.as_ref().k);
@@ -881,6 +911,15 @@ impl<
                     // Now change the state.
                     mem::swap(*ci, &mut next_state);
                 }
+            }
+
+            #[cfg(test)]
+            {
+                inner.rec.verify();
+                inner.freq.verify();
+                inner.ghost_rec.verify();
+                inner.ghost_freq.verify();
+                inner.haunted.verify();
             }
         });
     }
@@ -922,6 +961,7 @@ impl<
                             // We can't do anything about this ...
                             // Don't touch or rearrange the haunted list, it should be
                             // in commit txid order.
+                            debug_assert!(inner.haunted.len() > 0);
                             CacheItem::Haunted(llp.to_owned())
                         }
                     };
@@ -1047,12 +1087,25 @@ impl<
                             }
                         }
                         CacheItem::Haunted(llp) => {
+                            // if
+                            //     the haunted item is newer
+                            // OR
+                            //     inclusion is older than our minimum
+                            // then the item is skipped.
                             if llp.as_ref().txid > txid || inner.min_txid > txid {
                                 None
                             } else {
+                                // ELSE we need to update the txid of the haunted item
+                                // to ensure that it's at the list head.
+                                debug_assert!(inner.haunted.len() > 0);
+                                let before_len = inner.haunted.len();
+
                                 let mut owned = inner.haunted.extract(llp.to_owned());
+
+                                debug_assert!(before_len - HAUNTED_SIZE == inner.haunted.len());
+
                                 owned.as_mut().txid = txid;
-                                owned.as_mut().size = size;
+                                debug_assert!(owned.as_mut().size == HAUNTED_SIZE);
                                 stats.include_haunted(&owned.as_mut().k);
                                 let pointer = inner.rec.append_n(owned);
                                 Some(CacheItem::Rec(pointer, iv))
@@ -1162,30 +1215,58 @@ impl<
         size: usize,
         txid: u64,
     ) {
-        while let Some(mut owned) = ll.pop() {
-            debug_assert!(!owned.is_null());
+        let to_ll_before = to_ll.len();
+        let ll_before = ll.len();
+        let mut added = 0;
+        let mut removed = 0;
 
-            // Set the item's evict txid.
-            owned.as_mut().txid = txid;
+        while ll.len() > size {
+            #[cfg(test)]
+            {
+                ll.verify();
+                to_ll.verify();
+            }
 
-            let pointer = to_ll.append_n(owned);
-            let mut r = cache.get_mut(&pointer.as_ref().k);
+            if let Some(mut owned) = ll.pop() {
+                debug_assert!(!owned.is_null());
 
-            match r {
-                Some(ref mut ci) => {
-                    // Now change the state.
-                    let mut next_state = CacheItem::Haunted(pointer);
-                    mem::swap(*ci, &mut next_state);
-                }
-                None => {
-                    // Impossible state!
-                    unreachable!();
-                }
-            };
+                // Track the sizes.
+                removed += owned.as_mut().size;
 
-            if ll.len() <= size {
-                // We have removed enough.
+                assert_eq!(ll.len(), ll_before - removed);
+
+                // Set the item's evict txid.
+                owned.as_mut().txid = txid;
+                // Trim the haunted size as needed.
+                owned.as_mut().size = HAUNTED_SIZE;
+                added += HAUNTED_SIZE;
+
+                let pointer = to_ll.append_n(owned);
+
+                assert_eq!(to_ll.len(), to_ll_before + added);
+
+                let mut r = cache.get_mut(&pointer.as_ref().k);
+
+                match r {
+                    Some(ref mut ci) => {
+                        // Now change the state.
+                        let mut next_state = CacheItem::Haunted(pointer);
+                        mem::swap(*ci, &mut next_state);
+                    }
+                    None => {
+                        // Impossible state!
+                        unreachable!();
+                    }
+                };
+            } else {
+                // Impossible state!
                 break;
+            }
+
+            #[cfg(test)]
+            {
+                ll.verify();
+                to_ll.verify();
             }
         }
     }
@@ -1202,53 +1283,65 @@ impl<
     {
         debug_assert!(ll.len() >= size);
 
-        while let Some(mut owned) = ll.pop() {
-            debug_assert!(!owned.is_null());
-            let mut r = cache.get_mut(&owned.as_ref().k);
-            // Set the item's evict txid.
-            owned.as_mut().txid = txid;
-            match r {
-                Some(ref mut ci) => {
-                    let mut next_state = match &ci {
-                        CacheItem::Freq(llp, _v) => {
-                            // The pointer from any key MUST be unique!
-                            assert!(llp == &owned);
-                            // No need to extract, already popped!
-                            // $ll.extract(*llp);
-                            stats.evict_from_frequent(&owned.as_ref().k);
-                            let pointer = to_ll.append_n(owned);
-                            CacheItem::GhostFreq(pointer)
-                        }
-                        CacheItem::Rec(llp, _v) => {
-                            // The pointer from any key MUST be unique!
-                            assert!(llp == &owned);
-                            // No need to extract, already popped!
-                            // $ll.extract(*llp);
-                            stats.evict_from_recent(&owned.as_mut().k);
-                            let pointer = to_ll.append_n(owned);
-                            CacheItem::GhostRec(pointer)
-                        }
-                        _ => {
-                            // Impossible state! All members of the from-ll, must be
-                            // in either the frequent or recent state.
-                            unreachable!();
-                        }
-                    };
-                    // Now change the state.
-                    mem::swap(*ci, &mut next_state);
-                }
-                None => {
-                    // Impossible state! This indicates that the key was already
-                    // removed. Only one key -> linked-list-pointer should exist at
-                    // anytime. If we already removed this, that indicates there were
-                    // two llp's with the same key!
-                    unreachable!();
-                }
-            };
+        while ll.len() > size {
+            #[cfg(test)]
+            {
+                ll.verify();
+                to_ll.verify();
+            }
 
-            if ll.len() <= size {
-                // We have removed enough.
+            if let Some(mut owned) = ll.pop() {
+                debug_assert!(!owned.is_null());
+                let mut r = cache.get_mut(&owned.as_ref().k);
+                // Set the item's evict txid.
+                owned.as_mut().txid = txid;
+                match r {
+                    Some(ref mut ci) => {
+                        let mut next_state = match &ci {
+                            CacheItem::Freq(llp, _v) => {
+                                // The pointer from any key MUST be unique!
+                                assert!(llp == &owned);
+                                // No need to extract, already popped!
+                                // $ll.extract(*llp);
+                                stats.evict_from_frequent(&owned.as_ref().k);
+                                let pointer = to_ll.append_n(owned);
+                                CacheItem::GhostFreq(pointer)
+                            }
+                            CacheItem::Rec(llp, _v) => {
+                                // The pointer from any key MUST be unique!
+                                assert!(llp == &owned);
+                                // No need to extract, already popped!
+                                // $ll.extract(*llp);
+                                stats.evict_from_recent(&owned.as_mut().k);
+                                let pointer = to_ll.append_n(owned);
+                                CacheItem::GhostRec(pointer)
+                            }
+                            _ => {
+                                // Impossible state! All members of the from-ll, must be
+                                // in either the frequent or recent state.
+                                unreachable!();
+                            }
+                        };
+                        // Now change the state.
+                        mem::swap(*ci, &mut next_state);
+                    }
+                    None => {
+                        // Impossible state! This indicates that the key was already
+                        // removed. Only one key -> linked-list-pointer should exist at
+                        // anytime. If we already removed this, that indicates there were
+                        // two llp's with the same key!
+                        unreachable!();
+                    }
+                };
+            } else {
+                //  Impossible state!
                 break;
+            }
+
+            #[cfg(test)]
+            {
+                ll.verify();
+                to_ll.verify();
             }
         } // end while
     }
@@ -1399,6 +1492,13 @@ impl<
         S: ARCacheWriteStat<K>,
     {
         while let Some(mut owned) = ll.pop() {
+            #[cfg(test)]
+            {
+                ll.verify();
+                gf.verify();
+                gr.verify();
+            }
+
             debug_assert!(!owned.is_null());
 
             // Set the item's eviction txid.
@@ -1436,6 +1536,13 @@ impl<
                     unreachable!();
                 }
             }
+
+            #[cfg(test)]
+            {
+                ll.verify();
+                gf.verify();
+                gr.verify();
+            }
         } // end while
     }
 
@@ -1445,16 +1552,36 @@ impl<
         min_txid: u64,
     ) {
         while let Some(node) = ll.peek_head() {
-            if min_txid > node.txid {
+            #[cfg(test)]
+            {
+                ll.verify();
+            }
+
+            // if the node is older than our min txid.
+            if node.txid < min_txid {
+                let before_len = ll.len();
+                debug_assert!(ll.len() > 0);
+
                 // Need to free from the cache.
                 cache.remove(&node.k);
+                // eprintln!("{:?}", node);
+
+                // eprintln!("{} == {}", before_len - HAUNTED_SIZE, ll.len());
 
                 // Okay, this node can be trimmed.
                 ll.drop_head();
+
+                // eprintln!("{} == {}", before_len - HAUNTED_SIZE, ll.len());
+                debug_assert!(before_len - HAUNTED_SIZE == ll.len());
             } else {
                 // We are done with this loop, everything else
                 // is newer.
                 break;
+            }
+
+            #[cfg(test)]
+            {
+                ll.verify();
             }
         }
     }
@@ -1584,10 +1711,13 @@ impl<
         //
         // If we drop below this again, they'll go back to just insert/remove content only mode.
         if init_above_watermark {
+            // We were above, now we are below the limit, go back to just insert/remove only mode.
             if (inner.freq.len() + inner.rec.len()) < shared.watermark {
                 self.above_watermark.store(false, Ordering::Relaxed);
             }
         } else if (inner.freq.len() + inner.rec.len()) >= shared.watermark {
+            // we were not above above the watermark but now the cache is large enough
+            // to demand that we should be tracking data.
             self.above_watermark.store(true, Ordering::Relaxed);
         }
 
@@ -3176,13 +3306,25 @@ mod tests {
     #[allow(dead_code)]
     pub static RUNNING: AtomicBool = AtomicBool::new(false);
 
+    #[allow(dead_code)]
+    pub static READ_OPERATIONS: u32 = 1024;
+    #[allow(dead_code)]
+    pub static WRITE_OPERATIONS: u32 = 10240;
+
+    #[allow(dead_code)]
+    pub static CACHE_SIZE: u32 = 64;
+    pub static VALUE_MAX_RANGE: u32 = CACHE_SIZE * 8;
+
     #[cfg(test)]
     fn multi_thread_worker(arc: Arc<ARCache<Box<u32>, Box<u32>>>) {
         while RUNNING.load(Ordering::Relaxed) {
             let mut rd_txn = arc.read();
 
-            for _i in 0..128 {
-                let x = rand::random::<u32>();
+            use rand::Rng;
+            let mut rng = rand::rng();
+
+            for _i in 0..VALUE_MAX_RANGE {
+                let x = rng.random_range(0..VALUE_MAX_RANGE);
 
                 if rd_txn.get(&x).is_none() {
                     rd_txn.insert(Box::new(x), Box::new(x))
@@ -3194,22 +3336,41 @@ mod tests {
     #[allow(dead_code)]
     #[cfg_attr(miri, ignore)]
     #[cfg_attr(feature = "dhat-heap", test)]
-    #[cfg(test)]
     fn test_cache_stress_1() {
         #[cfg(feature = "dhat-heap")]
         let _profiler = dhat::Profiler::builder().trim_backtraces(None).build();
 
+        use rand::Rng;
+        let mut rng = rand::rng();
+
         let arc: Arc<ARCache<Box<u32>, Box<u32>>> = Arc::new(
             ARCacheBuilder::default()
-                .set_size(64, 4)
+                .set_size(CACHE_SIZE as usize, 4)
                 .build()
                 .expect("Invalid cache parameters!"),
         );
 
-        let thread_count = 4;
+        // Do some writes ...
+        for _i in 0..WRITE_OPERATIONS {
+            let mut wr_txn = arc.write();
+
+            let x = rng.random_range(0..VALUE_MAX_RANGE);
+
+            if wr_txn.get(&x).is_none() {
+                wr_txn.insert(Box::new(x), Box::new(x))
+            }
+
+            // Can corrupt here no issue.
+            wr_txn.commit();
+        }
+
+        eprintln!("writes pass");
+
+        let thread_count = 8;
 
         RUNNING.store(true, Ordering::Relaxed);
 
+        // Now do writes and reads concurrently
         let handles: Vec<_> = (0..thread_count)
             .map(|_| {
                 // Build the threads.
@@ -3218,8 +3379,14 @@ mod tests {
             })
             .collect();
 
-        for x in 0..1024 {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+
+        // Everything is fine until we write.
+
+        for _i in 0..WRITE_OPERATIONS {
             let mut wr_txn = arc.write();
+
+            let x = rng.random_range(0..VALUE_MAX_RANGE);
 
             if wr_txn.get(&x).is_none() {
                 wr_txn.insert(Box::new(x), Box::new(x))
@@ -3231,10 +3398,12 @@ mod tests {
         RUNNING.store(false, Ordering::Relaxed);
 
         for handle in handles {
-            handle.join().unwrap();
+            if let Err(err) = handle.join() {
+                std::panic::resume_unwind(err)
+            }
         }
 
-        drop(arc);
+        // drop(arc);
     }
 
     #[test]

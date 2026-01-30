@@ -22,14 +22,12 @@ fn alloc_nid() -> usize {
     {
         LL_ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(nid));
     }
-    eprintln!("Allocate -> {:?}", nid);
+    // eprintln!("LL Allocate -> {:?}", nid);
     nid
 }
 
-#[cfg(all(test, not(miri)))]
+#[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
 fn release_nid(nid: usize) {
-    println!("Release -> {:?}", nid);
-    #[cfg(not(feature = "dhat-heap"))]
     {
         let r = LL_ALLOC_LIST.with(|llist| llist.lock().unwrap().remove(&nid));
         assert!(r);
@@ -223,7 +221,7 @@ where
         self.append_n(n)
     }
 
-    // Append an arbitrary node into this set.
+    // Append an arbitrary node into this set, at the tail end.
     pub(crate) fn append_n(&mut self, owned: LLNodeOwned<K>) -> LLNodeRef<K> {
         // Who is to the left of tail?
         let n = owned.into_inner();
@@ -270,8 +268,14 @@ where
         if n.inner == unsafe { (*self.tail).prev } {
             // Done, no-op
         } else {
+            let previous_size = self.size;
+
             let owned = self.extract(n);
             self.append_n(owned);
+
+            let after_size = self.size;
+
+            assert_eq!(previous_size, after_size);
         }
     }
 
@@ -302,8 +306,8 @@ where
 
     // Cut a node out from this list from any location.
     pub(crate) fn extract(&mut self, n: LLNodeRef<K>) -> LLNodeOwned<K> {
-        assert!(self.size > 0);
         assert!(!n.is_null());
+        assert!(self.size > 0);
         unsafe {
             // We should have a prev and next
             debug_assert!(!(*n.inner).prev.is_null());
@@ -354,7 +358,7 @@ where
     }
 
     pub(crate) fn drop_head(&mut self) {
-        while let Some(owned) = self.pop() {
+        if let Some(owned) = self.pop() {
             let n = owned.into_inner();
             LLNode::free(n);
         }
@@ -387,6 +391,62 @@ where
             };
             Some(l)
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn verify(&self) {
+        // Walk the list to ensure it's sane.
+
+        let head = self.head;
+        let tail = self.tail;
+
+        let expect_size = self.size;
+        let mut size = 0;
+
+        // Establish that the sentinel nodes exist, and that they
+        // have the correct out bound null/non-null pointers.
+        assert_ne!(head, tail);
+
+        unsafe {
+            assert!((*head).prev.is_null());
+            assert!(!(*head).next.is_null());
+
+            assert!((*tail).next.is_null());
+            assert!(!(*tail).prev.is_null());
+        }
+
+        // Now we walk each item to assert that they have the correct structure.
+        let mut n = unsafe { (*head).next };
+        // We have to manually check head here.
+        unsafe {
+            assert_eq!((*n).prev, head);
+        }
+
+        while n != tail {
+            unsafe {
+                // Setup the pointer for the next iteration.
+                let next = (*n).next;
+
+                // Add the size.
+                size += (*(*n).k.as_ptr()).ll_weight();
+
+                // assert we have outbound pointers.
+                assert!(!(*n).prev.is_null());
+                assert!(!(*n).next.is_null());
+
+                // Assert that the previous node points to us.
+                assert!(!(*(*n).prev).next.is_null());
+                assert!((*(*n).prev).next == n);
+                // Assert that the next node points back to us.
+                // NOTE: This accounts for tail pointing back to us.
+                assert!(!(*(*n).next).prev.is_null());
+                assert!((*(*n).next).prev == n);
+
+                n = next;
+            }
+        }
+
+        assert_eq!(expect_size, size);
     }
 }
 
@@ -477,7 +537,7 @@ where
         debug_assert!(!v.is_null());
         let llnode = unsafe { Box::from_raw(v) };
         let k = unsafe { llnode.k.assume_init() };
-        #[cfg(all(test, not(miri)))]
+        #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         release_nid(llnode.nid);
 
         k
@@ -494,7 +554,7 @@ where
         debug_assert!(!v.is_null());
         let _llnode = unsafe { Box::from_raw(v) };
         // Markers never have a k to drop.
-        #[cfg(all(test, not(miri)))]
+        #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         release_nid(_llnode.nid)
     }
 }
