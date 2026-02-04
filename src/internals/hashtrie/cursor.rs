@@ -191,10 +191,7 @@ impl Ptr {
         {
             let contains =
                 ALLOC_LIST.with(|llist| llist.lock().unwrap().contains(&self.untagged()));
-            if !contains {
-                // eprintln!("as_bucket -> {:?} MISSING", self);
-                panic!("as_bucket -> {:?} MISSING", self);
-            }
+            assert!(contains, "as_bucket -> {:?} MISSING", self);
         }
         unsafe { &*(self.p.map_addr(|a| a & UNTAG) as *const Bucket<K, V>) }
     }
@@ -229,10 +226,7 @@ impl Ptr {
         {
             let contains =
                 ALLOC_LIST.with(|llist| llist.lock().unwrap().contains(&self.untagged()));
-            if !contains {
-                // eprintln!("as_bucket -> {:?} MISSING", self);
-                panic!("as_branch -> {:?} MISSING", self);
-            }
+            assert!(contains, "as_branch -> {:?} MISSING", self);
         }
         unsafe { &*(self.p.map_addr(|a| a & UNTAG) as *const Branch<K, V>) }
     }
@@ -301,14 +295,16 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> From<Box<Branch<K, V>>> for Ptr {
         let rptr: *mut Branch<K, V> = Box::into_raw(b);
 
         // Assert that the tag bits are not present
-        assert_eq!(rptr, rptr.map_addr(|a| { a & UNTAG }));
+        assert_eq!(
+            rptr,
+            rptr.map_addr(|a| { a & UNTAG }),
+            "Impossible State! rptr tag bits are set incorrectly!"
+        );
 
         #[allow(clippy::let_and_return)]
         let r = Self {
             p: rptr.map_addr(|a| a | FLAG_BRANCH) as *mut i32,
         };
-
-        // eprintln!("alloc     -> {:?}", r);
 
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(r.untagged()));
@@ -321,14 +317,16 @@ impl<K: Hash + Eq + Clone + Debug, V: Clone> From<Box<Bucket<K, V>>> for Ptr {
         let rptr: *mut Bucket<K, V> = Box::into_raw(b);
 
         // Assert that the tag bits are not present
-        assert_eq!(rptr, rptr.map_addr(|a| { a & UNTAG }));
+        assert_eq!(
+            rptr,
+            rptr.map_addr(|a| { a & UNTAG }),
+            "Impossible State! rptr tag bits are set incorrectly!"
+        );
 
         #[allow(clippy::let_and_return)]
         let r = Self {
             p: rptr.map_addr(|a| a | FLAG_BUCKET) as *mut i32,
         };
-
-        // eprintln!("alloc     -> {:?}", r);
 
         #[cfg(all(test, not(miri), not(feature = "dhat-heap")))]
         ALLOC_LIST.with(|llist| llist.lock().unwrap().insert(r.untagged()));

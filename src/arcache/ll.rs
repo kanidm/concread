@@ -275,7 +275,9 @@ where
 
             let after_size = self.size;
 
-            assert_eq!(previous_size, after_size);
+            // Ensure that we didn't actually alter the size of the list during the operation,
+            // we only re-arranged the content.
+            debug_assert_eq!(previous_size, after_size);
         }
     }
 

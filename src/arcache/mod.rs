@@ -772,7 +772,10 @@ impl<
                     stats.include(&k);
                     // The key MUST NOT exist in the cache already.
                     let existing = cache.insert(k, CacheItem::Rec(llp, tci));
-                    assert!(existing.is_none());
+                    assert!(
+                        existing.is_none(),
+                        "Impossible state! Key must not already exist in cache!"
+                    );
                 }
                 (None, ThreadCacheItem::Removed(clean)) => {
                     assert!(clean);
@@ -784,7 +787,10 @@ impl<
                     });
                     // The key MUST NOT exist in the cache already.
                     let existing = cache.insert(k, CacheItem::Haunted(llp));
-                    assert!(existing.is_none());
+                    assert!(
+                        existing.is_none(),
+                        "Impossible state! Key must not already exist in cache!"
+                    );
                     // Must be now in haunted!
                     debug_assert!(inner.haunted.len() > 0);
                 }
@@ -1128,7 +1134,10 @@ impl<
                         stats.include(&k);
                         // The key MUST NOT exist in the cache already.
                         let existing = cache.insert(k, CacheItem::Rec(llp, iv));
-                        assert!(existing.is_none());
+                        assert!(
+                            existing.is_none(),
+                            "Impossible state! Key must not already exist in cache!"
+                        );
                     }
                 }
             };
@@ -1243,7 +1252,11 @@ impl<
 
                 let pointer = to_ll.append_n(owned);
 
-                assert_eq!(to_ll.len(), to_ll_before + added);
+                assert_eq!(
+                    to_ll.len(),
+                    to_ll_before + added,
+                    "Impossible State! List lengths are no longer consistent!"
+                );
 
                 let mut r = cache.get_mut(&pointer.as_ref().k);
 
@@ -1260,7 +1273,7 @@ impl<
                 };
             } else {
                 // Impossible state!
-                break;
+                unreachable!();
             }
 
             #[cfg(test)]
@@ -1300,7 +1313,7 @@ impl<
                         let mut next_state = match &ci {
                             CacheItem::Freq(llp, _v) => {
                                 // The pointer from any key MUST be unique!
-                                assert!(llp == &owned);
+                                assert!(llp == &owned, "Impossible State! Pointer in map does not match the pointer from the list!");
                                 // No need to extract, already popped!
                                 // $ll.extract(*llp);
                                 stats.evict_from_frequent(&owned.as_ref().k);
@@ -1309,7 +1322,7 @@ impl<
                             }
                             CacheItem::Rec(llp, _v) => {
                                 // The pointer from any key MUST be unique!
-                                assert!(llp == &owned);
+                                assert!(llp == &owned, "Impossible State! Pointer in map does not match the pointer from the list!");
                                 // No need to extract, already popped!
                                 // $ll.extract(*llp);
                                 stats.evict_from_recent(&owned.as_mut().k);
@@ -1564,14 +1577,10 @@ impl<
 
                 // Need to free from the cache.
                 cache.remove(&node.k);
-                // eprintln!("{:?}", node);
-
-                // eprintln!("{} == {}", before_len - HAUNTED_SIZE, ll.len());
 
                 // Okay, this node can be trimmed.
                 ll.drop_head();
 
-                // eprintln!("{} == {}", before_len - HAUNTED_SIZE, ll.len());
                 debug_assert!(before_len - HAUNTED_SIZE == ll.len());
             } else {
                 // We are done with this loop, everything else
@@ -2232,7 +2241,10 @@ impl<
                 if let Some(owned_inner) = cache.tlru.pop_n_free() {
                     let existing = cache.set.remove(&owned_inner.k);
                     // Must have been present.
-                    assert!(existing.is_some());
+                    assert!(
+                        existing.is_some(),
+                        "Impossible state! Key was NOT present in cache!"
+                    );
                 } else {
                     // Somehow the list is empty, but we still are oversize?
                     debug_assert!(false);
@@ -3402,8 +3414,6 @@ mod tests {
                 std::panic::resume_unwind(err)
             }
         }
-
-        // drop(arc);
     }
 
     #[test]
