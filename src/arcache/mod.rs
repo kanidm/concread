@@ -1348,7 +1348,7 @@ impl<
                 };
             } else {
                 //  Impossible state!
-                break;
+                unreachable!();
             }
 
             #[cfg(test)]
