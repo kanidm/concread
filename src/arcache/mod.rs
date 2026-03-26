@@ -1112,6 +1112,7 @@ impl<
 
                                 owned.as_mut().txid = txid;
                                 debug_assert!(owned.as_mut().size == HAUNTED_SIZE);
+                                owned.as_mut().size = size;
                                 stats.include_haunted(&owned.as_mut().k);
                                 let pointer = inner.rec.append_n(owned);
                                 Some(CacheItem::Rec(pointer, iv))
