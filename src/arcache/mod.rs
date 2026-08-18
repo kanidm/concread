@@ -626,6 +626,15 @@ impl<
         }
     }
 
+    /// Update the operating cache's maximum size and read transaction maximum size. Calling this
+    /// function will cause new readers/writers to wait until this function completes.
+    pub fn set_size(&self, max: usize, read_max: usize)
+    {
+        let mut w_shared = self.shared.write().unwrap();
+        w_shared.max = max;
+        w_shared.read_max = read_max;
+    }
+
     /// Begin a read operation on the cache. This reader has a thread-local cache for items
     /// that are localled included via `insert`, and can communicate back to the main cache
     /// to safely include items.
@@ -1576,7 +1585,8 @@ impl<
                 debug_assert!(ll.len() > 0);
 
                 // Need to free from the cache.
-                cache.remove(&node.k);
+                let exists = cache.remove(&node.k);
+                assert!(exists.is_some(), "Impossible state! Removing a value that is not present in cache!");
 
                 // Okay, this node can be trimmed.
                 ll.drop_head();
