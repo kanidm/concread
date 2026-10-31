@@ -628,8 +628,7 @@ impl<
 
     /// Update the operating cache's maximum size and read transaction maximum size. Calling this
     /// function will cause new readers/writers to wait until this function completes.
-    pub fn set_size(&self, max: usize, read_max: usize)
-    {
+    pub fn set_size(&self, max: usize, read_max: usize) {
         let mut w_shared = self.shared.write().unwrap();
         w_shared.max = max;
         w_shared.read_max = read_max;
@@ -1586,7 +1585,10 @@ impl<
 
                 // Need to free from the cache.
                 let exists = cache.remove(&node.k);
-                assert!(exists.is_some(), "Impossible state! Removing a value that is not present in cache!");
+                assert!(
+                    exists.is_some(),
+                    "Impossible state! Removing a value that is not present in cache!"
+                );
 
                 // Okay, this node can be trimmed.
                 ll.drop_head();
@@ -3342,7 +3344,7 @@ mod tests {
         while RUNNING.load(Ordering::Relaxed) {
             let mut rd_txn = arc.read();
 
-            use rand::Rng;
+            use rand::RngExt;
             let mut rng = rand::rng();
 
             for _i in 0..VALUE_MAX_RANGE {
@@ -3362,7 +3364,7 @@ mod tests {
         #[cfg(feature = "dhat-heap")]
         let _profiler = dhat::Profiler::builder().trim_backtraces(None).build();
 
-        use rand::Rng;
+        use rand::RngExt;
         let mut rng = rand::rng();
 
         let arc: Arc<ARCache<Box<u32>, Box<u32>>> = Arc::new(
